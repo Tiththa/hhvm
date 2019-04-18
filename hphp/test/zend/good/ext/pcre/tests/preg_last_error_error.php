@@ -14,6 +14,5 @@ echo "*** Testing preg_last_error() : error conditions ***\n";
 // Test preg_last_error with one more than the expected number of arguments
 echo "\n-- Testing preg_last_error() function with more than expected no. of arguments --\n";
 $extra_arg = 10;
-var_dump( preg_last_error($extra_arg) );
-?>
-===Done===
+try { var_dump( preg_last_error($extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+echo "===Done===";

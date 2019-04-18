@@ -1,0 +1,20 @@
+Linearization for class \T1:
+[\T1(copy_private_members)]
+Linearization for class \T2:
+[\T2(copy_private_members)]
+Linearization for class \T3:
+[\T3(copy_private_members)]
+Linearization for class \C:
+[\C, \T3(copy_private_members), \T2(copy_private_members), \T1(copy_private_members)]
+Linearization for class \T:
+[\T(copy_private_members), \T3(copy_private_members), \T2(copy_private_members)]
+Linearization for class \D:
+[\D, \T3(copy_private_members), \T(copy_private_members), \T2(copy_private_members)]
+Linearization for class \I:
+[\I]
+Linearization for class \I2:
+[\I2]
+Linearization for class \Timplements:
+[\Timplements(copy_private_members), \I(consts_only), \I]
+Linearization for class \A:
+[\A, \I2(consts_only), \Timplements(copy_private_members), \I(consts_only), \I]

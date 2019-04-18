@@ -3,7 +3,7 @@ $im = imagecreatetruecolor(6,6);
 imagefill($im, 0,0, 0xffffff);
 
 // Wrong argument count
-imageline($im, 0,0, 5,5);
+try { imageline($im, 0,0, 5,5); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 
 // Horizontal line
@@ -96,4 +96,3 @@ if ($p3) {
 }
 
 
-?>

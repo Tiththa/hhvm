@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function VS($x, $y) {
   var_dump($x === $y);
@@ -7,15 +7,18 @@ function VS($x, $y) {
 }
 function VERIFY($x) { VS($x != false, true); }
 
+abstract final class GetRandomPortStatics {
+  public static $base = -1;
+}
+
 //////////////////////////////////////////////////////////////////////
 
 // so we run on different range of ports every time
 function get_random_port() {
-  static $base = -1;
-  if ($base == -1) {
-    $base = 12345 + (int)((int)(microtime(false) * 100) % 30000);
+  if (GetRandomPortStatics::$base == -1) {
+    GetRandomPortStatics::$base = 12345 + (int)((int)(microtime(false) * 100) % 30000);
   }
-  return ++$base;
+  return ++GetRandomPortStatics::$base;
 }
 
 // On the continuous integration server, it's not unlikely that we'll
@@ -28,7 +31,7 @@ function retry_bind_server($udp = false) {
     $address = $scheme."127.0.0.1:" . $port;
 
     if ($udp) {
-      $server = @stream_socket_server($address, $errno, $errstr,
+      $server = @stream_socket_server($address, &$errno, &$errstr,
                                      STREAM_SERVER_BIND);
     } else {
       $server = @stream_socket_server($address);
@@ -47,7 +50,7 @@ function retry_bind_server6($udp = false) {
     $address = $scheme."[::1]:" . $port;
 
     if ($udp) {
-      $server = @stream_socket_server($address, $errno, $errstr,
+      $server = @stream_socket_server($address, &$errno, &$errstr,
                                      STREAM_SERVER_BIND);
     } else {
       $server = @stream_socket_server($address);
@@ -128,20 +131,10 @@ function test_stream_misc() {
   VS(in_array("http", $w), true);
 }
 
-function test_stream_wrapper_restore() {
-  $count = count(stream_get_wrappers());
-
-  VS(stream_wrapper_unregister("http"), true);
-  VS(count(stream_get_wrappers()), $count - 1);
-
-  VS(stream_wrapper_restore("http"), true);
-  VS(count(stream_get_wrappers()), $count);
-}
-
 function test_stream_select() {
   $f = fopen(__DIR__."/../ext_file/test_ext_file.txt", "r");
   $reads = array($f);
-  VERIFY(stream_select($reads, $ignore, $ignore, 0, 0) != false);
+  VERIFY(stream_select(&$reads, &$ignore, &$ignore, 0, 0) != false);
 }
 
 function test_stream_socket_recvfrom_tcp() {
@@ -238,12 +231,14 @@ function test_stream_constants() {
   VS(STREAM_SOCK_SEQPACKET, 5);
 }
 
+
+<<__EntryPoint>>
+function main_ext_stream() {
 test_stream_copy_to_stream();
 test_stream_get_contents();
 test_stream_get_line();
 test_stream_get_meta_data();
 test_stream_misc();
-test_stream_wrapper_restore();
 test_stream_select();
 test_stream_socket_recvfrom_tcp();
 test_stream_socket_recvfrom_tcp6();
@@ -254,3 +249,4 @@ test_stream_socket_sendto_issue324();
 test_stream_socket_shutdown();
 test_stream_socket_kind();
 test_stream_constants();
+}

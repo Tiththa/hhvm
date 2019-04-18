@@ -19,6 +19,7 @@
 #include "hphp/runtime/vm/jit/align.h"
 #include "hphp/runtime/vm/jit/asm-info.h"
 #include "hphp/runtime/vm/jit/cg-meta.h"
+#include "hphp/runtime/vm/jit/func-guard.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
 #include "hphp/runtime/vm/jit/print.h"
 #include "hphp/runtime/vm/jit/relocation.h"
@@ -184,7 +185,7 @@ void emitVunit(Vunit& vunit, const IRUnit& unit,
   auto frozen_start = frozen->frontier();
 
   folly::Optional<AsmInfo> optAI;
-  if (dumpIREnabled()) optAI.emplace(unit);
+  if (dumpIREnabled(unit.context().kind)) optAI.emplace(unit);
   auto ai = optAI.get_pointer();
 
   Vtext vtext{main, cold, *frozen, code.data()};
@@ -194,8 +195,14 @@ void emitVunit(Vunit& vunit, const IRUnit& unit,
   assertx(code.isLocal() || cold_in.frontier() == cold_start);
   assertx(code.isLocal() || main_in.frontier() == main_start);
 
+  assertx(!isPrologue(unit.context().kind) ||
+          funcGuardMatches(
+            funcGuardFromPrologue(unit.prologueStart, unit.context().func),
+            unit.context().func
+          ));
+
   if (do_relocate) {
-    tc::relocateTranslation(unit,
+    tc::relocateTranslation(&unit,
                             main, main_in, main_start,
                             cold, cold_in, cold_start,
                             *frozen, frozen_start, ai, meta);
@@ -214,7 +221,7 @@ void emitVunit(Vunit& vunit, const IRUnit& unit,
         frozen->toDestAddress(frozen->frontier()) - frozen->frontier();
     }
     printUnit(kCodeGenLevel, unit, " after code gen ",
-              ai, nullptr, annotations);
+             ai, nullptr, annotations);
   }
 }
 

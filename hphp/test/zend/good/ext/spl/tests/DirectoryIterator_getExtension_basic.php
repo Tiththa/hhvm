@@ -19,15 +19,12 @@ foreach (new DirectoryIterator($dir) as $file) {
     $nfo_exts[] = pathinfo($file->getFilename(), PATHINFO_EXTENSION);
 }
 var_dump($dit_exts === $nfo_exts);
-sort($dit_exts);
+sort(&$dit_exts);
 var_dump($dit_exts);
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $dir   = __DIR__ . DIRECTORY_SEPARATOR . md5('DirectoryIterator::getExtension') . DIRECTORY_SEPARATOR;
 $files = array('test.txt', 'test.extension', 'test..', 'test.', 'test');
 foreach ($files as $file) {
     unlink($dir . $file);
 }
 rmdir($dir);
-?>

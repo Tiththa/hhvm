@@ -16,14 +16,19 @@
 #include "hphp/runtime/vm/jit/irgen-call.h"
 
 #include "hphp/runtime/base/stats.h"
+#include "hphp/runtime/vm/reified-generics.h"
+#include "hphp/runtime/vm/runtime.h"
 
+#include "hphp/runtime/vm/jit/call-target-profile.h"
+#include "hphp/runtime/vm/jit/guard-constraint.h"
 #include "hphp/runtime/vm/jit/meth-profile.h"
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/target-profile.h"
-#include "hphp/runtime/vm/jit/type-constraint.h"
 #include "hphp/runtime/vm/jit/type.h"
 
+#include "hphp/runtime/vm/jit/irgen-basic.h"
 #include "hphp/runtime/vm/jit/irgen-builtin.h"
+#include "hphp/runtime/vm/jit/irgen-control.h"
 #include "hphp/runtime/vm/jit/irgen-create.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
@@ -41,87 +46,6 @@ const StaticString s_static("static");
 
 //////////////////////////////////////////////////////////////////////
 
-const Func*
-findCuf(Op /*op*/, SSATmp* callable, const Func* ctxFunc, const Class*& cls,
-        StringData*& invName, bool& forward, bool& needsUnitLoad) {
-  cls = nullptr;
-  invName = nullptr;
-  needsUnitLoad = false;
-
-  const StringData* str =
-    callable->hasConstVal(TStr) ? callable->strVal() : nullptr;
-  const ArrayData* arr =
-    callable->hasConstVal(TArr) ? callable->arrVal() : nullptr;
-
-  StringData* sclass = nullptr;
-  StringData* sname = nullptr;
-  if (str) {
-    auto const lookup = lookupImmutableFunc(ctxFunc->unit(), str);
-    if (lookup.func) {
-      needsUnitLoad = lookup.needsUnitLoad;
-      auto wrapper = lookup.func->dynCallWrapper();
-      return LIKELY(!wrapper) ? lookup.func : wrapper;
-    }
-    String name(const_cast<StringData*>(str));
-    int pos = name.find("::");
-    if (pos <= 0 || pos + 2 >= name.size() ||
-        name.find("::", pos + 2) != String::npos) {
-      return nullptr;
-    }
-    sclass = makeStaticString(name.substr(0, pos).get());
-    sname = makeStaticString(name.substr(pos + 2).get());
-  } else if (arr) {
-    if (arr->size() != 2) return nullptr;
-    const Variant& e0 = arr->get(int64_t(0), false);
-    const Variant& e1 = arr->get(int64_t(1), false);
-    if (!e0.isString() || !e1.isString()) return nullptr;
-    sclass = e0.getStringData();
-    sname = e1.getStringData();
-    String name(sname);
-    if (name.find("::") != String::npos) return nullptr;
-  } else {
-    return nullptr;
-  }
-
-  auto ctx = ctxFunc->cls();
-  bool isExact = true;
-  if (sclass->isame(s_self.get())) {
-    if (!ctx) return nullptr;
-    cls = ctx;
-    forward = true;
-  } else if (sclass->isame(s_parent.get())) {
-    if (!ctx || !ctx->parent()) return nullptr;
-    cls = ctx->parent();
-    forward = true;
-  } else if (sclass->isame(s_static.get())) {
-    if (!ctx) return nullptr;
-    cls = ctx;
-    isExact = false;
-  } else {
-    cls = Unit::lookupUniqueClassInContext(sclass, ctx);
-    if (!cls) return nullptr;
-  }
-
-  bool magicCall = false;
-  const Func* f = lookupImmutableMethod(
-    cls, sname, magicCall, /* staticLookup = */ true, ctxFunc, isExact);
-  assertx(!f || !f->dynCallWrapper());
-  if (!f || (!isExact && !f->isImmutableFrom(cls))) return nullptr;
-  if (forward && !ctx->classof(f->cls())) {
-    /*
-     * To preserve the invariant that the lsb class
-     * is an instance of the context class, we require
-     * that f's class is an instance of the context class.
-     * This is conservative, but without it, we would need
-     * a runtime check to decide whether or not to forward
-     * the lsb class
-     */
-    return nullptr;
-  }
-  if (magicCall) invName = sname;
-  return f;
-}
-
 bool canInstantiateClass(const Class* cls) {
   return cls && isNormalClass(cls) && !isAbstract(cls);
 }
@@ -129,17 +53,23 @@ bool canInstantiateClass(const Class* cls) {
 //////////////////////////////////////////////////////////////////////
 
 // Pushing for object method when we don't know the Func* statically.
-void fpushObjMethodUnknown(IRGS& env,
-                           SSATmp* obj,
-                           const StringData* methodName,
-                           uint32_t numParams,
-                           bool shouldFatal) {
-  emitIncStat(env, Stats::ObjMethod_cached, 1);
-  fpushActRec(env,
-              cns(env, TNullptr),  // Will be set by LdObjMethod
-              obj,
-              numParams,
-              nullptr);
+IRSPRelOffset fpushObjMethodUnknown(
+  IRGS& env,
+  SSATmp* obj,
+  const StringData* methodName,
+  uint32_t numParams,
+  SSATmp* ts
+) {
+  implIncStat(env, Stats::ObjMethod_cached);
+  auto const arOffset = fsetActRec(
+    env,
+    cns(env, TNullptr),  // Will be set by LdObjMethod
+    obj,
+    numParams,
+    nullptr,
+    false,
+    ts
+  );
   auto const objCls = gen(env, LdObjClass, obj);
 
   // This is special.  We need to move the stackpointer in case LdObjMethod
@@ -149,11 +79,10 @@ void fpushObjMethodUnknown(IRGS& env,
 
   gen(env,
       LdObjMethod,
-      LdObjMethodData {
-        spOffBCFromIRSP(env), methodName, shouldFatal
-      },
+      LdObjMethodData { arOffset, methodName },
       objCls,
       sp(env));
+  return arOffset;
 }
 
 /*
@@ -183,13 +112,13 @@ const Func* findInterfaceMethod(const Class* iface,
   return nullptr;
 }
 
-void fpushObjMethodExactFunc(
+SSATmp* lookupObjMethodExactFunc(
   IRGS& env,
   SSATmp* obj,
   const Class* exactClass,
   const Func* func,
   const StringData* methodName,
-  uint32_t numParams
+  SSATmp*& objOrCls
 ) {
   /*
    * lookupImmutableMethod will return Funcs from AttrUnique classes, but in
@@ -197,27 +126,22 @@ void fpushObjMethodExactFunc(
    * exists.
    *
    * Static function: store base class into this slot instead of obj and decref
-   * the obj that was pushed as the this pointer since the obj won't be in the
-   * actrec and thus MethodCache::lookup won't decref it.
+   * the obj that was pushed as the this pointer since the obj won't be owned by
+   * the runtime and thus MethodCache::lookup won't decref it.
    *
    * Static closure body: we still need to pass the object instance for the
    * closure prologue to properly do its dispatch (and extract use vars). It
-   * will decref it and put the class on the actrec before entering the "real"
-   * cloned closure body.
+   * will decref it and set up the alternative class pointer before entering the
+   * "real" cloned closure body.
    */
-  SSATmp* objOrCls = obj;
-  emitIncStat(env, Stats::ObjMethod_known, 1);
+  objOrCls = obj;
+  implIncStat(env, Stats::ObjMethod_known);
   if (func->isStaticInPrologue()) {
+    gen(env, RaiseHasThisNeedStatic, cns(env, func));
     objOrCls = exactClass ? cns(env, exactClass) : gen(env, LdObjClass, obj);
     decRef(env, obj);
   }
-  fpushActRec(
-    env,
-    cns(env, func),
-    objOrCls,
-    numParams,
-    methodName
-  );
+  return cns(env, func);
 }
 
 const Func*
@@ -229,86 +153,102 @@ lookupInterfaceFuncForFPushObjMethod(IRGS& /*env*/, const Class* baseClass,
   return findInterfaceMethod(baseClass, methodName);
 }
 
-void fpushObjMethodInterfaceFunc(
+SSATmp* lookupObjMethodInterfaceFunc(
   IRGS& env,
   SSATmp* obj,
   const Func* ifaceFunc,
-  int32_t numParams
+  SSATmp*& objOrCls
 ) {
   auto const vtableSlot = ifaceFunc->cls()->preClass()->ifaceVtableSlot();
 
-  emitIncStat(env, Stats::ObjMethod_ifaceslot, 1);
+  implIncStat(env, Stats::ObjMethod_ifaceslot);
   auto cls = gen(env, LdObjClass, obj);
   auto func = gen(env, LdIfaceMethod,
                   IfaceMethodData{vtableSlot, ifaceFunc->methodSlot()},
                   cls);
-  SSATmp* objOrCls = obj;
+  objOrCls = obj;
   if (ifaceFunc->attrs() & AttrStatic) {
+    gen(env, RaiseHasThisNeedStatic, func);
     decRef(env, obj);
     objOrCls = cls;
   }
-  fpushActRec(env, func, objOrCls, numParams, /* invName */nullptr);
-  return;
+  return func;
 }
 
-void fpushObjMethodNonExactFunc(IRGS& env, SSATmp* obj,
-                                const Class* /*baseClass*/, const Func* func,
-                                uint32_t numParams) {
-  emitIncStat(env, Stats::ObjMethod_methodslot, 1);
+SSATmp* lookupObjMethodNonExactFunc(IRGS& env, SSATmp* obj,
+                                    const Class* /*baseClass*/,
+                                    const Func* func,
+                                    SSATmp*& objOrCls) {
+  implIncStat(env, Stats::ObjMethod_methodslot);
   auto const clsTmp = gen(env, LdObjClass, obj);
-  auto const funcTmp = gen(
+  auto funcTmp = gen(
     env,
     LdClsMethod,
     clsTmp,
     cns(env, -(func->methodSlot() + 1))
   );
-  SSATmp* objOrCls = obj;
+  objOrCls = obj;
   if (func->isStaticInPrologue()) {
+    gen(env, RaiseHasThisNeedStatic, funcTmp);
     decRef(env, obj);
     objOrCls = clsTmp;
   }
-  fpushActRec(env,
-    funcTmp,
-    objOrCls,
-    numParams,
-    /* invName */nullptr
-  );
+  return funcTmp;
 }
 
-void fpushObjMethodWithBaseClass(
+SSATmp* lookupObjMethodWithBaseClass(
   IRGS& env,
   SSATmp* obj,
   const Class* baseClass,
   const StringData* methodName,
-  uint32_t numParams,
-  bool shouldFatal,
-  bool exactClass
+  bool exactClass,
+  SSATmp*& objOrCls,
+  bool& magicCall
 ) {
-  bool magicCall = false;
+  magicCall = false;
   if (auto const func = lookupImmutableMethod(
         baseClass, methodName, magicCall,
         /* staticLookup: */ false, curFunc(env), exactClass)) {
     if (exactClass ||
         func->attrs() & AttrPrivate ||
         func->isImmutableFrom(baseClass)) {
-      fpushObjMethodExactFunc(env, obj,
-                              exactClass ? baseClass : nullptr,
-                              func,
-                              magicCall ? methodName : nullptr,
-                              numParams);
-      return;
+      return lookupObjMethodExactFunc(env, obj,
+                                      exactClass ? baseClass : nullptr,
+                                      func,
+                                      magicCall ? methodName : nullptr,
+                                      objOrCls);
     }
-    fpushObjMethodNonExactFunc(env, obj, baseClass, func, numParams);
-    return;
+    return lookupObjMethodNonExactFunc(env, obj, baseClass, func, objOrCls);
   }
 
   if (auto const func =
       lookupInterfaceFuncForFPushObjMethod(env, baseClass, methodName)) {
-    fpushObjMethodInterfaceFunc(env, obj, func, numParams);
-    return;
+    return lookupObjMethodInterfaceFunc(env, obj, func, objOrCls);
   }
 
-  fpushObjMethodUnknown(env, obj, methodName, numParams, shouldFatal);
+  return nullptr;
+}
+
+IRSPRelOffset fpushObjMethodWithBaseClass(
+  IRGS& env,
+  SSATmp* obj,
+  const Class* baseClass,
+  const StringData* methodName,
+  uint32_t numParams,
+  bool exactClass,
+  SSATmp* ts
+) {
+  bool magicCall = false;
+  SSATmp* objOrCls = nullptr;
+  if (auto func = lookupObjMethodWithBaseClass(
+        env, obj, baseClass, methodName, exactClass,
+        objOrCls, magicCall)) {
+    return fsetActRec(env, func, objOrCls, numParams,
+                      magicCall ? methodName : nullptr,
+                      false, ts);
+  }
+
+  return fpushObjMethodUnknown(env, obj, methodName, numParams, ts);
 }
 
 const StaticString methProfileKey{ "MethProfile-FPushObjMethod" };
@@ -384,18 +324,31 @@ inline SSATmp* ldCtxForClsMethod(IRGS& env,
     });
 }
 
-bool optimizeProfiledPushMethod(IRGS& env,
-                                TargetProfile<MethProfile>& profile,
+template<class Fn>
+void optimizeProfiledPushMethod(IRGS& env,
                                 SSATmp* objOrCls,
-                                Block* sideExit,
+                                const Class* knownClass,
                                 const StringData* methodName,
-                                uint32_t numParams) {
-  if (!profile.optimizing()) return false;
-  if (env.transFlags.noProfiledFPush && env.firstBcInst) return false;
-
+                                uint32_t numParams,
+                                bool dynamic,
+                                Fn emitFPush) {
   always_assert(objOrCls->type().subtypeOfAny(TObj, TCls));
-
-  auto isStaticCall = objOrCls->type() <= TCls;
+  auto const isStaticCall = objOrCls->type() <= TCls;
+  auto profile = TargetProfile<MethProfile>(env.context, env.irb->curMarker(),
+                                            methProfileKey.get());
+  if (!profile.optimizing()) {
+    auto const arOffset = emitFPush();
+    if (profile.profiling()) {
+      gen(
+        env,
+        ProfileMethod,
+        ProfileCallTargetData { arOffset, profile.handle() },
+        sp(env),
+        isStaticCall ? objOrCls : cns(env, TNullptr)
+      );
+    }
+    return;
+  }
 
   auto getCtx = [&](const Func* callee,
                     SSATmp* ctx,
@@ -411,129 +364,178 @@ bool optimizeProfiledPushMethod(IRGS& env,
     return ret;
   };
 
-  MethProfile data = profile.data(MethProfile::reduce);
+  auto const fallback = [&] {
+    hint(env, Block::Hint::Unlikely);
+    IRUnit::Hinter h(env.irb->unit(), Block::Hint::Unlikely);
+
+    emitFPush();
+    gen(env, Jmp, makeExit(env, nextBcOff(env)));
+  };
+
+  MethProfile data = profile.data();
 
   if (auto const uniqueMeth = data.uniqueMeth()) {
     bool isMagic = !uniqueMeth->name()->isame(methodName);
     if (auto const uniqueClass = data.uniqueClass()) {
       // Profiling saw a unique class.
       // Check for it, then burn in the func
-      auto const refined = gen(env, CheckType,
-                               isStaticCall ?
-                               Type::ExactCls(uniqueClass) :
-                               Type::ExactObj(uniqueClass),
-                               sideExit, objOrCls);
-      env.irb->constrainValue(refined, TypeConstraint(uniqueClass));
-      auto const ctx = getCtx(uniqueMeth, refined, uniqueClass);
-      fpushActRec(env, cns(env, uniqueMeth), ctx, numParams,
-                  isMagic ? methodName : nullptr);
-      return true;
+      ifThen(
+        env,
+        [&] (Block* sideExit) {
+          auto const ty = isStaticCall
+            ? Type::ExactCls(uniqueClass) : Type::ExactObj(uniqueClass);
+          auto const refined = gen(env, CheckType, ty, sideExit, objOrCls);
+          env.irb->constrainValue(refined, GuardConstraint(uniqueClass));
+          auto const ctx = getCtx(uniqueMeth, refined, uniqueClass);
+          fsetActRec(env, cns(env, uniqueMeth), ctx, numParams,
+                     isMagic ? methodName : nullptr,
+                     dynamic, nullptr);
+        },
+        fallback
+      );
+      return;
     }
 
-    if (isMagic) return false;
+    if (isMagic) {
+      emitFPush();
+      return;
+    }
 
     // Although there were multiple classes, the method was unique
     // (this comes up eg for a final method in a base class).  But
     // note that we can't allow a magic call here since it's possible
     // that an as-yet-unseen derived class defines a method named
     // methodName.
-    auto const slot = cns(env, uniqueMeth->methodSlot());
-    auto const negSlot = cns(env, -1 - uniqueMeth->methodSlot());
-    auto const ctx = getCtx(uniqueMeth, objOrCls, nullptr);
-    auto const cls = isStaticCall ? objOrCls : gen(env, LdObjClass, objOrCls);
-    auto const len = gen(env, LdFuncVecLen, cls);
-    auto const cmp = gen(env, LteInt, len, slot);
-    gen(env, JmpNZero, sideExit, cmp);
-    auto const meth = gen(env, LdClsMethod, cls, negSlot);
-    auto const same = gen(env, EqFunc, meth, cns(env, uniqueMeth));
-    gen(env, JmpZero, sideExit, same);
-    fpushActRec(env, cns(env, uniqueMeth), ctx, numParams, nullptr);
-    return true;
+    ifThen(
+      env,
+      [&] (Block* sideExit) {
+        auto const slot = cns(env, uniqueMeth->methodSlot());
+        auto const negSlot = cns(env, -(uniqueMeth->methodSlot() + 1));
+        auto const cls = isStaticCall
+          ? objOrCls : gen(env, LdObjClass, objOrCls);
+        auto const len = gen(env, LdFuncVecLen, cls);
+        auto const cmp = gen(env, LteInt, len, slot);
+        gen(env, JmpNZero, sideExit, cmp);
+        auto const meth = gen(env, LdClsMethod, cls, negSlot);
+        auto const same = gen(env, EqFunc, meth, cns(env, uniqueMeth));
+        gen(env, JmpZero, sideExit, same);
+        auto const ctx = getCtx(uniqueMeth, objOrCls, nullptr);
+        fsetActRec(env, cns(env, uniqueMeth), ctx, numParams, nullptr, dynamic,
+                   nullptr);
+      },
+      fallback
+    );
+    return;
+  }
+
+  // If we know anything about the class, other than it's an interface, the
+  // remaining cases aren't worth the extra check.
+  if (knownClass != nullptr && !isInterface(knownClass)) {
+    emitFPush();
+    return;
   }
 
   if (auto const baseMeth = data.baseMeth()) {
     if (!baseMeth->name()->isame(methodName)) {
-      return false;
+      emitFPush();
+      return;
     }
 
-    // The method was defined in a common base class.  We just need to
-    // check for an instance of the class, and then use the method
-    // from the right slot.
-    auto const ctx = getCtx(baseMeth, objOrCls, nullptr);
-    auto const cls = isStaticCall ? objOrCls : gen(env, LdObjClass, objOrCls);
-    auto flag = gen(env, ExtendsClass,
-                    ExtendsClassData{baseMeth->cls(), true}, cls);
-    gen(env, JmpZero, sideExit, flag);
-    auto negSlot = cns(env, -1 - baseMeth->methodSlot());
-    auto meth = gen(env, LdClsMethod, cls, negSlot);
-    fpushActRec(env, meth, ctx, numParams, nullptr);
-    return true;
+    // The method was defined in a common base class.  We just need to check for
+    // an instance of the class, and then use the method from the right slot.
+    ifThen(
+      env,
+      [&] (Block* sideExit) {
+        auto const cls = isStaticCall
+          ? objOrCls : gen(env, LdObjClass, objOrCls);
+        auto const ecData = ExtendsClassData{baseMeth->cls(), true};
+        auto const flag = gen(env, ExtendsClass, ecData, cls);
+        gen(env, JmpZero, sideExit, flag);
+        auto const negSlot = cns(env, -(baseMeth->methodSlot() + 1));
+        auto const meth = gen(env, LdClsMethod, cls, negSlot);
+        auto const ctx = getCtx(baseMeth, objOrCls, nullptr);
+        fsetActRec(env, meth, ctx, numParams, nullptr, dynamic, nullptr);
+      },
+      fallback
+    );
+    return;
+  }
+
+  // If we know anything about the class, the other cases below are not worth
+  // the extra checks they insert.
+  if (knownClass != nullptr) {
+    emitFPush();
+    return;
   }
 
   if (auto const intfMeth = data.interfaceMeth()) {
     if (!intfMeth->name()->isame(methodName)) {
-      return false;
+      emitFPush();
+      return;
     }
-    // The method was defined in a common interface
-    auto const ctx = getCtx(intfMeth, objOrCls, nullptr);
-    auto const cls = isStaticCall ? objOrCls : gen(env, LdObjClass, objOrCls);
-    auto flag = gen(env, InstanceOfIfaceVtable,
-                    ClassData{intfMeth->cls()}, cls);
-    gen(env, JmpZero, sideExit, flag);
-    auto const vtableSlot =
-      intfMeth->cls()->preClass()->ifaceVtableSlot();
-    auto meth = gen(env, LdIfaceMethod,
-                    IfaceMethodData{vtableSlot, intfMeth->methodSlot()},
-                    cls);
-    fpushActRec(env, meth, ctx, numParams, nullptr);
-    return true;
+
+    // The method was defined in a common interface, so check for that and use
+    // LdIfaceMethod.
+    ifThen(
+      env,
+      [&] (Block* sideExit) {
+        auto const cls = isStaticCall
+          ? objOrCls : gen(env, LdObjClass, objOrCls);
+        auto const cData = ClassData{intfMeth->cls()};
+        auto const flag = gen(env, InstanceOfIfaceVtable, cData, cls);
+        gen(env, JmpZero, sideExit, flag);
+        auto const vtableSlot = intfMeth->cls()->preClass()->ifaceVtableSlot();
+        auto const imData = IfaceMethodData{vtableSlot, intfMeth->methodSlot()};
+        auto const meth = gen(env, LdIfaceMethod, imData, cls);
+        auto const ctx = getCtx(intfMeth, objOrCls, nullptr);
+        fsetActRec(env, meth, ctx, numParams, nullptr, dynamic, nullptr);
+      },
+      fallback
+    );
+    return;
   }
 
-  return false;
+  emitFPush();
 }
 
 void fpushObjMethod(IRGS& env,
                     SSATmp* obj,
                     const StringData* methodName,
                     uint32_t numParams,
-                    bool shouldFatal,
-                    Block* sideExit) {
-  emitIncStat(env, Stats::ObjMethod_total, 1);
+                    SSATmp* tsList) {
+  implIncStat(env, Stats::ObjMethod_total);
 
   assertx(obj->type() <= TObj);
+  const Class* knownClass = nullptr;
+  bool exactClass = false;
+
   if (auto cls = obj->type().clsSpec().cls()) {
-    if (!env.irb->constrainValue(obj, TypeConstraint(cls).setWeak())) {
-      // If we know the class without having to specialize a guard any further,
-      // use it.
-      fpushObjMethodWithBaseClass(
-        env, obj, cls, methodName, numParams, shouldFatal,
-        obj->type().clsSpec().exact() || cls->attrs() & AttrNoOverride);
-      return;
+    if (!env.irb->constrainValue(obj, GuardConstraint(cls).setWeak())) {
+      // We know the class without having to specialize a guard any further.  We
+      // may still want to use MethProfile to gather more information in case
+      // the class isn't known exactly.
+      knownClass = cls;
+      exactClass = obj->type().clsSpec().exact() ||
+                   cls->attrs() & AttrNoOverride;
     }
   }
 
-  folly::Optional<TargetProfile<MethProfile>> profile;
-  if (RuntimeOption::RepoAuthoritative) {
-    profile.emplace(env.context, env.irb->curMarker(), methProfileKey.get());
+  auto const emitFPush = [&] {
+    return fpushObjMethodWithBaseClass(env, obj, knownClass, methodName,
+                                       numParams, exactClass, tsList);
+  };
 
-    if (optimizeProfiledPushMethod(env, *profile,
-                                   obj, sideExit, methodName, numParams)) {
-      return;
-    }
+  // If we know the class exactly without profiling, then we don't need PGO.
+  if (!RuntimeOption::RepoAuthoritative ||
+      (knownClass && !isInterface(knownClass))) {
+    emitFPush();
+    return;
   }
 
-  fpushObjMethodWithBaseClass(env, obj, nullptr, methodName, numParams,
-                              shouldFatal, false);
-
-  if (profile && profile->profiling()) {
-    gen(env,
-        ProfileMethod,
-        ProfileMethodData {
-          spOffBCFromIRSP(env), profile->handle()
-        },
-        sp(env),
-        cns(env, TNullptr));
-  }
+  // If we don't know anything about the object's class, or all we know is an
+  // interface that it implements, then enable PGO.
+  optimizeProfiledPushMethod(env, obj, knownClass, methodName, numParams, false,
+                             emitFPush);
 }
 
 void fpushFuncObj(IRGS& env, uint32_t numParams) {
@@ -541,18 +543,20 @@ void fpushFuncObj(IRGS& env, uint32_t numParams) {
   auto const obj      = popC(env);
   auto const cls      = gen(env, LdObjClass, obj);
   auto const func     = gen(env, LdObjInvoke, slowExit, cls);
-  fpushActRec(env, func, obj, numParams, nullptr);
+  fsetActRec(env, func, obj, numParams, nullptr, false, nullptr);
 }
 
 void fpushFuncArr(IRGS& env, uint32_t numParams) {
   auto const thisAR = fp(env);
 
   auto const arr = popC(env);
-  fpushActRec(
+  auto const arOffset = fsetActRec(
     env,
     cns(env, TNullptr),
     cns(env, TNullptr),
     numParams,
+    nullptr,
+    true,
     nullptr
   );
 
@@ -563,47 +567,24 @@ void fpushFuncArr(IRGS& env, uint32_t numParams) {
   env.irb->exceptionStackBoundary();
 
   gen(env, LdArrFuncCtx,
-      IRSPRelOffsetData { spOffBCFromIRSP(env) },
+      IRSPRelOffsetData { arOffset },
       arr, sp(env), thisAR);
   decRef(env, arr);
 }
 
-// FPushCuf when the callee is not known at compile time.
-void fpushCufUnknown(IRGS& env, Op op, uint32_t numParams) {
-  if (op != Op::FPushCuf) {
-    PUNT(fpushCufUnknown-nonFPushCuf);
-  }
-
-  if (topC(env)->isA(TObj)) return fpushFuncObj(env, numParams);
-
-  if (!topC(env)->type().subtypeOfAny(TArr, TStr)) {
-    PUNT(fpushCufUnknown);
-  }
-
-  auto const callable = popC(env);
-  fpushActRec(
+void fpushFuncClsMeth(IRGS& env, uint32_t numParams) {
+  auto const clsMeth = popC(env);
+  auto const cls = gen(env, LdClsFromClsMeth, clsMeth);
+  auto const func = gen(env, LdFuncFromClsMeth, clsMeth);
+  fsetActRec(
     env,
-    cns(env, TNullptr),
-    cns(env, TNullptr),
+    func,
+    cls,
     numParams,
+    nullptr,
+    true,
     nullptr
   );
-
-  /*
-   * This is a similar case to lookup for functions in FPushFunc or
-   * FPushObjMethod.  We can throw in a weird situation where the
-   * ActRec is already on the stack, but this bytecode isn't done
-   * executing yet.  See arPreliveOverwriteCells for details about why
-   * we need this marker.
-   */
-  updateMarker(env);
-  env.irb->exceptionStackBoundary();
-
-  auto const opcode = callable->isA(TArr) ? LdArrFPushCuf : LdStrFPushCuf;
-  gen(env, opcode,
-      IRSPRelOffsetData { spOffBCFromIRSP(env) },
-      callable, sp(env), fp(env));
-  decRef(env, callable);
 }
 
 SSATmp* forwardCtx(IRGS& env, SSATmp* ctx, SSATmp* funcTmp) {
@@ -640,193 +621,36 @@ SSATmp* forwardCtx(IRGS& env, SSATmp* ctx, SSATmp* funcTmp) {
               });
 }
 
-void implFPushCufOp(IRGS& env, Op op, uint32_t numArgs) {
-  const bool safe = op == OpFPushCufSafe;
-  bool forward = op == OpFPushCufF;
-  SSATmp* callable = topC(env, BCSPRelOffset{safe ? 1 : 0});
+} // namespace
 
-  const Class* cls = nullptr;
-  StringData* invName = nullptr;
-  bool needsUnitLoad = false;
-  auto const callee = findCuf(op, callable, curFunc(env), cls, invName,
-                              forward, needsUnitLoad);
-  if (!callee) return fpushCufUnknown(env, op, numArgs);
-
-  SSATmp* ctx;
-  auto const safeFlag = cns(env, true); // This is always true until the slow
-                                        // exits below are implemented
-  auto func = cns(env, callee);
-  if (cls) {
-    auto const exitSlow = makeExitSlow(env);
-    if (!classIsPersistentOrCtxParent(env, cls)) {
-      // The miss path is complicated and rare.  Punt for now.  This must be
-      // checked before we IncRef the context below, because the slow exit will
-      // want to do that same IncRef via InterpOne.
-      gen(env, LdClsCachedSafe, exitSlow, cns(env, cls->name()));
-    }
-
-    if (forward) {
-      ctx = forwardCtx(env, ldCtx(env), cns(env, callee));
-    } else {
-      ctx = ldCtxForClsMethod(env, callee, cns(env, cls), cls, true);
-    }
-  } else {
-    ctx = cns(env, TNullptr);
-    if (needsUnitLoad) {
-      // Ensure the function's unit is loaded. The miss path is complicated and
-      // rare. Punt for now.
-      gen(
-        env,
-        LdFuncCachedSafe,
-        LdFuncCachedData { callee->name() },
-        makeExitSlow(env)
-      );
-    }
-  }
-
-  auto const defaultVal = safe ? popC(env) : nullptr;
-  popDecRef(env); // callable
-  if (safe) {
-    push(env, defaultVal);
-    push(env, safeFlag);
-  }
-
-  fpushActRec(env, func, ctx, numArgs, invName);
-}
-
-void fpushFuncCommon(IRGS& env,
-                     uint32_t numParams,
-                     const StringData* name,
-                     const StringData* fallback) {
-
+void emitFPushFuncD(IRGS& env, uint32_t numParams, const StringData* name) {
   auto const lookup = lookupImmutableFunc(curUnit(env), name);
   if (lookup.func) {
     // We know the function, but we have to ensure its unit is loaded. Use
     // LdFuncCached, ignoring the result to ensure this.
-    if (lookup.needsUnitLoad) gen(env, LdFuncCached, LdFuncCachedData { name });
-    fpushActRec(env,
-                cns(env, lookup.func),
-                cns(env, TNullptr),
-                numParams,
-                nullptr);
+    if (lookup.needsUnitLoad) gen(env, LdFuncCached, FuncNameData { name });
+    fsetActRec(env,
+               cns(env, lookup.func),
+               cns(env, TNullptr),
+               numParams,
+               nullptr,
+               false,
+               nullptr);
     return;
   }
 
-  auto const ssaFunc = fallback
-    ? gen(env, LdFuncCachedU, LdFuncCachedUData { name, fallback })
-    : gen(env, LdFuncCached, LdFuncCachedData { name });
-  fpushActRec(env,
-              ssaFunc,
-              cns(env, TNullptr),
-              numParams,
-              nullptr);
+  fsetActRec(env,
+             gen(env, LdFuncCached, FuncNameData { name }),
+             cns(env, TNullptr),
+             numParams,
+             nullptr,
+             false,
+             nullptr);
 }
 
-void implUnboxR(IRGS& env) {
-  auto const exit = makeExit(env);
-  auto const srcBox = popR(env);
-  auto const unboxed = unbox(env, srcBox, exit);
-  if (unboxed == srcBox) {
-    // If the Unbox ended up being a noop, don't bother refcounting
-    push(env, unboxed);
-  } else {
-    pushIncRef(env, unboxed);
-    decRef(env, srcBox);
-  }
-}
+namespace {
 
 //////////////////////////////////////////////////////////////////////
-
-const StaticString
-  s_http_response_header("http_response_header"),
-  s_php_errormsg("php_errormsg");
-
-/*
- * Could `inst' access the locals in the environment of `caller' according to
- * the given predicate?
- */
-template <typename P>
-bool callAccessesLocals(const NormalizedInstruction& inst,
-                        const Func* caller,
-                        P predicate) {
-  // We don't handle these two cases, because we don't compile functions
-  // containing them:
-  assertx(caller->lookupVarId(s_php_errormsg.get()) == -1);
-  assertx(caller->lookupVarId(s_http_response_header.get()) == -1);
-
-  auto const unit = caller->unit();
-
-  auto const checkTaintId = [&](Id id) {
-    auto const str = unit->lookupLitstrId(id);
-    // Only builtins can access a caller's locals or be skip-frame.
-    auto const callee = Unit::lookupBuiltin(str);
-    return callee && predicate(callee);
-  };
-
-  if (inst.op() == OpFCallBuiltin) return checkTaintId(inst.imm[2].u_SA);
-  if (!isFCallStar(inst.op())) return false;
-
-  auto const fpi = caller->findFPI(inst.source.offset());
-  assertx(fpi != nullptr);
-  auto const fpushPC = unit->at(fpi->m_fpushOff);
-  auto const op = peek_op(fpushPC);
-
-  switch (op) {
-    case OpFPushFunc:
-    case OpFPushCufIter:
-    case OpFPushCuf:
-    case OpFPushCufF:
-    case OpFPushCufSafe:
-      // Dynamic calls.  If we've forbidden dynamic calls to functions which
-      // access the caller's frame, we know this can't be one.
-      return !disallowDynamicVarEnvFuncs();
-
-    case OpFPushFuncD:
-      return checkTaintId(getImm(fpushPC, 1).u_SA);
-
-    case OpFPushFuncU:
-      return checkTaintId(getImm(fpushPC, 1).u_SA) ||
-             checkTaintId(getImm(fpushPC, 2).u_SA);
-
-    case OpFPushObjMethod:
-    case OpFPushObjMethodD:
-    case OpFPushClsMethod:
-    case OpFPushClsMethodF:
-    case OpFPushClsMethodD:
-    case OpFPushCtor:
-    case OpFPushCtorD:
-    case OpFPushCtorI:
-      // None of these access the caller's frame because they all call methods,
-      // not top-level functions. However, they might still be marked as
-      // skip-frame and therefore something they call can affect our frame. We
-      // don't have to worry about this if they're not allowed to call such
-      // functions dynamically.
-      return !disallowDynamicVarEnvFuncs();
-
-    default:
-      always_assert("Unhandled FPush type in callAccessesLocals" && 0);
-  }
-}
-
-/*
- * Could `inst' write to the locals in the environment of `caller'?
- *
- * This occurs, e.g., if `inst' is a call to extract().
- */
-bool callWritesLocals(const NormalizedInstruction& inst,
-                      const Func* caller) {
-  return callAccessesLocals(inst, caller, funcWritesLocals);
-}
-
-/*
- * Could `inst' read from the locals in the environment of `caller'?
- *
- * This occurs, e.g., if `inst' is a call to compact().
- */
-bool callReadsLocals(const NormalizedInstruction& inst,
-                     const Func* caller) {
-  return callAccessesLocals(inst, caller, funcReadsLocals);
-}
 
 /*
  * Could `inst' attempt to read the caller frame?
@@ -858,10 +682,6 @@ bool callNeedsCallerFrame(const NormalizedInstruction& inst,
 
   if (op == OpFPushFunc)  return true;
   if (op == OpFPushFuncD) return checkTaintId(getImm(fpushPC, 1).u_SA);
-  if (op == OpFPushFuncU) {
-    return checkTaintId(getImm(fpushPC, 1).u_SA) ||
-           checkTaintId(getImm(fpushPC, 2).u_SA);
-  }
 
   return false;
 }
@@ -872,15 +692,19 @@ bool callNeedsCallerFrame(const NormalizedInstruction& inst,
 
 //////////////////////////////////////////////////////////////////////
 
-void fpushActRec(IRGS& env,
-                 SSATmp* func,
-                 SSATmp* objOrClass,
-                 uint32_t numArgs,
-                 const StringData* invName) {
+IRSPRelOffset fsetActRec(
+  IRGS& env,
+  SSATmp* func,
+  SSATmp* objOrClass,
+  uint32_t numArgs,
+  const StringData* invName,
+  bool dynamicCall,
+  SSATmp* tsList
+) {
   ActRecInfo info;
   info.spOffset = offsetFromIRSP(
     env,
-    BCSPRelOffset{-int32_t{kNumActRecCells}}
+    BCSPRelOffset{static_cast<int32_t>(numArgs)}
   );
   info.numArgs = numArgs;
 
@@ -891,196 +715,354 @@ void fpushActRec(IRGS& env,
     sp(env),
     func,
     objOrClass,
-    invName ? cns(env, invName) : cns(env, TNullptr)
+    invName ? cns(env, invName) : cns(env, TNullptr),
+    cns(env, dynamicCall),
+    tsList ? tsList : cns(env, TNullptr)
   );
+
+  return info.spOffset;
 }
 
 //////////////////////////////////////////////////////////////////////
 
-void emitFPushCufIter(IRGS& env, uint32_t numParams, int32_t itId) {
-  auto const func = gen(env, LdCufIterFunc, TFunc, IterId(itId), fp(env));
-  auto const ctx = gen(
+namespace {
+
+SSATmp* specialClsRefToCls(IRGS& env, SpecialClsRef ref) {
+  switch (ref) {
+    case SpecialClsRef::Static:
+      if (!curClass(env)) PUNT(SpecialClsRef-NoCls);
+      return gen(env, LdClsCtx, ldCtx(env));
+    case SpecialClsRef::Self:
+      if (auto const clss = curClass(env)) return cns(env, clss);
+      PUNT(SpecialClsRef-NoCls);
+      break;
+    case SpecialClsRef::Parent:
+      if (auto const clss = curClass(env)) {
+        if (auto const parent = clss->parent()) return cns(env, parent);
+      }
+      PUNT(SpecialClsRef-NoCls);
+      break;
+  }
+  always_assert(false);
+}
+
+SSATmp* getReifiedGenerics(IRGS& env, SSATmp* funName) {
+  if (funName->hasConstVal(TStr)) {
+    auto const name = funName->strVal();
+    if (!isReifiedName(name)) return nullptr;
+    return cns(env, getReifiedTypeList(stripClsOrFnNameFromReifiedName(name)));
+  }
+  return cond(
     env,
-    LdCufIterCtx,
-    TCtx | TNullptr,
-    IterId(itId),
-    fp(env)
+    [&] (Block* not_reified_block) {
+      // Lets do a quick check before calling IsReifiedName since that's an
+      // expensive native call
+      // Reified names always start with a $
+      // It is also safe to read the 0th char without checking the length since
+      // if it is an empty string, then we'll be reading the null terminator
+      auto const first_char = gen(env, OrdStrIdx, funName, cns(env, 0));
+      auto const issame = gen(env, EqInt, cns(env, (uint64_t)'$'), first_char);
+      gen(env, JmpZero, not_reified_block, issame);
+      auto const isreified = gen(env, IsReifiedName, funName);
+      gen(env, JmpZero, not_reified_block, isreified);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      return gen(env, LdReifiedGeneric, funName);
+    },
+    [&] {
+      return cns(env, TNullptr);
+    }
   );
-  auto const invName = gen(
+}
+
+
+folly::Optional<int> specialClsReifiedPropSlot(IRGS& env, SpecialClsRef ref) {
+  auto const cls = curClass(env);
+  if (!cls) return folly::none;
+  auto result = [&] (const Class* cls) -> folly::Optional<int> {
+    if (!cls->hasReifiedGenerics()) return folly::none;
+    auto const slot = cls->lookupReifiedInitProp();
+    assertx(slot != kInvalidSlot);
+    return slot;
+  };
+  switch (ref) {
+    case SpecialClsRef::Static:
+      // Currently we disallow new static on reified classes
+      return folly::none;
+    case SpecialClsRef::Self:
+      return result(cls);
+    case SpecialClsRef::Parent:
+      if (!cls->parent()) return folly::none;
+      return result(cls->parent());
+  }
+  always_assert(false);
+}
+
+} // namespace
+
+void emitNewObj(IRGS& env, uint32_t slot, HasGenericsOp op) {
+  /*
+   * NoGenerics:    Do not read the generic part of clsref and emit AllocObj
+   * HasGenerics:   Read the full clsref and emit AllocObjReified
+   * MaybeGenerics: Read the full clsref, if generic part is not nullptr,
+   *                emit AllocObjReified, otherwise use AllocObj
+   */
+  if (HasGenericsOp::NoGenerics == op) {
+    auto const cls  = takeClsRefCls(env, slot);
+    emitCallerDynamicConstructChecks(env, cls);
+    push(env, gen(env, AllocObj, cls));
+    return;
+  }
+
+  auto const clsref = takeClsRef(env, slot, HasGenericsOp::HasGenerics == op);
+  auto const reified_generic = clsref.first;
+  auto const cls  = clsref.second;
+  emitCallerDynamicConstructChecks(env, cls);
+  if (HasGenericsOp::HasGenerics == op) {
+    push(env, gen(env, AllocObjReified, cls, reified_generic));
+    return;
+  }
+  assertx(HasGenericsOp::MaybeGenerics == op);
+  push(env, cond(
     env,
-    LdCufIterInvName,
-    TStr | TNullptr,
-    IterId(itId),
-    fp(env)
-  );
-
-  ActRecInfo info;
-  info.spOffset = offsetFromIRSP(
-    env,
-    BCSPRelOffset{-int32_t{kNumActRecCells}}
-  );
-  info.numArgs = numParams;
-
-  ifNonNull(env, ctx, [&](SSATmp* t) { gen(env, IncRef, t); });
-  ifNonNull(env, invName, [&](SSATmp* t) { gen(env, IncRef, t); });
-  gen(env, SpillFrame, info, sp(env), func, ctx, invName);
+    [&] (Block* taken) {
+      return gen(env, CheckNonNull, taken, reified_generic);
+    },
+    [&] (SSATmp* generics) { return gen(env, AllocObjReified, cls, generics); },
+    [&] { return gen(env, AllocObj, cls); }
+  ));
 }
 
-void emitFPushCuf(IRGS& env, uint32_t numArgs) {
-  implFPushCufOp(env, Op::FPushCuf, numArgs);
-}
-void emitFPushCufF(IRGS& env, uint32_t numArgs) {
-  implFPushCufOp(env, Op::FPushCufF, numArgs);
-}
-void emitFPushCufSafe(IRGS& env, uint32_t numArgs) {
-  implFPushCufOp(env, Op::FPushCufSafe, numArgs);
-}
-
-void emitFPushCtor(IRGS& env, uint32_t numParams, uint32_t slot) {
-  auto const cls  = takeClsRef(env, slot);
-  auto const func = gen(env, LdClsCtor, cls, fp(env));
-  auto const obj  = gen(env, AllocObj, cls);
-  pushIncRef(env, obj);
-  fpushActRec(env, func, obj, numParams, nullptr);
-}
-
-void emitFPushCtorD(IRGS& env,
-                    uint32_t numParams,
-                    const StringData* className) {
+void emitNewObjD(IRGS& env, const StringData* className) {
   auto const cls = Unit::lookupUniqueClassInContext(className, curClass(env));
   bool const persistentCls = classIsPersistentOrCtxParent(env, cls);
   bool const canInstantiate = canInstantiateClass(cls);
-  bool const fastAlloc =
-    persistentCls &&
-    canInstantiate &&
-    !cls->hasNativePropHandler();
+  if (persistentCls && canInstantiate && !cls->hasNativePropHandler()) {
+    push(env, allocObjFast(env, cls));
+    return;
+  }
 
-  auto const func = lookupImmutableCtor(cls, curClass(env));
+  if (persistentCls) {
+    push(env, gen(env, AllocObj, cns(env, cls)));
+    return;
+  }
 
-  // We don't need to actually do the load if we have a persistent class
-  auto const cachedCls = persistentCls ? nullptr :
-    gen(env, LdClsCached, cns(env, className));
-
-  // If we know the Class*, we can use it; if its not persistent,
-  // we will have loaded it above.
-  auto const ssaCls = cls ? cns(env, cls) : cachedCls;
-
-  auto const ssaFunc = func ? cns(env, func)
-                            : gen(env, LdClsCtor, ssaCls, fp(env));
-  auto const obj = fastAlloc ? allocObjFast(env, cls)
-                             : gen(env, AllocObj, ssaCls);
-  pushIncRef(env, obj);
-  fpushActRec(env, ssaFunc, obj, numParams, nullptr);
+  auto const cachedCls = gen(env, LdClsCached, cns(env, className));
+  push(env, gen(env, AllocObj, cls ? cns(env, cls) : cachedCls));
 }
 
-void emitFPushCtorI(IRGS& env,
-                    uint32_t numParams,
-                    uint32_t clsIx) {
-  auto const preClass = curFunc(env)->unit()->lookupPreClassId(clsIx);
-  auto const cls = [&] () -> Class* {
-    auto const c = preClass->namedEntity()->clsList();
-    if (c && (c->attrs() & AttrUnique)) return c;
-    return nullptr;
-  }();
-  bool const persistentCls = classIsPersistentOrCtxParent(env, cls);
-  bool const canInstantiate = canInstantiateClass(cls);
-  bool const fastAlloc =
-    persistentCls &&
-    canInstantiate &&
-    !cls->hasNativePropHandler();
+void emitNewObjS(IRGS& env, SpecialClsRef ref) {
+  auto const cls  = specialClsRefToCls(env, ref);
+  auto const slot = specialClsReifiedPropSlot(env, ref);
+  if (slot == folly::none) {
+    push(env, gen(env, AllocObj, cls));
+    return;
+  }
 
-  auto const func = lookupImmutableCtor(cls, curClass(env));
+  auto const this_ = checkAndLoadThis(env);
+  auto const ty = RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+  auto const addr = gen(
+    env,
+    LdPropAddr,
+    ByteOffsetData { (ptrdiff_t)curClass(env)->declPropOffset(*slot) },
+    ty.lval(Ptr::Prop),
+    this_
+  );
+  auto const reified_generic = gen(env, LdMem, ty, addr);
+  push(env, gen(env, AllocObjReified, cls, reified_generic));
+}
 
-  auto const ssaCls = [&] {
-    if (!persistentCls) {
-      auto const cachedCls = cond(
-        env,
-        [&] (Block* taken) {
-          return gen(env, LdClsCachedSafe, taken, cns(env, preClass->name()));
-        },
-        [&] (SSATmp* val) {
-          return val;
-        },
-        [&] {
-          return gen(env, DefCls, cns(env, clsIx));
-        }
-      );
-      if (!cls) return cachedCls;
+void emitFPushCtor(IRGS& env, uint32_t numParams) {
+  auto const objPos = static_cast<int32_t>(numParams + 2);
+  auto const obj = topC(env, BCSPRelOffset{objPos});
+  if (!obj->isA(TObj)) PUNT(FPushCtor-NonObj);
+
+  auto const func = [&] {
+    auto const exactCls = obj->type().clsSpec().exactCls();
+    if (!exactCls) {
+      auto const cls = gen(env, LdObjClass, obj);
+      return gen(env, LdClsCtor, cls, fp(env));
     }
-    return cns(env, cls);
+
+    auto const ctor = lookupImmutableCtor(exactCls, curClass(env));
+    if (ctor) return cns(env, ctor);
+    return gen(env, LdClsCtor, cns(env, exactCls), fp(env));
   }();
 
-  auto const ssaFunc = func ? cns(env, func)
-                            : gen(env, LdClsCtor, ssaCls, fp(env));
-  auto const obj = fastAlloc ? allocObjFast(env, cls)
-                             : gen(env, AllocObj, ssaCls);
-  pushIncRef(env, obj);
-  fpushActRec(env, ssaFunc, obj, numParams, nullptr);
+  fsetActRec(env, func, obj, numParams, nullptr, false, nullptr);
 }
 
-void emitFPushFuncD(IRGS& env, uint32_t nargs, const StringData* name) {
-  fpushFuncCommon(env, nargs, name, nullptr);
-}
+void emitFPushFunc(IRGS& env, uint32_t numParams, const ImmVector& v) {
+  if (v.size() != 0) PUNT(InOut-FPushFunc);
+  auto const callee = topC(env);
 
-void emitFPushFuncU(IRGS& env,
-                    uint32_t nargs,
-                    const StringData* name,
-                    const StringData* fallback) {
-  fpushFuncCommon(env, nargs, name, fallback);
-}
+  if (callee->isA(TObj)) return fpushFuncObj(env, numParams);
+  if (callee->isA(TArr) || callee->isA(TVec)) {
+    return fpushFuncArr(env, numParams);
+  }
+  if (callee->isA(TFunc)) {
+    popC(env);
+    fsetActRec(
+      env,
+      callee,
+      cns(env, TNullptr),
+      numParams,
+      nullptr,
+      false,
+      nullptr
+    );
+    return;
+  }
+  if (topC(env)->isA(TClsMeth)) {
+    return fpushFuncClsMeth(env, numParams);
+  }
 
-void emitFPushFunc(IRGS& env, uint32_t numParams) {
-  if (topC(env)->isA(TObj)) return fpushFuncObj(env, numParams);
-  if (topC(env)->isA(TArr)) return fpushFuncArr(env, numParams);
-
-  if (!topC(env)->isA(TStr)) {
+  if (!callee->isA(TStr)) {
     PUNT(FPushFunc_not_Str);
   }
 
-  auto const funcName = popC(env);
-  fpushActRec(env,
-              cns(env, TNullptr),
-              cns(env, TNullptr),
-              numParams,
-              nullptr);
+  popC(env);
+  auto const arOffset = fsetActRec(
+    env,
+    cns(env, TNullptr),
+    cns(env, TNullptr),
+    numParams,
+    nullptr,
+    true,
+    getReifiedGenerics(env, callee)
+  );
 
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
   gen(env, LdFunc,
-      IRSPRelOffsetData { spOffBCFromIRSP(env) },
-      funcName, sp(env), fp(env));
+      IRSPRelOffsetData { arOffset },
+      callee, sp(env), fp(env));
 
-  decRef(env, funcName);
+  decRef(env, callee);
 }
+
+void emitResolveFunc(IRGS& env, const StringData* name) {
+  auto const lookup = lookupImmutableFunc(curUnit(env), name);
+  auto func = lookup.func;
+  if (!func) {
+    push(env, gen(env, LookupFuncCached, FuncNameData { name }));
+    return;
+  }
+  if (lookup.needsUnitLoad) gen(env, LookupFuncCached, FuncNameData { name });
+  push(env, cns(env, func));
+}
+
+namespace {
+
+void implFPushObjMethodD(IRGS& env,
+                         uint32_t numParams,
+                         const StringData* methodName,
+                         ObjMethodOp subop,
+                         SSATmp* tsList) {
+  auto const objPos = static_cast<int32_t>(numParams + 2);
+  auto const obj = topC(env, BCSPRelOffset{objPos});
+
+  if (obj->type() <= TObj) {
+    fpushObjMethod(env, obj, methodName, numParams, tsList);
+    return;
+  }
+
+  if (obj->type() <= TInitNull && subop == ObjMethodOp::NullSafe) {
+    fsetActRec(
+      env,
+      cns(env, SystemLib::s_nullFunc),
+      cns(env, TNullptr),
+      numParams,
+      nullptr,
+      true,
+      tsList);
+    return;
+  }
+
+  PUNT(FPushObjMethodD-nonObj);
+}
+
+} // namespace
 
 void emitFPushObjMethodD(IRGS& env,
                          uint32_t numParams,
                          const StringData* methodName,
                          ObjMethodOp subop) {
-  TransFlags trFlags;
-  trFlags.noProfiledFPush = true;
-  auto sideExit = makeExit(env, trFlags);
+  implFPushObjMethodD(env, numParams, methodName, subop, nullptr);
+}
 
-  auto const obj = popC(env);
 
-  if (obj->type() <= TObj) {
-    fpushObjMethod(env, obj, methodName, numParams,
-      true /* shouldFatal */, sideExit);
-    return;
+void emitFPushObjMethodRD(IRGS& env,
+                         uint32_t numParams,
+                         const StringData* methodName,
+                         ObjMethodOp subop) {
+  implFPushObjMethodD(env, numParams, methodName, subop, popC(env));
+}
+
+namespace {
+
+SSATmp* lookupClsMethodKnown(IRGS& env,
+                             const StringData* methodName,
+                             SSATmp* callerCtx,
+                             const Class *baseClass,
+                             bool exact,
+                             bool check,
+                             bool forward,
+                             bool& magicCall,
+                             SSATmp*& calleeCtx) {
+  magicCall = false;
+  auto const func = lookupImmutableMethod(baseClass,
+                                          methodName,
+                                          magicCall,
+                                          true /* staticLookup */,
+                                          curFunc(env),
+                                          exact);
+  if (!func) return nullptr;
+
+  auto const objOrCls = forward ?
+                        ldCtx(env) :
+                        ldCtxForClsMethod(env, func, callerCtx, baseClass,
+                                          exact);
+  if (check) {
+    assertx(exact);
+    if (!classIsPersistentOrCtxParent(env, baseClass)) {
+      gen(env, LdClsCached, cns(env, baseClass->name()));
+    }
   }
+  auto funcTmp = exact || func->isImmutableFrom(baseClass) ?
+    cns(env, func) :
+    gen(env, LdClsMethod, callerCtx, cns(env, -(func->methodSlot() + 1)));
 
-  if (obj->type() <= TInitNull && subop == ObjMethodOp::NullSafe) {
-    fpushActRec(
-      env,
-      cns(env, SystemLib::s_nullFunc),
-      cns(env, TNullptr),
-      numParams,
-      nullptr);
-    return;
-  }
+  calleeCtx = forward ?
+              forwardCtx(env, objOrCls, funcTmp) :
+              objOrCls;
+  return funcTmp;
+}
 
-  PUNT(FPushObjMethodD-nonObj);
+SSATmp* loadClsMethodUnknown(IRGS& env,
+                             const ClsMethodData& data,
+                             Block* onFail) {
+  // Look up the Func* in the targetcache. If it's not there, try the slow
+  // path. If that fails, slow exit.
+  return cond(
+    env,
+    [&] (Block* taken) {
+      return gen(env, LdClsMethodCacheFunc, data, taken);
+    },
+    [&] (SSATmp* func) { // next
+      implIncStat(env, Stats::TgtCache_StaticMethodHit);
+      return func;
+    },
+    [&] { // taken
+      hint(env, Block::Hint::Unlikely);
+      auto const result = gen(env, LookupClsMethodCache, data, fp(env));
+      return gen(env, CheckNonNull, onFail, result);
+    }
+  );
+}
+
 }
 
 bool fpushClsMethodKnown(IRGS& env,
@@ -1090,37 +1072,20 @@ bool fpushClsMethodKnown(IRGS& env,
                          const Class *baseClass,
                          bool exact,
                          bool check,
-                         bool forward) {
-  bool magicCall = false;
-  auto const func = lookupImmutableMethod(baseClass,
-                                          methodName,
-                                          magicCall,
-                                          true /* staticLookup */,
-                                          curFunc(env),
-                                          exact);
-  if (!func) return false;
-
-  auto const objOrCls = forward ?
-                        ldCtx(env) :
-                        ldCtxForClsMethod(env, func, ctxTmp, baseClass, exact);
-  if (check) {
-    assertx(exact);
-    if (!classIsPersistentOrCtxParent(env, baseClass)) {
-      gen(env, LdClsCached, cns(env, baseClass->name()));
-    }
-  }
-  auto funcTmp = exact || func->isImmutableFrom(baseClass) ?
-    cns(env, func) :
-    gen(env, LdClsMethod, ctxTmp, cns(env, -(func->methodSlot() + 1)));
-
-  auto const ctx = forward ?
-                   forwardCtx(env, objOrCls, funcTmp) :
-                   objOrCls;
-  fpushActRec(env,
-              funcTmp,
-              ctx,
-              numParams,
-              magicCall ? methodName : nullptr);
+                         bool forward,
+                         bool dynamic) {
+  auto magicCall = false;
+  SSATmp* ctx = nullptr;
+  auto funcTmp = lookupClsMethodKnown(env, methodName, ctxTmp, baseClass, exact,
+                                      check, forward, magicCall, ctx);
+  if (!funcTmp) return false;
+  fsetActRec(env,
+             funcTmp,
+             ctx,
+             numParams,
+             magicCall ? methodName : nullptr,
+             dynamic,
+             nullptr);
   return true;
 }
 
@@ -1132,7 +1097,7 @@ void emitFPushClsMethodD(IRGS& env,
       Unit::lookupUniqueClassInContext(className, curClass(env))) {
     if (fpushClsMethodKnown(env, numParams,
                             methodName, cns(env, baseClass), baseClass,
-                            true, true, false)) {
+                            true, true, false, false)) {
       return;
     }
   }
@@ -1140,302 +1105,497 @@ void emitFPushClsMethodD(IRGS& env,
   auto const slowExit = makeExitSlow(env);
   auto const ne = NamedEntity::get(className);
   auto const data = ClsMethodData { className, methodName, ne };
-
-  // Look up the Func* in the targetcache. If it's not there, try the slow
-  // path. If that fails, slow exit.
-  auto const func = cond(
-    env,
-    [&] (Block* taken) {
-      return gen(env, LdClsMethodCacheFunc, data, taken);
-    },
-    [&] (SSATmp* func) { // next
-      return func;
-    },
-    [&] { // taken
-      hint(env, Block::Hint::Unlikely);
-      auto const result = gen(env, LookupClsMethodCache, data, fp(env));
-      return gen(env, CheckNonNull, slowExit, result);
-    }
-  );
+  auto func = loadClsMethodUnknown(env, data, slowExit);
   auto const clsCtx = gen(env, LdClsMethodCacheCls, data);
+  fsetActRec(env,
+             func,
+             clsCtx,
+             numParams,
+             nullptr,
+             false,
+             nullptr);
+}
 
-  fpushActRec(env,
-              func,
-              clsCtx,
-              numParams,
-              nullptr);
+const StaticString s_resolveMagicCall(
+  "Unable to resolve magic call for inst_meth()");
+
+void emitResolveObjMethod(IRGS& env) {
+  auto const name = topC(env, BCSPRelOffset { 0 });
+  auto const obj = topC(env, BCSPRelOffset { 1 });
+  if (!(obj->type() <= TObj) || !(name->type() <= TStr)) {
+    PUNT(ResolveObjMethod-nonObjStr);
+  }
+  if (!name->hasConstVal()) PUNT(ResolveObjMethod-nonConstStr);
+  auto cls = obj->type().clsSpec().cls();
+  if (!cls || env.irb->constrainValue(obj, GuardConstraint(cls).setWeak())) {
+    PUNT(ResolveObjMethod-unknownClass);
+  }
+  auto const exactClass = obj->type().clsSpec().exact() ||
+                    cls->attrs() & AttrNoOverride;
+  auto const methodName = name->strVal();
+  bool magicCall = false;
+  SSATmp* objOrCls = nullptr;
+  if (auto funcTmp = lookupObjMethodWithBaseClass(env, obj, cls, methodName,
+        exactClass, objOrCls, magicCall)) {
+    if (magicCall) {
+      gen(env, ThrowInvalidOperation, cns(env, s_resolveMagicCall.get()));
+      return;
+    }
+    auto methPair = gen(env, AllocVArray, PackedArrayData { 2 });
+    gen(env, InitPackedLayoutArray, IndexData { 0 }, methPair, objOrCls);
+    gen(env, InitPackedLayoutArray, IndexData { 1 }, methPair, funcTmp);
+    decRef(env, name);
+    popC(env);
+    popC(env);
+    push(env, methPair);
+    return;
+  }
+  PUNT(ResolveObjMethod-unkownObjMethod);
 }
 
 
-template<bool forward>
+const StaticString s_resolveClsMagicCall(
+  "Unable to resolve magic call for class_meth()");
+
+void emitResolveClsMethod(IRGS& env) {
+  auto const name = topC(env, BCSPRelOffset { 0 });
+  auto const cls = topC(env, BCSPRelOffset { 1 });
+  if (!(cls->type() <= TStr) || !(name->type() <= TStr)) {
+    PUNT(ResolveClsMethod-nonStr);
+  }
+  if (!name->hasConstVal() || !cls->hasConstVal()) {
+    PUNT(ResolveClsMethod-nonConstStr);
+  }
+  auto className = cls->strVal();
+  auto methodName = name->strVal();
+  SSATmp* clsTmp = nullptr;
+  SSATmp* funcTmp = nullptr;
+  if (auto const baseClass =
+      Unit::lookupUniqueClassInContext(className, curClass(env))) {
+    bool magicCall = false;
+    SSATmp* ctx = nullptr;
+    funcTmp = lookupClsMethodKnown(env, methodName, cns(env, baseClass),
+                                    baseClass, true, true, false, magicCall,
+                                    ctx);
+    if (magicCall) {
+      gen(env, ThrowInvalidOperation, cns(env, s_resolveClsMagicCall.get()));
+      return;
+    }
+    // For clsmeth, we want to return the class user gave,
+    // not the class where func is associated with.
+    clsTmp = cns(env, baseClass);
+  }
+  if (!funcTmp) {
+    auto const slowExit = makeExitSlow(env);
+    auto const ne = NamedEntity::get(className);
+    auto const data = ClsMethodData { className, methodName, ne };
+    funcTmp = loadClsMethodUnknown(env, data, slowExit);
+    clsTmp = gen(env, LdClsCached, cns(env, className));
+  }
+  assertx(clsTmp);
+  assertx(funcTmp);
+  auto const clsMeth = gen(env, NewClsMeth, clsTmp, funcTmp);
+  decRef(env, name);
+  decRef(env, cls);
+  popC(env);
+  popC(env);
+  push(env, clsMeth);
+}
+
+namespace {
+
+template <typename Take, typename Get>
 ALWAYS_INLINE void fpushClsMethodCommon(IRGS& env,
                                         uint32_t numParams,
-                                        int32_t clsRefSlot) {
-  TransFlags trFlags;
-  trFlags.noProfiledFPush = true;
-  auto sideExit = makeExit(env, trFlags);
-
-  // We can side-exit, so peek the slot rather than reading from it.
-  auto const clsVal  = peekClsRef(env, clsRefSlot);
-  auto const methVal = popC(env);
+                                        Take takeCls,
+                                        Get getMeth,
+                                        bool forward,
+                                        bool dynamic) {
+  auto const clsVal = takeCls();
+  auto const methVal = getMeth();
 
   if (!methVal->isA(TStr)) {
     PUNT(FPushClsMethod-unknownType);
   }
 
-  folly::Optional<TargetProfile<MethProfile>> profile;
+  auto const emitFPush = [&] {
+    auto const arOffset = fsetActRec(
+      env,
+      cns(env, TNullptr),
+      cns(env, TNullptr),
+      numParams,
+      nullptr,
+      dynamic,
+      nullptr
+    );
 
-  if (methVal->hasConstVal()) {
-    auto const methodName = methVal->strVal();
-    const Class* cls = nullptr;
-    bool exact = false;
-    if (auto clsSpec = clsVal->type().clsSpec()) {
-      cls = clsSpec.cls();
-      exact = clsSpec.exact();
-    }
+    /*
+     * Similar to FPushFunc/FPushObjMethod, we have an incomplete ActRec on the
+     * stack and must handle that properly if we throw or re-enter.
+     */
+    updateMarker(env);
+    env.irb->exceptionStackBoundary();
 
-    if (cls) {
-      if (fpushClsMethodKnown(env, numParams, methodName, clsVal, cls,
-                              exact, false, forward)) {
-        killClsRef(env, clsRefSlot);
-        return;
-      }
-    }
+    auto const lcmData = LookupClsMethodData { arOffset, forward };
+    gen(env, LookupClsMethod, lcmData, clsVal, methVal, sp(env), fp(env));
+    decRef(env, methVal);
+    return arOffset;
+  };
 
-    if (RuntimeOption::RepoAuthoritative &&
-        !clsVal->hasConstVal() &&
-        !forward) {
-      profile.emplace(env.context, env.irb->curMarker(), methProfileKey.get());
-
-      if (optimizeProfiledPushMethod(env, *profile,
-                                     clsVal, sideExit, methodName, numParams)) {
-        killClsRef(env, clsRefSlot);
-        return;
-      }
-    }
-  }
-
-  killClsRef(env, clsRefSlot);
-  fpushActRec(env,
-              cns(env, TNullptr),
-              cns(env, TNullptr),
-              numParams,
-              nullptr);
-
-  /*
-   * Similar to FPushFunc/FPushObjMethod, we have an incomplete ActRec on the
-   * stack and must handle that properly if we throw or re-enter.
-   */
-  updateMarker(env);
-  env.irb->exceptionStackBoundary();
-
-  gen(env, LookupClsMethod,
-      LookupClsMethodData { spOffBCFromIRSP(env), forward },
-      clsVal, methVal, sp(env), fp(env));
-  decRef(env, methVal);
-
-  if (profile && profile->profiling()) {
-    gen(env,
-        ProfileMethod,
-        ProfileMethodData {
-          spOffBCFromIRSP(env), profile->handle()
-        },
-        sp(env),
-        clsVal);
-  }
-}
-
-void emitFPushClsMethod(IRGS& env, uint32_t numParams, uint32_t slot) {
-  fpushClsMethodCommon<false>(env, numParams, slot);
-}
-
-void emitFPushClsMethodF(IRGS& env, uint32_t numParams, uint32_t slot) {
-  fpushClsMethodCommon<true>(env, numParams, slot);
-}
-
-//////////////////////////////////////////////////////////////////////
-
-/*
- * All fpass instructions spill the stack after they execute, because we are
- * sure to need that value in memory, regardless of whether we side-exit or
- * throw.  At the level of HHBC semantics, it's illegal to pop them from the
- * stack until we've left the FPI region, and we will be spilling the whole
- * stack when we get to the FCall{D,} at the end of the region.  This should
- * also potentially reduce the number of live registers during call sequences.
- *
- * Note: there is a general problem with the spillStack mechanism, in that it
- * may sink stores that are not profitable to sink, but in this case we can
- * work around it easily.
- */
-
-void emitFPassL(IRGS& env, uint32_t /*argNum*/, int32_t id) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    emitVGetL(env, id);
-  } else {
-    emitCGetL(env, id);
-  }
-}
-
-void emitFPassS(IRGS& env, uint32_t /*argNum*/, uint32_t slot) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    emitVGetS(env, slot);
-  } else {
-    emitCGetS(env, slot);
-  }
-}
-
-void emitFPassG(IRGS& env, uint32_t /*argNum*/) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    emitVGetG(env);
-  } else {
-    emitCGetG(env);
-  }
-}
-
-void emitFPassR(IRGS& env, uint32_t /*argNum*/) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    PUNT(FPassR-byRef);
-  }
-
-  implUnboxR(env);
-}
-
-void emitUnboxR(IRGS& env) { implUnboxR(env); }
-
-void emitFPassV(IRGS& env, uint32_t /*argNum*/) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    // FPassV is a no-op when the callee expects by ref.
+  if (!methVal->hasConstVal()) {
+    emitFPush();
     return;
   }
 
-  auto const tmp = popV(env);
-  pushIncRef(env, gen(env, LdRef, TInitCell, tmp));
-  decRef(env, tmp);
+  auto const methodName = methVal->strVal();
+  const Class* cls = nullptr;
+  bool exact = false;
+  if (auto clsSpec = clsVal->type().clsSpec()) {
+    cls = clsSpec.cls();
+    exact = clsSpec.exact();
+  }
+
+  if (cls && fpushClsMethodKnown(env, numParams, methodName, clsVal, cls,
+                                 exact, false, forward, dynamic)) {
+    return;
+  }
+
+  if (!RuntimeOption::RepoAuthoritative || clsVal->hasConstVal() || forward) {
+    emitFPush();
+    return;
+  }
+
+  optimizeProfiledPushMethod(env, clsVal, nullptr, methodName, numParams,
+                             dynamic, emitFPush);
 }
 
-void emitFPassCE(IRGS& env, uint32_t /*argNum*/) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    // Need to raise an error
-    PUNT(FPassCE-byRef);
-  }
 }
 
-void emitFPassCW(IRGS& env, uint32_t /*argNum*/) {
-  if (env.currentNormalizedInstruction->preppedByRef) {
-    // Need to raise a warning
-    PUNT(FPassCW-byRef);
-  }
+void emitFPushClsMethod(IRGS& env,
+                        uint32_t numParams,
+                        uint32_t slot,
+                        const ImmVector& v) {
+  if (v.size() != 0) PUNT(InOut-FPushClsMethod);
+  fpushClsMethodCommon(
+    env,
+    numParams,
+    [&] { return takeClsRefCls(env, slot); },
+    [&] { return popC(env); },
+    false,
+    true
+  );
+}
+
+void emitFPushClsMethodS(IRGS& env,
+                         uint32_t numParams,
+                         SpecialClsRef ref,
+                         const ImmVector& v) {
+  if (v.size() != 0) PUNT(InOut-FPushClsMethodS);
+  fpushClsMethodCommon(
+    env,
+    numParams,
+    [&] { return specialClsRefToCls(env, ref); },
+    [&] { return popC(env); },
+    ref == SpecialClsRef::Self || ref == SpecialClsRef::Parent,
+    true
+  );
+}
+
+void emitFPushClsMethodSD(IRGS& env,
+                          uint32_t numParams,
+                          SpecialClsRef ref,
+                          const StringData* name) {
+  fpushClsMethodCommon(
+    env,
+    numParams,
+    [&] { return specialClsRefToCls(env, ref); },
+    [&] { return cns(env, name); },
+    ref == SpecialClsRef::Self || ref == SpecialClsRef::Parent,
+    false
+  );
 }
 
 //////////////////////////////////////////////////////////////////////
 
-void emitFCallArray(IRGS& env) {
-  auto const callee = env.currentNormalizedInstruction->funcd;
+namespace {
 
-  auto const writeLocals = callee
-    ? funcWritesLocals(callee)
-    : callWritesLocals(*env.currentNormalizedInstruction, curFunc(env));
-  auto const readLocals = callee
-    ? funcReadsLocals(callee)
-    : callReadsLocals(*env.currentNormalizedInstruction, curFunc(env));
+SSATmp* ldPreLiveFunc(IRGS& env, IRSPRelOffset actRecOff) {
+  auto const& fpiStack = env.irb->fs().fpiStack();
+  if (!fpiStack.empty() && fpiStack.back().func) {
+    return cns(env, fpiStack.back().func);
+  }
 
-  auto const data = CallArrayData {
-    spOffBCFromIRSP(env),
-    0,
-    bcOff(env),
-    nextBcOff(env),
-    callee,
-    writeLocals,
-    readLocals
-  };
-  auto const retVal = gen(env, CallArray, data, sp(env), fp(env));
-  push(env, retVal);
+  return gen(env, LdARFuncPtr, TFunc, IRSPRelOffsetData { actRecOff }, sp(env));
 }
 
-void emitFCallUnpack(IRGS& env, uint32_t numParams) {
-  auto const callee = env.currentNormalizedInstruction->funcd;
-
-  auto const writeLocals = callee
-    ? funcWritesLocals(callee)
-    : callWritesLocals(*env.currentNormalizedInstruction, curFunc(env));
-  auto const readLocals = callee
-    ? funcReadsLocals(callee)
-    : callReadsLocals(*env.currentNormalizedInstruction, curFunc(env));
-
-  auto const data = CallArrayData {
-    spOffBCFromIRSP(env),
-    numParams,
-    bcOff(env),
-    nextBcOff(env),
-    callee,
-    writeLocals,
-    readLocals
-  };
-  auto const retVal = gen(env, CallArray, data, sp(env), fp(env));
-  push(env, retVal);
 }
 
-void emitFCallD(IRGS& env,
-                uint32_t numParams,
-                const StringData*,
-                const StringData*) {
-  emitFCall(env, numParams);
+//////////////////////////////////////////////////////////////////////
+
+namespace {
+
+bool emitCallerReffinessChecks(IRGS& env, const Func* callee,
+                               const FCallArgs& fca, IRSPRelOffset actRecOff) {
+  if (!fca.enforceReffiness()) return true;
+
+  if (callee) {
+    for (auto i = 0; i < fca.numArgs; ++i) {
+      if (callee->byRef(i) != fca.byRef(i)) {
+        auto const func = cns(env, callee);
+        gen(env, RaiseParamRefMismatchForFunc, ParamData { i }, func);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  auto const func = ldPreLiveFunc(env, actRecOff);
+  auto const exitSlow = makeExitSlow(env);
+
+  SSATmp* numParams = nullptr;
+  for (uint32_t i = 0; i * 8 < fca.numArgs; i += 8) {
+    uint64_t vals = 0;
+    for (uint32_t j = 0; j < 8 && (i + j) * 8 < fca.numArgs; ++j) {
+      vals |= ((uint64_t)fca.byRefs[i + j]) << (8 * j);
+    }
+
+    uint64_t bits = fca.numArgs - i * 8;
+    uint64_t mask = bits >= 64
+      ? std::numeric_limits<uint64_t>::max()
+      : (1UL << bits) - 1;
+
+    // CheckRefs only needs to know the number of parameters when there are more
+    // than 64 args.
+    if (i == 0) {
+      numParams = cns(env, 64);
+    } else if (!numParams || numParams->hasConstVal()) {
+      numParams = gen(env, LdFuncNumParams, func);
+    }
+
+    gen(env, CheckRefs, exitSlow, CheckRefsData { i * 8, mask, vals }, func,
+        numParams);
+  }
+
+  return true;
 }
 
-SSATmp* implFCall(IRGS& env, uint32_t numParams) {
-  auto const returnBcOffset = nextBcOff(env) - curFunc(env)->base();
-  auto const callee = env.currentNormalizedInstruction->funcd;
+}
 
-  auto const writeLocals = callee
-    ? funcWritesLocals(callee)
-    : callWritesLocals(*env.currentNormalizedInstruction, curFunc(env));
-  auto const readLocals = callee
-    ? funcReadsLocals(callee)
-    : callReadsLocals(*env.currentNormalizedInstruction, curFunc(env));
+void emitCallerDynamicCallChecks(IRGS& env,
+                                 const Func* callee,
+                                 IRSPRelOffset actRecOff) {
+  if (RuntimeOption::EvalForbidDynamicCalls <= 0) return;
+  if (callee && callee->isDynamicallyCallable()) return;
+
+  SSATmp* func = nullptr;
+  ifElse(
+    env,
+    [&] (Block* skip) {
+      auto const dynamic = gen(
+        env,
+        LdARIsDynamic,
+        IRSPRelOffsetData { actRecOff },
+        sp(env)
+      );
+      gen(env, JmpZero, skip, dynamic);
+
+      // If we do have a callee, we already know its not dynamically callable
+      // (checked above).
+      if (!callee) {
+        func = gen(
+          env,
+          LdARFuncPtr,
+          TFunc,
+          IRSPRelOffsetData { actRecOff },
+          sp(env)
+        );
+        auto const dyncallable = gen(env, IsFuncDynCallable, func);
+        gen(env, JmpNZero, skip, dyncallable);
+      } else {
+        func = cns(env, callee);
+      }
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, RaiseForbiddenDynCall, func);
+    }
+  );
+}
+
+void emitCallerDynamicConstructChecks(IRGS& env, SSATmp* cls) {
+  if (RuntimeOption::EvalForbidDynamicCalls <= 0) return;
+  if (cls->hasConstVal()) {
+    if (cls->clsVal()->isDynamicallyConstructible()) return;
+    gen(env, RaiseForbiddenDynConstruct, cls);
+    return;
+  }
+
+  ifElse(
+    env,
+    [&] (Block* skip) {
+      auto const dynConstructible = gen(env, IsClsDynConstructible, cls);
+      gen(env, JmpNZero, skip, dynConstructible);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, RaiseForbiddenDynConstruct, cls);
+    }
+  );
+}
+
+void emitCallerRxChecks(IRGS& env, const Func* callee,
+                        IRSPRelOffset actRecOff) {
+  if (RuntimeOption::EvalRxEnforceCalls <= 0) return;
+  auto const callerLevel = curRxLevel(env);
+  if (!rxEnforceCallsInLevel(callerLevel)) return;
+
+  auto const minReqCalleeLevel = rxRequiredCalleeLevel(callerLevel);
+  if (callee) {
+    // Let interpreter handle the bad call.
+    if (callee->rxLevel() < minReqCalleeLevel) PUNT(FCall-RxViolation);
+    return;
+  }
+
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      auto const func = ldPreLiveFunc(env, actRecOff);
+      auto const calleeLevel = gen(env, LdFuncRxLevel, func);
+      auto const lt = gen(env, LtInt, calleeLevel, cns(env, minReqCalleeLevel));
+      gen(env, JmpNZero, taken, lt);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, Jmp, makeExitSlow(env));
+    }
+  );
+}
+
+//////////////////////////////////////////////////////////////////////
+
+void emitFCall(IRGS& env,
+               FCallArgs fca,
+               const StringData*,
+               const StringData*) {
+  auto const callee = env.currentNormalizedInstruction->funcd;
+  auto const numStackInputs = fca.numArgs + (fca.hasUnpack() ? 1 : 0);
+  auto const actRecOff = spOffBCFromIRSP(env) + numStackInputs;
+
+  if (!emitCallerReffinessChecks(env, callee, fca, actRecOff)) return;
+  emitCallerDynamicCallChecks(env, callee, actRecOff);
+  emitCallerRxChecks(env, callee, actRecOff);
+
+  if (fca.hasUnpack()) {
+    auto const data = CallUnpackData {
+      spOffBCFromIRSP(env),
+      fca.numArgs + 1,
+      fca.numRets - 1,
+      bcOff(env),
+      callee,
+    };
+    push(env, gen(env, CallUnpack, data, sp(env), fp(env)));
+    return;
+  }
+
   auto const needsCallerFrame = callee
     ? funcNeedsCallerFrame(callee)
     : callNeedsCallerFrame(
       *env.currentNormalizedInstruction,
       curFunc(env)
     );
+  auto const call = [&](bool asyncEagerReturn) {
+    return gen(
+      env,
+      Call,
+      CallData {
+        spOffBCFromIRSP(env),
+        fca.numArgs,
+        fca.numRets - 1,
+        bcOff(env) - curFunc(env)->base(),
+        callee,
+        needsCallerFrame,
+        asyncEagerReturn,
+      },
+      sp(env),
+      fp(env)
+    );
+  };
 
-  auto op = curFunc(env)->unit()->getOp(bcOff(env));
-  auto const retVal = gen(
+  auto const emitCallWithoutAsyncEagerReturn = [&] {
+    push(env, call(false));
+  };
+  auto const emitCallWithAsyncEagerReturn = [&] {
+    auto const retVal = call(true);
+
+    ifThenElse(
+      env,
+      [&] (Block* taken) {
+        auto const aux = gen(env, LdTVAux, LdTVAuxData {}, retVal);
+        auto const tst = gen(env, AndInt, aux, cns(env, 1u << 31));
+        gen(env, JmpNZero, taken, tst);
+      },
+      [&] {
+        auto const ty = callee ? awaitedCallReturnType(callee) : TInitCell;
+        push(env, gen(env, AssertType, ty, retVal));
+        jmpImpl(env, bcOff(env) + fca.asyncEagerOffset);
+      },
+      [&] {
+        hint(env, Block::Hint::Unlikely);
+        auto const ty = callee ? callReturnType(callee) : TInitCell;
+        push(env, gen(env, AssertType, ty, retVal));
+      }
+    );
+  };
+
+  if (fca.asyncEagerOffset == kInvalidOffset ||
+      (callee && !callee->supportsAsyncEagerReturn())) {
+    return emitCallWithoutAsyncEagerReturn();
+  }
+
+  if (fca.supportsAsyncEagerReturn() ||
+      (callee && callee->supportsAsyncEagerReturn())) {
+    assertx(!callee || callee->supportsAsyncEagerReturn());
+    return emitCallWithAsyncEagerReturn();
+  }
+
+  ifThenElse(
     env,
-    Call,
-    CallData {
-      spOffBCFromIRSP(env),
-      static_cast<uint32_t>(numParams),
-      returnBcOffset,
-      callee,
-      writeLocals,
-      readLocals,
-      needsCallerFrame,
-      op == Op::FCallAwait
+    [&] (Block* taken) {
+      auto const supportsAsyncEagerReturn =
+        gen(env, FuncSupportsAsyncEagerReturn, ldPreLiveFunc(env, actRecOff));
+      gen(env, JmpNZero, taken, supportsAsyncEagerReturn);
     },
-    sp(env),
-    fp(env)
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      emitCallWithoutAsyncEagerReturn();
+    },
+    [&] {
+      emitCallWithAsyncEagerReturn();
+    }
   );
-
-  push(env, retVal);
-  return retVal;
-}
-
-void emitFCall(IRGS& env, uint32_t numParams) {
-  implFCall(env, numParams);
 }
 
 void emitDirectCall(IRGS& env, Func* callee, uint32_t numParams,
                     SSATmp* const* const args) {
-  auto const returnBcOffset = nextBcOff(env) - curFunc(env)->base();
+  auto const callBcOffset = bcOff(env) - curFunc(env)->base();
 
-  env.irb->fs().setFPushOverride(Op::FPushFuncD);
-  fpushActRec(env, cns(env, callee), cns(env, TNullptr), numParams, nullptr);
-  assertx(!env.irb->fs().hasFPushOverride());
-
+  allocActRec(env);
   for (int32_t i = 0; i < numParams; i++) {
     push(env, args[i]);
   }
+
+  env.irb->fs().setFPushOverride(Op::FPushFuncD);
+  fsetActRec(
+    env,
+    cns(env, callee),
+    cns(env, TNullptr),
+    numParams,
+    nullptr,
+    false,
+    nullptr
+  );
+  assertx(!env.irb->fs().hasFPushOverride());
+
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
@@ -1445,10 +1605,9 @@ void emitDirectCall(IRGS& env, Func* callee, uint32_t numParams,
     CallData {
       spOffBCFromIRSP(env),
       static_cast<uint32_t>(numParams),
-      returnBcOffset,
+      0,
+      callBcOffset,
       callee,
-      funcWritesLocals(callee),
-      funcReadsLocals(callee),
       funcNeedsCallerFrame(callee),
       false
     },
@@ -1466,20 +1625,95 @@ Type callReturnType(const Func* callee) {
   // interception functions can return arbitrary types.
   if (RuntimeOption::EvalJitEnableRenameFunction ||
       callee->attrs() & AttrInterceptable) {
-    return TInitGen;
+    return TInitCell;
   }
 
   if (callee->isCPPBuiltin()) {
     // If the function is builtin, use the builtin's return type, then take into
     // account coercion failures.
-    auto type = builtinReturnType(callee);
-    if (callee->attrs() & AttrParamCoerceModeNull) type |= TInitNull;
-    if (callee->attrs() & AttrParamCoerceModeFalse) type |= Type::cns(false);
-    return type;
+    return builtinReturnType(callee);
   }
 
   // Otherwise use HHBBC's analysis if present
   return typeFromRAT(callee->repoReturnType(), callee->cls());
+}
+
+Type awaitedCallReturnType(const Func* callee) {
+  // Don't make any assumptions about functions which can be intercepted. The
+  // interception functions can return arbitrary types.
+  if (RuntimeOption::EvalJitEnableRenameFunction ||
+      callee->attrs() & AttrInterceptable) {
+    return TInitCell;
+  }
+
+  return typeFromRAT(callee->repoAwaitedReturnType(), callee->cls());
+}
+
+//////////////////////////////////////////////////////////////////////
+
+const Func* profiledCalledFunc(IRGS& env, uint32_t numArgs,
+                               IRInstruction*& checkInst) {
+  checkInst = nullptr;
+
+  if (!RuntimeOption::RepoAuthoritative) return nullptr;
+
+  auto profile = TargetProfile<CallTargetProfile>(env.unit.context(),
+                                                  env.irb->curMarker(),
+                                                  callTargetProfileKey());
+
+  // NB: the profiling used here is shared and done in getCallTarget() in
+  // irlower-call.cpp, so we only handle the optimization phase here.
+  if (!profile.optimizing()) return nullptr;
+
+  auto const data = profile.data();
+  double probability = 0;
+  auto profiledFunc = data.choose(probability);
+
+  if (profiledFunc == nullptr) return nullptr;
+
+  // Don't emit the check if the probability of it succeeding is below the
+  // threshold.
+  if (probability * 100 < RuntimeOption::EvalJitPGOCalledFuncThreshold) {
+    return nullptr;
+  }
+
+  auto const spOff = spOffBCFromIRSP(env);
+  auto const calleeAROff = spOff + numArgs;
+  auto liveFuncTmp = gen(env, LdARFuncPtr, TFunc,
+                         IRSPRelOffsetData{calleeAROff}, sp(env));
+
+  auto profiledFuncTmp = cns(env, profiledFunc);
+  auto const equal = gen(env, EqFunc, liveFuncTmp, profiledFuncTmp);
+
+  auto sideExit = makeExit(env, bcOff(env));
+  gen(env, JmpZero, sideExit, equal);
+
+  auto curBlock = env.irb->curBlock();
+  checkInst = &(curBlock->back());
+  always_assert_flog(checkInst->op() == JmpZero, "checkInst = {}\n",
+                     *checkInst);
+  gen(env, AssertARFunc, IRSPRelOffsetData{calleeAROff}, sp(env),
+      profiledFuncTmp);
+
+  return profiledFunc;
+}
+
+void dropCalledFuncCheck(IRGS& env, IRInstruction* checkInst) {
+  always_assert_flog(checkInst && checkInst->op() == JmpZero,
+                     "checkInst: {}\n", *checkInst);
+
+  // Turn the AssertARFunc following checkInst into a Nop.
+  auto assertInst = checkInst->next()->skipHeader();
+  assertx(assertInst->op() == AssertARFunc);
+  assertInst->convertToNop();
+
+  // Make both directions of the JmpZero jump to it's fall-through block.
+  // Later, optimizations will eliminate this instruction, and also the EqFunc
+  // and LdARFuncPtr above it.
+  checkInst->setTaken(checkInst->next());
+
+  // Clear the information about the top function in FrameState.
+  env.irb->fs().clearTopFunc();;
 }
 
 //////////////////////////////////////////////////////////////////////

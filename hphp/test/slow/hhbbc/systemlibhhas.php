@@ -8,11 +8,15 @@ class WhateverTest {
       return "whatever";
     };
 
-    return array_map( $mapFunction, $array );
+    return \array_map( $mapFunction, $array );
   }
 }
 
+
+<<__EntryPoint>>
+function main_systemlibhhas() {
 $t = new WhateverTest();
 $ret = $t->filter( array(  "lol", "wow", "doge" ) );
 
-var_dump( $ret );
+\var_dump( $ret );
+}

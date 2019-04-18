@@ -27,6 +27,7 @@
 #include <openssl/conf.h>
 #include <openssl/pem.h>
 #include <openssl/pkcs12.h>
+#include <openssl/rand.h>
 #include <vector>
 
 namespace HPHP {
@@ -92,8 +93,8 @@ static OpenSSLInitializer s_openssl_initializer;
 
 struct Key : SweepableResourceData {
   EVP_PKEY *m_key;
-  explicit Key(EVP_PKEY *key) : m_key(key) { assert(m_key);}
-  ~Key() {
+  explicit Key(EVP_PKEY *key) : m_key(key) { assertx(m_key);}
+  ~Key() override {
     if (m_key) EVP_PKEY_free(m_key);
   }
 
@@ -104,14 +105,14 @@ struct Key : SweepableResourceData {
   DECLARE_RESOURCE_ALLOCATION(Key)
 
   bool isPrivate() {
-    assert(m_key);
+    assertx(m_key);
     switch (EVP_PKEY_id(m_key)) {
 #ifndef NO_RSA
     case EVP_PKEY_RSA:
     case EVP_PKEY_RSA2:
       {
         const auto rsa = EVP_PKEY_get0_RSA(m_key);
-        assert(rsa);
+        assertx(rsa);
         const BIGNUM *p, *q;
         RSA_get0_factors(rsa, &p, &q);
         if (!p || !q) {
@@ -128,7 +129,7 @@ struct Key : SweepableResourceData {
     case EVP_PKEY_DSA4:
       {
         const auto dsa = EVP_PKEY_get0_DSA(m_key);
-        assert(dsa);
+        assertx(dsa);
         const BIGNUM *p, *q, *g, *pub_key, *priv_key;
         DSA_get0_pqg(dsa, &p, &q, &g);
         if (!p || !q || !g) {
@@ -145,7 +146,7 @@ struct Key : SweepableResourceData {
     case EVP_PKEY_DH:
       {
         const auto dh = EVP_PKEY_get0_DH(m_key);
-        assert(dh);
+        assertx(dh);
         const BIGNUM *p, *q, *g, *pub_key, *priv_key;
         DH_get0_pqg(dh, &p, &q, &g);
         if (!p) {
@@ -162,7 +163,7 @@ struct Key : SweepableResourceData {
     case EVP_PKEY_EC:
       {
         const auto ec_key = EVP_PKEY_get0_EC_KEY(m_key);
-        assert(ec_key);
+        assertx(ec_key);
         if (EC_KEY_get0_private_key(ec_key) == nullptr) {
           return false;
         }
@@ -277,12 +278,12 @@ private:
 
 public:
   explicit CSRequest(X509_REQ *csr) : m_csr(csr) {
-    assert(m_csr);
+    assertx(m_csr);
   }
 
   X509_REQ *csr() { return m_csr; }
 
-  ~CSRequest() {
+  ~CSRequest() override {
     // X509_REQ_free(nullptr) is a no-op
     X509_REQ_free(m_csr);
   }
@@ -353,7 +354,7 @@ struct php_x509_request {
     *seeded = 0;
     if (file == nullptr) {
       file = RAND_file_name(buffer, sizeof(buffer));
-#ifndef OPENSSL_NO_RAND_EGD
+#if !defined(OPENSSL_NO_RAND_EGD) && !defined(OPENSSL_NO_EGD)
     } else if (RAND_egd(file) > 0) {
       /* if the given filename is an EGD socket, don't
        * write anything back to it */
@@ -392,7 +393,7 @@ struct php_x509_request {
   }
 
   bool generatePrivateKey() {
-    assert(priv_key == nullptr);
+    assertx(priv_key == nullptr);
 
     if (priv_key_bits < MIN_KEY_LENGTH) {
       raise_warning("private key length is too short; it needs to be "
@@ -1000,7 +1001,21 @@ Variant HHVM_FUNCTION(openssl_csr_get_public_key, const Variant& csr) {
   auto pcsr = CSRequest::Get(csr);
   if (!pcsr) return false;
 
-  return Variant(req::make<Key>(X509_REQ_get_pubkey(pcsr->csr())));
+  auto input_csr = pcsr->csr();
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000
+  /* Due to changes in OpenSSL 1.1 related to locking when decoding CSR,
+   * the pub key is not changed after assigning. It means if we pass
+   * a private key, it will be returned including the private part.
+   * If we duplicate it, then we get just the public part which is
+   * the same behavior as for OpenSSL 1.0 */
+  input_csr = X509_REQ_dup(input_csr);
+  /* We need to free the CSR as it was duplicated */
+  SCOPE_EXIT { X509_REQ_free(input_csr); };
+#endif
+  auto pubkey = X509_REQ_get_pubkey(input_csr);
+  if (!pubkey) return false;
+  return Variant(req::make<Key>(pubkey));
 }
 
 Variant HHVM_FUNCTION(openssl_csr_get_subject, const Variant& csr,
@@ -1326,7 +1341,7 @@ openssl_pkcs12_export_impl(const Variant& x509, BIO *bio_out,
      (char*)(friendly_name.empty() ? nullptr : friendly_name.data()),
      key, cert, ca, 0, 0, 0, 0, 0);
 
-  assert(bio_out);
+  assertx(bio_out);
   bool ret = i2d_PKCS12_bio(bio_out, p12);
   PKCS12_free(p12);
   sk_X509_free(ca);
@@ -1474,8 +1489,8 @@ bool HHVM_FUNCTION(openssl_pkcs7_decrypt, const String& infilename,
   if (p7 == nullptr) {
     goto clean_exit;
   }
-  assert(okey->m_key);
-  assert(ocert->m_cert);
+  assertx(okey->m_key);
+  assertx(ocert->m_cert);
   if (PKCS7_decrypt(p7, okey->m_key, ocert->m_cert, out, PKCS7_DETACHED)) {
     ret = true;
   }
@@ -1516,7 +1531,7 @@ bool HHVM_FUNCTION(openssl_pkcs7_encrypt, const String& infilename,
   PKCS7 *p7 = nullptr;
   const EVP_CIPHER *cipher = nullptr;
 
-  infile = BIO_new_file(infilename.data(), "r");
+  infile = BIO_new_file(infilename.data(), (flags & PKCS7_BINARY) ? "rb" : "r");
   if (infile == nullptr) {
     raise_warning("error opening the file, %s", infilename.data());
     goto clean_exit;
@@ -1602,7 +1617,7 @@ bool HHVM_FUNCTION(openssl_pkcs7_sign, const String& infilename,
   X509 *cert;
   cert = ocert->m_cert;
 
-  infile = BIO_new_file(infilename.data(), "r");
+  infile = BIO_new_file(infilename.data(), (flags & PKCS7_BINARY) ? "rb" : "r");
   if (infile == nullptr) {
     raise_warning("error opening input file %s!", infilename.data());
     goto clean_exit;
@@ -1691,7 +1706,11 @@ Variant openssl_pkcs7_verify_core(
   if (ignore_cert_expiration) {
 #if (OPENSSL_VERSION_NUMBER >= 0x10000000)
     // make sure no other callback is specified
-    assert(!store->verify_cb);
+  #if OPENSSL_VERSION_NUMBER >= 0x10100000L
+    assertx(!X509_STORE_get_verify_cb(store));
+  #else
+    assertx(!store->verify_cb);
+  #endif
     // ignore expired certs
     X509_STORE_set_verify_cb(store, pkcs7_ignore_expiration);
 #else
@@ -1782,7 +1801,7 @@ openssl_pkey_export_impl(const Variant& key, BIO *bio_out,
     } else {
       cipher = nullptr;
     }
-    assert(bio_out);
+    assertx(bio_out);
 
     switch (EVP_PKEY_id(pkey)) {
 #ifdef HAVE_EVP_PKEY_EC
@@ -1842,6 +1861,7 @@ const StaticString
   s_hash("hash"),
   s_version("version"),
   s_serialNumber("serialNumber"),
+  s_signatureAlgorithm("signatureAlgorithm"),
   s_validFrom("validFrom"),
   s_validTo("validTo"),
   s_validFrom_time_t("validFrom_time_t"),
@@ -1900,7 +1920,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
     {
       ktype = OPENSSL_KEYTYPE_RSA;
       RSA *rsa = EVP_PKEY_get0_RSA(pkey);
-      assert(rsa);
+      assertx(rsa);
       const BIGNUM *n, *e, *d, *p, *q, *dmp1, *dmq1, *iqmp;
       RSA_get0_key(rsa, &n, &e, &d);
       RSA_get0_factors(rsa, &p, &q);
@@ -1923,7 +1943,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
     {
       ktype = OPENSSL_KEYTYPE_DSA;
       DSA *dsa = EVP_PKEY_get0_DSA(pkey);
-      assert(dsa);
+      assertx(dsa);
       const BIGNUM *p, *q, *g, *pub_key, *priv_key;
       DSA_get0_pqg(dsa, &p, &q, &g);
       DSA_get0_key(dsa, &pub_key, &priv_key);
@@ -1939,7 +1959,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
     {
       ktype = OPENSSL_KEYTYPE_DH;
       DH *dh = EVP_PKEY_get0_DH(pkey);
-      assert(dh);
+      assertx(dh);
       const BIGNUM *p, *q, *g, *pub_key, *priv_key;
       DH_get0_pqg(dh, &p, &q, &g);
       DH_get0_key(dh, &pub_key, &priv_key);
@@ -1955,7 +1975,7 @@ Array HHVM_FUNCTION(openssl_pkey_get_details, const Resource& key) {
     {
       ktype = OPENSSL_KEYTYPE_EC;
       auto const ec = EVP_PKEY_get0_EC_KEY(pkey);
-      assert(ec);
+      assertx(ec);
 
       auto const ec_group = EC_KEY_get0_group(ec);
       auto const nid = EC_GROUP_get_curve_name(ec_group);
@@ -2270,14 +2290,13 @@ Variant HHVM_FUNCTION(openssl_seal, const String& data, VRefParam sealed_data,
 
   s = String(data.size() + EVP_CIPHER_CTX_block_size(ctx), ReserveString);
   buf = (unsigned char *)s.mutableData();
-  if (!EVP_SealInit(ctx, cipher_type, eks, eksl, iv_buf, pkeys, nkeys) ||
-      !EVP_SealUpdate(
-          ctx, buf, &len1, (unsigned char*)data.data(), data.size())) {
+  if (EVP_SealInit(ctx, cipher_type, eks, eksl, iv_buf, pkeys, nkeys) <= 0 ||
+      !EVP_SealUpdate(ctx, buf, &len1, (unsigned char*)data.data(), data.size()) ||
+      !EVP_SealFinal(ctx, buf + len1, &len2)) {
     ret = false;
     goto clean_exit;
   }
 
-  EVP_SealFinal(ctx, buf + len1, &len2);
   if (len1 + len2 > 0) {
     sealed_data.assignIfRef(s.setSize(len1 + len2));
 
@@ -2466,7 +2485,7 @@ Variant HHVM_FUNCTION(openssl_x509_checkpurpose, const Variant& x509cert,
   }
   X509 *cert;
   cert = ocert->m_cert;
-  assert(cert);
+  assertx(cert);
 
   ret = check_cert(pcainfo, cert, untrustedchain, purpose);
 
@@ -2488,9 +2507,9 @@ static bool openssl_x509_export_impl(const Variant& x509, BIO *bio_out,
     return false;
   }
   X509 *cert = ocert->m_cert;
-  assert(cert);
+  assertx(cert);
 
-  assert(bio_out);
+  assertx(bio_out);
   if (!notext) {
     X509_print(bio_out, cert);
   }
@@ -2531,20 +2550,29 @@ bool HHVM_FUNCTION(openssl_x509_export, const Variant& x509, VRefParam output,
  */
 static time_t asn1_time_to_time_t(ASN1_UTCTIME *timestr) {
 
-  if (ASN1_STRING_type(timestr) != V_ASN1_UTCTIME) {
+  auto const timestr_type = ASN1_STRING_type(timestr);
+
+  if (timestr_type != V_ASN1_UTCTIME && timestr_type != V_ASN1_GENERALIZEDTIME) {
     raise_warning("illegal ASN1 data type for timestamp");
     return (time_t)-1;
   }
 
+  auto const timestr_len = (size_t)ASN1_STRING_length(timestr);
+
   // Binary safety
-  if (ASN1_STRING_length(timestr) != strlen((char*)ASN1_STRING_data(timestr))) {
+  if (timestr_len != strlen((char*)ASN1_STRING_data(timestr))) {
     raise_warning("illegal length in timestamp");
     return (time_t)-1;
   }
 
-  if (ASN1_STRING_length(timestr) < 13 && ASN1_STRING_length(timestr) != 11) {
+  if (timestr_len < 13 && timestr_len != 11) {
     raise_warning("unable to parse time string %s correctly",
                     timestr->data);
+    return (time_t)-1;
+  }
+
+  if (timestr_type == V_ASN1_GENERALIZEDTIME && timestr_len < 15) {
+    raise_warning("unable to parse time string %s correctly", timestr->data);
     return (time_t)-1;
   }
 
@@ -2563,10 +2591,17 @@ static time_t asn1_time_to_time_t(ASN1_UTCTIME *timestr) {
   thetime.tm_min  = atoi(thestr);   *thestr = '\0';  thestr -= 2;
   thetime.tm_hour = atoi(thestr);   *thestr = '\0';  thestr -= 2;
   thetime.tm_mday = atoi(thestr);   *thestr = '\0';  thestr -= 2;
-  thetime.tm_mon  = atoi(thestr)-1; *thestr = '\0';  thestr -= 2;
-  thetime.tm_year = atoi(thestr);
-  if (thetime.tm_year < 68) {
-    thetime.tm_year += 100;
+  thetime.tm_mon  = atoi(thestr)-1; *thestr = '\0';
+
+  if (ASN1_STRING_type(timestr) == V_ASN1_UTCTIME) {
+    thestr -= 2;
+    thetime.tm_year = atoi(thestr);
+    if (thetime.tm_year < 68) {
+      thetime.tm_year += 100;
+    }
+  } else if (ASN1_STRING_type(timestr) == V_ASN1_GENERALIZEDTIME) {
+    thestr -= 4;
+    thetime.tm_year = atoi(thestr) - 1900;
   }
 
   thetime.tm_isdst = -1;
@@ -2669,7 +2704,7 @@ Variant HHVM_FUNCTION(openssl_x509_parse, const Variant& x509cert,
     return false;
   }
   X509 *cert = ocert->m_cert;
-  assert(cert);
+  assertx(cert);
 
   Array ret;
   const auto sn = X509_get_subject_name(cert);
@@ -2689,6 +2724,15 @@ Variant HHVM_FUNCTION(openssl_x509_parse, const Variant& x509cert,
 
   ret.set(s_serialNumber, String
           (i2s_ASN1_INTEGER(nullptr, X509_get_serialNumber(cert)), AttachString));
+  // Adding Signature Algorithm
+  BIO *bio_out = BIO_new(BIO_s_mem());
+  SCOPE_EXIT { BIO_free(bio_out); };
+  if (i2a_ASN1_OBJECT(bio_out, X509_get0_tbs_sigalg(cert)->algorithm) > 0) {
+    BUF_MEM *bio_buf;
+    BIO_get_mem_ptr(bio_out, &bio_buf);
+    ret.set(s_signatureAlgorithm,
+            String((char*)bio_buf->data, bio_buf->length, CopyString));
+  }
 
   ASN1_STRING *str = X509_get_notBefore(cert);
   ret.set(s_validFrom, String((char*)str->data, str->length, CopyString));

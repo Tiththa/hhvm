@@ -1,16 +1,19 @@
-<?hh // decl /* -*- php -*- */
+<?hh /* -*- php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
-const resource STDIN = /* UNSAFE_EXPR */ 0;
-const resource STDOUT = /* UNSAFE_EXPR */ 0;
-const resource STDERR = /* UNSAFE_EXPR */ 0;
+
+/* HH_FIXME[4110] */
+const resource STDIN = 0;
+/* HH_FIXME[4110] */
+const resource STDOUT = 0;
+/* HH_FIXME[4110] */
+const resource STDERR = 0;
 
 const PATHINFO_DIRNAME = 0;
 const PATHINFO_BASENAME = 0;
@@ -52,95 +55,184 @@ const GLOB_NOSORT  = 4;
 const GLOB_NOCHECK = 16;
 const GLOB_ESCAPE  = 64;
 const GLOB_BRACE   = 1024;
-const GLOB_ONLYDIR = 8129;
+const GLOB_ONLYDIR = 8192;
 
-function fopen($filename, $mode, $use_include_path = false, $context = null);
-function popen($command, $mode);
-function fclose($handle);
+<<__PHPStdLib>>
+function fopen(string $filename, string $mode, bool $use_include_path = false, $context = null);
+<<__PHPStdLib>>
+function popen(string $command, string $mode);
+<<__PHPStdLib>>
+function fclose(resource $handle);
+<<__PHPStdLib>>
 function pclose($handle);
-function fseek($handle, $offset, $whence = SEEK_SET);
-function rewind($handle);
-function ftell($handle);
-function feof($handle);
-function fstat($handle);
-function fread($handle, $length);
-function fgetc($handle);
-function fgets($handle, $length = 0);
-function fgetss($handle, $length = 0, $allowable_tags = null);
-function fscanf($handle, $format);
-function fpassthru($handle);
-function fwrite($handle, $data, $length = 0);
-function fputs($handle, $data, $length = 0);
-function fprintf($handle, $format, ...);
+<<__PHPStdLib>>
+function fseek(resource $handle, int $offset, int $whence = SEEK_SET);
+<<__PHPStdLib>>
+function rewind(resource $handle);
+<<__PHPStdLib>>
+function ftell(resource $handle);
+<<__PHPStdLib>>
+function feof(resource $handle);
+<<__PHPStdLib>>
+function fstat(resource $handle);
+<<__PHPStdLib>>
+function fread(resource $handle, int $length);
+<<__PHPStdLib>>
+function fgetc(resource $handle);
+<<__PHPStdLib>>
+function fgets(resource $handle, int $length = 0);
+<<__PHPStdLib>>
+function fgetss(resource $handle, int $length = 0, string $allowable_tags = "");
+function fscanf(resource $handle, string $format);
+<<__PHPStdLib>>
+function fpassthru(resource $handle);
+<<__PHPStdLib>>
+function fwrite(resource $handle, string $data, int $length = 0);
+<<__PHPStdLib>>
+function fputs(resource $handle, string $data, int $length = 0);
+<<__PHPStdLib>>
+function fprintf(resource $handle, string $format, ...);
+<<__PHPStdLib>>
 function vfprintf($handle, $format, $args);
-function fflush($handle);
-function ftruncate($handle, $size);
-function flock($handle, $operation, &$wouldblock = null);
-function fputcsv($handle, $fields, $delimiter = ",", $enclosure = "\"", $escape_char = "\\");
-function fgetcsv($handle, $length = 0, $delimiter = ",", $enclosure = "\"", $escape_char = "\\");
-function file_get_contents($filename, $use_include_path = false, $context = null, $offset = 0, $maxlen = 0);
-function file_put_contents($filename, $data, $flags = 0, $context = null);
-function file($filename, $flags = 0, $context = null);
-function readfile($filename, $use_include_path = false, $context = null);
-function move_uploaded_file($filename, $destination);
-function parse_ini_file($filename, $process_sections = false, $scanner_mode = INI_SCANNER_NORMAL);
-function parse_ini_string($ini, $process_sections = false, $scanner_mode = INI_SCANNER_NORMAL);
-function md5_file($filename, $raw_output = false);
-function sha1_file($filename, $raw_output = false);
-function chmod($filename, $mode);
-function chown($filename, $user);
-function lchown($filename, $user);
-function chgrp($filename, $group);
-function lchgrp($filename, $group);
-function touch($filename, $mtime = 0, $atime = 0);
-function copy($source, $dest, $context = null);
-function rename($oldname, $newname, $context = null);
+<<__PHPStdLib>>
+function fflush(resource $handle);
+<<__PHPStdLib>>
+function ftruncate(resource $handle, int $size);
+<<__PHPStdLib>>
+function flock(resource $handle, int $operation, &$wouldblock = null);
+<<__PHPStdLib>>
+function fputcsv(resource $handle, $fields, string $delimiter = ",", string $enclosure = "\"", string $escape_char = "\\");
+<<__PHPStdLib>>
+function fgetcsv(resource $handle, int $length = 0, string $delimiter = ",", string $enclosure = "\"", string $escape_char = "\\");
+<<__PHPStdLib>>
+function file_get_contents(string $filename, bool $use_include_path = false, $context = null, int $offset = 0, int $maxlen = 0);
+<<__PHPStdLib>>
+function file_put_contents(string $filename, $data, int $flags = 0, $context = null);
+<<__PHPStdLib>>
+function file(string $filename, int $flags = 0, $context = null);
+<<__PHPStdLib>>
+function readfile(string $filename, bool $use_include_path = false, $context = null);
+<<__PHPStdLib>>
+function move_uploaded_file(string $filename, string $destination);
+<<__PHPStdLib>>
+function parse_ini_file(string $filename, bool $process_sections = false, int $scanner_mode = INI_SCANNER_NORMAL);
+<<__PHPStdLib>>
+function parse_ini_string(string $ini, bool $process_sections = false, int $scanner_mode = INI_SCANNER_NORMAL);
+<<__PHPStdLib>>
+function md5_file(string $filename, bool $raw_output = false);
+<<__PHPStdLib>>
+function sha1_file(string $filename, bool $raw_output = false);
+<<__PHPStdLib>>
+function chmod(string $filename, int $mode);
+<<__PHPStdLib>>
+function chown(string $filename, $user);
+<<__PHPStdLib>>
+function lchown(string $filename, $user);
+<<__PHPStdLib>>
+function chgrp(string $filename, $group);
+<<__PHPStdLib>>
+function lchgrp(string $filename, $group);
+<<__PHPStdLib>>
+function touch(string $filename, int $mtime = 0, int $atime = 0);
+<<__PHPStdLib>>
+function copy(string $source, string $dest, $context = null);
+<<__PHPStdLib>>
+function rename(string $oldname, string $newname, $context = null);
+<<__PHPStdLib>>
 function umask($mask = null);
-function unlink($filename, $context = null);
-function link($target, $link);
-function symlink($target, $link);
-function basename($path, $suffix = null);
-function fnmatch($pattern, $filename, $flags = 0);
-function glob($pattern, $flags = 0);
-function tempnam($dir, $prefix);
+<<__PHPStdLib>>
+function unlink(string $filename, $context = null);
+<<__PHPStdLib>>
+function link(string $target, string $link);
+<<__PHPStdLib>>
+function symlink(string $target, string $link);
+<<__PHPStdLib, __Rx>>
+function basename(string $path, string $suffix = "");
+<<__PHPStdLib>>
+function fnmatch(string $pattern, string $filename, int $flags = 0);
+<<__PHPStdLib>>
+function glob(string $pattern, int $flags = 0);
+<<__PHPStdLib>>
+function tempnam(string $dir, string $prefix);
+<<__PHPStdLib>>
 function tmpfile();
-function fileperms($filename);
-function fileinode($filename);
-function filesize(?Stringish $filename);
-function fileowner($filename);
-function filegroup($filename);
-function fileatime($filename);
-function filemtime($filename);
-function filectime($filename);
-function filetype($filename);
-function linkinfo($filename);
-function is_writable($filename);
-function is_writeable($filename);
-function is_readable($filename);
-function is_executable($filename);
-function is_file($filename);
-function is_dir($filename);
-function is_link($filename);
-function is_uploaded_file($filename);
-function file_exists($filename);
-function stat($filename);
-function lstat($filename);
+<<__PHPStdLib>>
+function fileperms(string $filename);
+<<__PHPStdLib>>
+function fileinode(string $filename);
+<<__PHPStdLib>>
+function filesize(string $filename);
+<<__PHPStdLib>>
+function fileowner(string $filename);
+<<__PHPStdLib>>
+function filegroup(string $filename);
+<<__PHPStdLib>>
+function fileatime(string $filename);
+<<__PHPStdLib>>
+function filemtime(string $filename);
+<<__PHPStdLib>>
+function filectime(string $filename);
+<<__PHPStdLib>>
+function filetype(string $filename);
+<<__PHPStdLib>>
+function linkinfo(string $filename);
+<<__PHPStdLib>>
+function is_writable(string $filename);
+<<__PHPStdLib>>
+function is_writeable(string $filename);
+<<__PHPStdLib>>
+function is_readable(string $filename);
+<<__PHPStdLib>>
+function is_executable(string $filename);
+<<__PHPStdLib>>
+function is_file(string $filename);
+<<__PHPStdLib>>
+function is_dir(string $filename);
+<<__PHPStdLib>>
+function is_link(string $filename);
+<<__PHPStdLib>>
+function is_uploaded_file(string $filename);
+<<__PHPStdLib>>
+function file_exists(string $filename);
+<<__PHPStdLib>>
+function stat(string $filename);
+<<__PHPStdLib>>
+function lstat(string $filename);
+<<__PHPStdLib>>
 function clearstatcache();
-function readlink($path);
-function realpath($path);
-function pathinfo($path, $opt = 15);
-function disk_free_space($directory);
-function diskfreespace($directory);
-function disk_total_space($directory);
-function mkdir($pathname, $mode = 0777, $recursive = false, $context = null);
-function rmdir($dirname, $context = null);
-function dirname($path);
+<<__PHPStdLib>>
+function readlink(string $path);
+<<__PHPStdLib>>
+function realpath(string $path);
+<<__PHPStdLib>>
+function pathinfo(string $path, int $opt = 15);
+<<__PHPStdLib>>
+function disk_free_space(string $directory);
+<<__PHPStdLib>>
+function diskfreespace(string $directory);
+<<__PHPStdLib>>
+function disk_total_space(string $directory);
+<<__PHPStdLib>>
+function mkdir(string $pathname, int $mode = 0777, bool $recursive = false, $context = null);
+<<__PHPStdLib>>
+function rmdir(string $dirname, $context = null);
+<<__PHPStdLib, __Rx>>
+function dirname(string $path);
+<<__PHPStdLib>>
 function getcwd();
-function chdir($directory);
-function chroot($directory);
-function dir($directory);
-function opendir($path, $context = null);
+<<__PHPStdLib>>
+function chdir(string $directory);
+<<__PHPStdLib>>
+function chroot(string $directory);
+<<__PHPStdLib>>
+function dir(string $directory);
+<<__PHPStdLib>>
+function opendir(string $path, $context = null);
+<<__PHPStdLib>>
 function readdir($dir_handle);
+<<__PHPStdLib>>
 function rewinddir($dir_handle);
-function scandir($directory, $descending = false, $context = null);
+<<__PHPStdLib>>
+function scandir(string $directory, bool $descending = false, $context = null);
+<<__PHPStdLib>>
 function closedir($dir_handle);

@@ -85,12 +85,11 @@ $counter = 1;
 for($index = 0; $index < count($values); $index ++) {
   echo "-- Iteration $counter --\n";
   $str1 = $values[$index];
-  $len = strlen($values[$index]) + 1;
-  var_dump( strncasecmp($str1, "string", $len) );
+  try { $len = strlen($values[$index]) + 1; } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+  try { var_dump( strncasecmp($str1, "string", $len) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $counter ++;
 }
 
 fclose($file_handle);  //closing the file handle
 
 echo "*** Done ***\n";
-?>

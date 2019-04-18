@@ -13,16 +13,15 @@ class C extends B {
 ";
   }
 }
-if (false) {
-  class A {
-}
-  class B {
-}
-  class C {
-}
-}
 function test() {
   $x = new C;
   $x->meh()->work();
 }
+
+<<__EntryPoint>>
+function main_1482() {
+if (false) {
+  include '1482.inc';
+}
 test();
+}

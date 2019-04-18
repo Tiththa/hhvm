@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Hh_core
 
 module Make(S : SearchUtils.Searchable) = struct
 
@@ -43,7 +42,7 @@ type type_to_keyset = SSet.t TMap.t
  *   }
  * }
  *)
-module SearchKeys = SharedMem.NoCache (Relative_path.S) (struct
+module SearchKeys = SharedMem.NoCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
   type t = type_to_keyset
   let prefix = Prefix.make()
   let description = "SearchKeys"
@@ -67,7 +66,7 @@ end)
  *   }
  * }
  *)
-module SearchKeyToTermMap = SharedMem.WithCache (Relative_path.S) (struct
+module SearchKeyToTermMap = SharedMem.WithCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
   type t = type_to_key_to_term_list
   let prefix = Prefix.make()
   let description = "SearchKeyToTermMap"
@@ -129,12 +128,12 @@ let check_if_matches_uppercase_chars needle haystack =
   (* We want all uppercase letters, and also the first letter *)
   let first_letter = ref true in
   String.iter begin fun c ->
-    if !first_letter || (Char.uppercase c) = c
-    then uppercase := !uppercase^Char.escaped (Char.lowercase c);
+    if !first_letter || (Char.uppercase_ascii c) = c
+    then uppercase := !uppercase^Char.escaped (Char.lowercase_ascii c);
     first_letter := false;
   end haystack;
 
-  if String.compare (String.lowercase needle) !uppercase = 0
+  if String.compare (String.lowercase_ascii needle) !uppercase = 0
   then true
   else false
 
@@ -150,7 +149,7 @@ let rec is_cs ?ni:(ni=0) ?hi:(hi=0) ?score:(score=0) needle haystack =
       if String.compare needle haystack = 0 then 0
       else String.length haystack
     in
-    String.compare (String.lowercase needle) (String.lowercase haystack) = 0,
+    String.compare (String.lowercase_ascii needle) (String.lowercase_ascii haystack) = 0,
     score
   else if ni >= String.length needle then
     true, score + hi + String.length haystack
@@ -158,8 +157,8 @@ let rec is_cs ?ni:(ni=0) ?hi:(hi=0) ?score:(score=0) needle haystack =
     false, 0
   else begin
     let cmp = Char.compare
-      (Char.lowercase (String.get needle ni))
-      (Char.lowercase (String.get haystack hi)) in
+      (Char.lowercase_ascii (String.get needle ni))
+      (Char.lowercase_ascii (String.get haystack hi)) in
 
     (* Increment score if characters are not equal case *)
     let score =
@@ -178,8 +177,8 @@ let rec is_cs ?ni:(ni=0) ?hi:(hi=0) ?score:(score=0) needle haystack =
 (* Checks if `needle` is a case-insensitive substring of `haystack` and returns
  * the location where it occurs, or -1 if not found. *)
 let is_substring needle haystack =
-  let needle = String.lowercase needle in
-  let haystack = String.lowercase haystack in
+  let needle = String.lowercase_ascii needle in
+  let haystack = String.lowercase_ascii haystack in
   let re = Str.regexp_string needle in
   try Str.search_forward re haystack 0
   with Not_found -> -1
@@ -207,8 +206,9 @@ let add_letter_to_index letter word used type_ =
 let is_letter_important word idx =
   let c = String.get word idx in
   if idx <= 1 then true (* First 2 letters *)
-  else if Char.uppercase c = c then true (* Uppercase letter *)
+  else if Char.uppercase_ascii c = c then true (* Uppercase letter *)
   else if String.get word (idx - 1) = '_' then true (* Preceding underscore *)
+  else if String.get word (idx - 1) = '\\' then true (* Namespaced *)
   else false (* Not important *)
 
 (* Indexes up to `max_num` important letters of a word *)
@@ -218,7 +218,7 @@ let rec add_letters_to_index ?x:(x=0) ?used:(used=CSet.empty) word max_num
     ()
   else
     if (is_letter_important word x) then
-      let letter = Char.lowercase (String.get word x) in
+      let letter = Char.lowercase_ascii (String.get word x) in
       let used = add_letter_to_index letter word used type_ in
       add_letters_to_index ~x:(x+1) ~used:(used) word max_num type_
     else
@@ -323,7 +323,7 @@ let index_files files =
 let get_terms needle type_ =
   try
     let key = String.get needle 0 in
-    let key = Char.lowercase key in
+    let key = Char.lowercase_ascii key in
     match type_ with
     | Some type_ -> begin
       let letter_val = get_index_for_type type_ in

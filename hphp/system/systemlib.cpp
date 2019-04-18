@@ -26,6 +26,7 @@
 #include "hphp/runtime/base/types.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/unit.h"
+#include "hphp/runtime/vm/rx.h"
 
 #include <vector>
 
@@ -36,17 +37,26 @@ namespace {
 
 const StaticString s_message("message");
 const StaticString s_code("code");
+const StaticString s_86reifiedinit("86reifiedinit");
 const Slot s_messageIdx{0};
 const Slot s_codeIdx{2};
 
 DEBUG_ONLY bool throwable_has_expected_props() {
   auto const erCls = s_ErrorClass;
   auto const exCls = s_ExceptionClass;
+  if (erCls->lookupDeclProp(s_message.get()) != s_messageIdx ||
+      exCls->lookupDeclProp(s_message.get()) != s_messageIdx ||
+      erCls->lookupDeclProp(s_code.get()) != s_codeIdx ||
+      exCls->lookupDeclProp(s_code.get()) != s_codeIdx) {
+    return false;
+  }
+  // Check that we have the expected type-hints on these props so we don't need
+  // to verify anything.
   return
-    erCls->lookupDeclProp(s_message.get()) == s_messageIdx &&
-    exCls->lookupDeclProp(s_message.get()) == s_messageIdx &&
-    erCls->lookupDeclProp(s_code.get()) == s_codeIdx &&
-    exCls->lookupDeclProp(s_code.get()) == s_codeIdx;
+    erCls->declPropTypeConstraint(s_messageIdx).isString() &&
+    exCls->declPropTypeConstraint(s_messageIdx).isString() &&
+    erCls->declPropTypeConstraint(s_codeIdx).isInt() &&
+    exCls->declPropTypeConstraint(s_codeIdx).isInt();
 }
 
 ALWAYS_INLINE
@@ -67,12 +77,15 @@ Object createAndConstructThrowable(Class* cls, const Variant& message) {
           cls->getCtor() == s_ExceptionClass->getCtor());
 
   Object inst{cls};
-  auto props = inst->propVec();
-  assertx(isStringType(props[s_messageIdx].m_type));
-  assertx(props[s_messageIdx].m_data.pstr == staticEmptyString());
-  assertx(isIntType(props[s_codeIdx].m_type));
-  assertx(props[s_codeIdx].m_data.num == 0);
-  cellDup(*message.asCell(), props[s_messageIdx]);
+  if (debug) {
+    DEBUG_ONLY auto const code_prop = inst->propRvalAtOffset(s_codeIdx);
+    assertx(isIntType(code_prop.type()));
+    assertx(code_prop.val().num == 0);
+  }
+  auto const message_prop = inst->propLvalAtOffset(s_messageIdx);
+  assertx(isStringType(message_prop.type()));
+  assertx(message_prop.val().pstr == staticEmptyString());
+  cellDup(*message.toCell(), message_prop);
   return inst;
 }
 
@@ -83,9 +96,8 @@ bool s_anyNonPersistentBuiltins = false;
 std::string s_source;
 Unit* s_unit = nullptr;
 Unit* s_hhas_unit = nullptr;
-Unit* s_nativeFuncUnit = nullptr;
-Unit* s_nativeClassUnit = nullptr;
 Func* s_nullFunc = nullptr;
+Func* s_nullCtor = nullptr;
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -98,6 +110,7 @@ Class* s_ThrowableClass;
 Class* s_BaseExceptionClass;
 Class* s_ErrorClass;
 Class* s_ArithmeticErrorClass;
+Class* s_ArgumentCountErrorClass;
 Class* s_AssertionErrorClass;
 Class* s_DivisionByZeroErrorClass;
 Class* s_ParseErrorClass;
@@ -123,6 +136,10 @@ Object AllocArithmeticErrorObject(const Variant& message) {
   return createAndConstructThrowable(s_ArithmeticErrorClass, message);
 }
 
+Object AllocArgumentCountErrorObject(const Variant& message) {
+  return createAndConstructThrowable(s_ArgumentCountErrorClass, message);
+}
+
 Object AllocDivisionByZeroErrorObject(const Variant& message) {
   return createAndConstructThrowable(s_DivisionByZeroErrorClass, message);
 }
@@ -143,6 +160,10 @@ Object AllocInvalidArgumentExceptionObject(const Variant& message) {
   return createAndConstructThrowable(s_InvalidArgumentExceptionClass, message);
 }
 
+Object AllocTypeAssertionExceptionObject(const Variant& message) {
+  return createAndConstructThrowable(s_TypeAssertionExceptionClass, message);
+}
+
 Object AllocRuntimeExceptionObject(const Variant& message) {
   return createAndConstructThrowable(s_RuntimeExceptionClass, message);
 }
@@ -157,6 +178,11 @@ Object AllocInvalidOperationExceptionObject(const Variant& message) {
 
 Object AllocDOMExceptionObject(const Variant& message) {
   return createAndConstructThrowable(s_DOMExceptionClass, message);
+}
+
+Object AllocDivisionByZeroExceptionObject() {
+  return createAndConstructThrowable(s_DivisionByZeroExceptionClass,
+                                     Strings::DIVISION_BY_ZERO);
 }
 
 Object AllocSoapFaultObject(const Variant& code,
@@ -204,6 +230,10 @@ void throwArithmeticErrorObject(const Variant& message) {
   throw_object(AllocArithmeticErrorObject(message));
 }
 
+void throwArgumentCountErrorObject(const Variant& message) {
+  throw_object(AllocArgumentCountErrorObject(message));
+}
+
 void throwDivisionByZeroErrorObject(const Variant& message) {
   throw_object(AllocDivisionByZeroErrorObject(message));
 }
@@ -224,6 +254,10 @@ void throwInvalidArgumentExceptionObject(const Variant& message) {
   throw_object(AllocInvalidArgumentExceptionObject(message));
 }
 
+void throwTypeAssertionExceptionObject(const Variant& message) {
+  throw_object(AllocTypeAssertionExceptionObject(message));
+}
+
 void throwRuntimeExceptionObject(const Variant& message) {
   throw_object(AllocRuntimeExceptionObject(message));
 }
@@ -238,6 +272,10 @@ void throwInvalidOperationExceptionObject(const Variant& message) {
 
 void throwDOMExceptionObject(const Variant& message) {
   throw_object(AllocDOMExceptionObject(message));
+}
+
+void throwDivisionByZeroExceptionObject() {
+  throw_object(AllocDivisionByZeroExceptionObject());
 }
 
 void throwSoapFaultObject(const Variant& code,
@@ -282,31 +320,35 @@ void mergePersistentUnits() {
   }
 }
 
-namespace {
+Func* setupNullClsMethod(Class* cls, StringData* name) {
+  if (!s_nullFunc) {
+    s_nullFunc =
+      Unit::lookupFunc(makeStaticString("__SystemLib\\__86null"));
+    assertx(s_nullFunc);
+    assertx(s_nullFunc->isPhpLeafFn());
+  }
 
-#define PHP7_ROOT_ALIAS(x) \
-  auto x##Ne = NamedEntity::get(makeStaticString(#x)); \
-  x##Ne->m_cachedClass.bind(rds::Mode::Persistent); \
-  x##Ne->setCachedClass(SystemLib::s_##x##Class)
+  auto clone = s_nullFunc->clone(cls, name);
+  clone->setNewFuncId();
+  clone->setAttrs(static_cast<Attr>(
+                    AttrPublic | AttrNoInjection | AttrSkipFrame |
+                    AttrRequiresThis | AttrDynamicallyCallable) |
+                    rxMakeAttr(RxLevel::Rx, false));
+  return clone;
+}
 
-InitFiniNode aliasPhp7Classes(
-  []() {
-    if (!RuntimeOption::PHP7_EngineExceptions) {
-      return;
-    }
-    PHP7_ROOT_ALIAS(Throwable);
-    PHP7_ROOT_ALIAS(Error);
-    PHP7_ROOT_ALIAS(ArithmeticError);
-    PHP7_ROOT_ALIAS(AssertionError);
-    PHP7_ROOT_ALIAS(DivisionByZeroError);
-    PHP7_ROOT_ALIAS(ParseError);
-    PHP7_ROOT_ALIAS(TypeError);
-  },
-  InitFiniNode::When::ProcessInit
-);
+void setupNullCtor(Class* cls) {
+  assertx(!s_nullCtor);
+  s_nullCtor = setupNullClsMethod(cls, makeStaticString("86ctor"));
+  s_nullCtor->setHasForeignThis(true);
+}
 
-#undef PHP7_ROOT_ALIAS
-} // namespace
+Func* getNull86reifiedinit(Class* cls) {
+  auto f = setupNullClsMethod(cls, s_86reifiedinit.get());
+  f->setBaseCls(cls);
+  f->setGenerated(true);
+  return f;
+}
 
 /////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::SystemLib

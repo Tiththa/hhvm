@@ -17,20 +17,20 @@
 #ifndef incl_HPHP_PACKAGE_H_
 #define incl_HPHP_PACKAGE_H_
 
-#include "hphp/compiler/hphp.h"
 #include <map>
 #include <memory>
 #include <set>
 #include <vector>
-#include "hphp/util/string-bag.h"
+
 #include "hphp/util/file-cache.h"
 #include "hphp/util/mutex.h"
+#include "hphp/hhbbc/hhbbc.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-DECLARE_BOOST_TYPES(ServerData);
-DECLARE_BOOST_TYPES(AnalysisResult);
+struct AnalysisResult;
+using AnalysisResultPtr = std::shared_ptr<AnalysisResult>;
 
 /**
  * A package contains a list of directories and files that will be parsed
@@ -40,27 +40,25 @@ DECLARE_BOOST_TYPES(AnalysisResult);
  * Therefore, a package is really toppest entry point for parsing.
  */
 struct Package {
-  explicit Package(const char *root,
-                   bool bShortTags = true,
-                   bool bAspTags = false);
+  explicit Package(const char *root, bool bShortTags = true);
 
   void addAllFiles(bool force); // add from Option::PackageDirectories/Files
 
-  void addSourceFile(const char *fileName, bool check = false);
-  void addInputList(const char *listFileName);
-  void addStaticFile(const char *fileName);
+  void addSourceFile(const std::string& fileName, bool check = false,
+                     bool js = false);
+  void addInputList(const std::string& listFileName);
+  void addStaticFile(const std::string& fileName);
   void addDirectory(const std::string &path, bool force);
-  void addDirectory(const char *path, bool force);
-  void addStaticDirectory(const std::string path);
-  void addPHPDirectory(const char *path, bool force);
+  void addHHJSDirectory(const std::string &path, bool force);
+  void addStaticDirectory(const std::string& path);
+  void addSourceDirectory(const std::string& path, bool force, bool js = false);
 
   bool parse(bool check);
-  bool parse(const char *fileName);
-  bool parseImpl(const char *fileName);
+  bool parseImpl(const std::string* fileName);
 
   AnalysisResultPtr getAnalysisResult() { return m_ar;}
   void resetAr() { m_ar.reset(); }
-  int getFileCount() const { return m_files.size();}
+  int getFileCount() const { return m_filesToParse.size();}
   int getLineCount() const { return m_lineCount;}
   int getCharCount() const { return m_charCount;}
 
@@ -69,10 +67,11 @@ struct Package {
   const std::string& getRoot() const { return m_root;}
   std::shared_ptr<FileCache> getFileCache();
 
+  void cache_only() { m_cache_only = true; }
 private:
   std::string m_root;
   std::set<std::string> m_filesToParse;
-  StringBag m_files;
+
   void *m_dispatcher;
 
   Mutex m_mutex;
@@ -81,10 +80,15 @@ private:
   int m_charCount;
 
   std::shared_ptr<FileCache> m_fileCache;
-  std::set<std::string> m_directories;
+  std::map<std::string,bool> m_directories;
+  std::map<std::string,bool> m_hhjsDirectories;
   std::set<std::string> m_staticDirectories;
   std::set<std::string> m_extraStaticFiles;
   std::map<std::string,std::string> m_discoveredStaticFiles;
+  HHBBC::UnitEmitterQueue m_ueq;
+  std::atomic<bool> m_stop_caching{};
+  hphp_fast_set<std::string> m_locally_cached_bytecode;
+  bool m_cache_only{};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

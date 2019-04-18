@@ -1,0 +1,11 @@
+(library
+  (name hhbc)
+  (wrapped false)
+  (libraries
+    annotated_ast
+    ast
+    core_kernel
+    mutable_accumulator
+    parser_heap
+    tast
+    utils_php_escape))

@@ -12,22 +12,22 @@ class MyIterator implements Iterator{
   public function rewind() {
     echo "rewinding
 ";
-    reset($this->var);
+    reset(&$this->var);
   }
   public function current() {
-    $var = current($this->var);
+    $var = current(&$this->var);
     echo "current: $var
 ";
     return $var;
   }
   public function key() {
-    $var = key($this->var);
+    $var = key(&$this->var);
     echo "key: $var
 ";
     return $var;
   }
   public function next() {
-    $var = next($this->var);
+    $var = next(&$this->var);
     echo "next: $var
 ";
     return $var;
@@ -49,10 +49,14 @@ function g() {
  return 0;
  }
 
+
+<<__EntryPoint>>
+function main_1502() {
 $a = array(1, 2);
 $values = array('a' => 1, 'b' => 2, 'c' => 3);
 $it = new MyIterator($values);
 foreach ($it as $a[f()] => $a[g()]) {
-  print "$a[0]
-";
+  echo $a[0];
+  echo "\n";
+}
 }

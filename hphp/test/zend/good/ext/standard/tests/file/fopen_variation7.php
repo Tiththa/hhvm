@@ -24,7 +24,7 @@ chdir("..");
 rmdir($thisTestDir);
 
 function runtest() {
-    global $dir1;
+
 	$tmpfile =  basename(__FILE__, ".php") . ".tmp";
 	$h = fopen($tmpfile, "w", true);
 	fwrite($h, (binary)"This is the test file");
@@ -41,15 +41,15 @@ function runtest() {
 	   unlink($tmpfile);
 	}
 	
-	$h = @fopen($dir1.'/'.$tmpfile, "r");
+	$h = @fopen(ZendGoodExtStandardTestsFileFopenIncludePathInc::$dir1.'/'.$tmpfile, "r");
 	if ($h === false) {
 	   echo "Not created in dir1\n";
 	}
 	else {
 	   echo "created in dir1\n";
 	   fclose($h);
-	   unlink($dir1.'/'.$tmpfile);   
+	   unlink(ZendGoodExtStandardTestsFileFopenIncludePathInc::$dir1.'/'.$tmpfile);
 	}
 }
-?>
-===DONE===
+
+echo "===DONE===\n";

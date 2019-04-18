@@ -2,11 +2,12 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
+
+open Core_kernel
 
 module SU = Hhbc_string_utils
 
@@ -27,7 +28,10 @@ type t =
   | String of string
   | Null
   (* Classic PHP arrays with explicit (key,value) entries *)
+  | HhasAdata of string
   | Array of (t*t) list
+  | VArray of t list
+  | DArray of (t*t) list
   (* Hack arrays: vectors, keysets, and dictionaries *)
   | Vec of t list
   | Keyset of t list
@@ -42,7 +46,6 @@ end)
 (* Some useful constants *)
 let zero = Int Int64.zero
 let null = Null
-let one = Int Int64.one
 
 module StringOps = struct
   let make_with op s1 s2 =
@@ -64,7 +67,7 @@ module StringOps = struct
 
   let bitwise_not s =
     let result = Bytes.create (String.length s) in
-    String.iteri (fun i c ->
+    Caml.String.iteri (fun i c ->
       (* keep only last byte *)
       let b = lnot (int_of_char c) land 0xFF in
       Bytes.set result i (char_of_int b);
@@ -85,19 +88,38 @@ let to_bool v =
   | Int i -> i <> Int64.zero
   | Float f -> f <> 0.0
   (* Empty collections cast to false *)
-  | Dict [] | Array [] | Keyset [] | Vec [] -> false
+  | Dict [] | Array [] | VArray [] | DArray [] | Keyset [] | Vec [] -> false
   (* Non-empty collections cast to true *)
-  | Dict _ | Array _ | Keyset _ | Vec _-> true
+  | HhasAdata _
+  | Dict _ | Array _ | VArray _ | DArray _ | Keyset _ | Vec _-> true
 
-(* try to convert numeric or leading numeric string to a number *)
-let string_to_int_opt s =
-  match (try Scanf.sscanf s "%Ld%s" (fun x _ -> Some x) with _ -> None) with
+(* try to convert numeric
+ * or if allow_following passed then leading numeric string to a number *)
+let string_to_int_opt ~allow_following ~allow_inf s =
+  (* Interger conversion in scanf is slightly strange,
+   * both 3 and 3ab are converted to 3, so we take a separate approach
+   * when we do not want the following characters
+   *)
+  let int_opt = if allow_following then
+    try Scanf.sscanf s "%Ld%s" (fun x _ -> Some x) with _ -> None
+    else try Some (Int64.of_string s) with _ -> None
+  in
+  match int_opt with
   | None ->
-    begin
-      try Scanf.sscanf s "%f%s" (fun x _ -> Some (Int64.of_float x))
-      with _ -> None
+    begin if allow_following then
+      try Scanf.sscanf s "%f%s"
+        (fun x _ -> Some (Int64.of_float x)) with _ -> None
+      else
+        try
+          let s = float_of_string s in
+          if not allow_inf && (s = Float.infinity || s = Float.neg_infinity)
+          then None else Some (Int64.of_float s)
+        with _ -> None
     end
   | x -> x
+
+let php7_int_semantics () =
+  Hhbc_options.php7_int_semantics !Hhbc_options.compiler_options
 
 (* Cast to an integer: the (int) operator in PHP. Return None if we can't
  * or won't produce the correct value *)
@@ -116,20 +138,41 @@ let to_int v =
       characters in leading-numeric strings are ignored. For any other string,
       the result value is 0.
     *)
-    match string_to_int_opt s with
+    match string_to_int_opt ~allow_following:true ~allow_inf:true s with
     | None -> Some Int64.zero
     | x -> x
     end
   | Int i -> Some i
   | Float f ->
-    (*If the source type is float, for the values INF, -INF, and NAN,
-    the result value is zero*)
-    let fpClass = classify_float f in
-    if fpClass = FP_nan || fpClass = FP_infinite then Some Int64.zero
-    else
-    (* TODO: get this right. It's unlikely that Caml and
-     * PHP semantics match up *)
-    (try Some (Int64.of_float f) with Failure _ -> None)
+    let fpClass = Float.classify f in
+    begin match fpClass with
+      (* Here's a handy dandy chart of all possible values based on language
+       * | float | PHP 5   | HHVM    | PHP 7
+       * ----------------------------------------
+       * |  NaN  | int_min | int_min | 0
+       * |  INF  | int_min |  0      | 0
+       * | -INF  | int_min | int_min | 0
+       * For NaN, the value is min_int in HHVM
+       * For positive infinity, the value is 0 in HHVM
+       * For negative infinity the value is min_int in HHVM
+       * For PHP7, the value is always 0
+       * Thus if the float is infinity OR we're in PHP7, set it to 0
+       *)
+      | Float.Class.Nan
+      | Float.Class.Infinite ->
+        if f = Float.infinity || php7_int_semantics () then
+        Some Int64.zero else Some Caml.Int64.min_int
+      | _ ->
+      (* mimic double-to-int64.h *)
+      let cast v = try Some (Int64.of_float v) with Failure _ -> None in
+      if f >= 0.0 then
+      begin
+        if f < Int64.to_float Caml.Int64.max_int
+        then cast f
+        else Some 0L
+      end
+      else cast f
+    end
   | _ ->
     Some (if to_bool v then Int64.one else Int64.zero)
 
@@ -167,74 +210,74 @@ let to_string v =
   | Float f -> Some (SU.Float.to_string f)
   | _ -> None
 
-let ints_overflow_to_ints () =
-  Hhbc_options.ints_overflow_to_ints !Hhbc_options.compiler_options
-
 (* Integer operations. For now, we don't attempt to implement the
  * overflow-to-float semantics *)
 let add_int i1 i2 =
-  if ints_overflow_to_ints ()
-  then Some (Int (Int64.add i1 i2))
-  else None
+  Some (Int (Int64.(+) i1 i2))
+
+let neg i =
+  match i with
+  | Int i -> Some (Int (Int64.neg i))
+  | Float f -> Some (Float (0.0 -. f))
+  | _ -> None
 
 let sub_int i1 i2 =
-  if ints_overflow_to_ints ()
-  then Some (Int (Int64.sub i1 i2))
-  else None
+  Some (Int (Int64.(-) i1 i2))
+
+(* Arithmetic. For now, only on pure integer or float operands *)
+let sub v1 v2 =
+  match v1, v2 with
+  | Int i1, Int i2 -> sub_int i1 i2
+  | Float f1, Float f2 -> Some (Float (f1 -. f2))
+  | _ -> None
 
 let mul_int i1 i2 =
-  if ints_overflow_to_ints ()
-  then Some (Int (Int64.mul i1 i2))
-  else None
+  Some (Int (Int64.( * ) i1 i2))
+
+(* Arithmetic. For now, only on pure integer or float operands *)
+let mul v1 v2 =
+  match v1, v2 with
+  | Int i1, Int i2 -> mul_int i1 i2
+  | Float f1, Float f2 -> Some (Float (f1 *. f2))
+  | Int i1, Float f2 -> Some (Float ((Int64.to_float i1) *. f2))
+  | Float f1, Int i2 -> Some (Float (f1 *. (Int64.to_float i2)))
+  | _ ->  None
+
+(* Arithmetic. For now, only on pure integer or float operands *)
+let div v1 v2 =
+  match v1, v2 with
+  | Int i1, Int i2 when i2 <> 0L ->
+    if Int64.rem i1 i2 = 0L then Some (Int (Int64.(/) i1 i2))
+    else Some (Float (Int64.to_float i1 /. Int64.to_float i2))
+  | Float f1, Float f2 when f2 <> 0.0 -> Some (Float (f1 /. f2))
+  | Int i1, Float f2 when f2 <> 0.0 -> Some (Float ((Int64.to_float i1) /. f2))
+  | Float f1, Int i2 when i2 <> 0L -> Some (Float (f1 /. (Int64.to_float i2)))
+  | _ ->  None
 
 (* Arithmetic. For now, only on pure integer or float operands *)
 let add v1 v2 =
   match v1, v2 with
   | Float f1, Float f2 -> Some (Float (f1 +. f2))
   | Int i1, Int i2 -> add_int i1 i2
+  | Int i1, Float f2 -> Some (Float ((Int64.to_float i1) +. f2))
+  | Float f1, Int i2 -> Some (Float (f1 +. (Int64.to_float i2)))
   | _, _ -> None
 
-let sub v1 v2 =
+let shift_left v1 v2 =
   match v1, v2 with
-  | Float f1, Float f2 -> Some (Float (f1 -. f2))
-  | Int i1, Int i2 -> sub_int i1 i2
-  | _, _ -> None
-
-let mul v1 v2 =
-  match v1, v2 with
-  | Float f1, Float f2 -> Some (Float (f1 *. f2))
-  | Int i1, Int i2 -> mul_int i1 i2
-  | _, _ -> None
-
-let rem v1 v2 =
-  match v1, v2 with
-  | Int i1, Int i2 ->
-    Some (Int (Int64.rem i1 i2))
-  | _, _ ->
-    None
-
-let div v1 v2 =
-  match v1, v2 with
-  | Int left, Int right ->
-    if Int64.rem left right = Int64.zero then
-      Some (Int (Int64.div left right))
-    else
-      let left = Int64.to_float left in
-      let right = Int64.to_float right in
-      let quotient = left /. right in
-      Some (Float quotient)
-  | Float f1, Float f2 -> Some (Float (f1 /. f2))
-  | _, _ -> None
-
-let shift f v1 v2 =
-  match Option.both (to_int v1) (to_int v2) with
-  | Some (l, r) when r > 0L ->
-    Some (Int (f l (Int64.to_int r)))
+  | Int i1, Int i2 when i2 >= 0L && (i2 < 64L || not @@ php7_int_semantics()) ->
+    begin try
+      let v = Int64.to_int_exn i2 in
+      Some (Int (Int64.shift_left i1 v))
+    with _ -> None
+    end
   | _ -> None
 
-let shift_left v1 v2 = shift Int64.shift_left v1 v2
-
-let shift_right v1 v2 = shift Int64.shift_right v1 v2
+(* Arithmetic. For now, only on pure integer operands *)
+let bitwise_or v1 v2 =
+  match v1, v2 with
+  | Int i1, Int i2 -> Some (Int (Int64.(lor) i1 i2))
+  | _ -> None
 
 (* String concatenation *)
 let concat v1 v2 =
@@ -245,49 +288,13 @@ let concat v1 v2 =
 (* Bitwise operations. *)
 let bitwise_not v =
   match v with
-  | Int i -> Some (Int (Int64.lognot i))
+  | Int i -> Some (Int (Int64.lnot i))
   | String s -> Some (String (StringOps.bitwise_not s))
-  | _ -> None
-
-let bitwise_and v1 v2 =
-  match v1, v2 with
-  | (Int _ | Bool _ | Null), (Int _ | Bool _ | Null) ->
-    (match Option.both (to_int v1) (to_int v2) with
-    | Some (i1, i2) -> Some (Int (Int64.logand i1 i2))
-    | None -> None)
-  | String s1, String s2 -> Some (String (StringOps.bitwise_and s1 s2))
-  | _ -> None
-
-let bitwise_or v1 v2 =
-  match v1, v2 with
-  | (Int _ | Bool _ | Null), (Int _ | Bool _ | Null) ->
-    (match Option.both (to_int v1) (to_int v2) with
-    | Some (i1, i2) -> Some (Int (Int64.logor i1 i2))
-    | None -> None)
-  | String s1, String s2 -> Some (String (StringOps.bitwise_or s1 s2))
-  | _ -> None
-
-let bitwise_xor v1 v2 =
-  match v1, v2 with
-  | (Int _ | Bool _ | Null), (Int _ | Bool _ | Null) ->
-    (match Option.both (to_int v1) (to_int v2) with
-    | Some (i1, i2) -> Some (Int (Int64.logxor i1 i2))
-    | None -> None)
-  | String s1, String s2 -> Some (String (StringOps.bitwise_xor s1 s2))
   | _ -> None
 
 (* Logical operators *)
 let not v =
   Some (Bool (not (to_bool v)))
-
-let logical_or v1 v2 =
-  Some (Bool (to_bool v1 || to_bool v2))
-
-let logical_and v1 v2 =
-  Some (Bool (to_bool v1 && to_bool v2))
-
-let logical_xor v1 v2 =
-  Some (Bool (to_bool v1 <> to_bool v2))
 
 (*
   returns (t * t) option option
@@ -387,10 +394,6 @@ let eqeq v1 v2 =
       Some (Bool false)
   )
 
-let diff v1 v2 = Option.bind (eqeq v1 v2) not
-
-let diff2 v1 v2 = Option.bind (eqeqeq v1 v2) not
-
 let less_than v1 v2 =
   let compare v1 v2 =
     match v1, v2 with
@@ -431,10 +434,6 @@ let less_than_equals v1 v2 =
     | None -> None
   )
 
-let greater_than v1 v2 = less_than v2 v1
-
-let greater_than_equals v1 v2 = less_than_equals v2 v1
-
 let cast_to_string v = Option.map (to_string v) (fun x -> String x)
 
 let cast_to_int v = Option.map (to_int v) (fun x -> Int x)
@@ -446,4 +445,6 @@ let cast_to_float v = Option.map (to_float v) (fun x -> Float x)
 let cast_to_arraykey v =
   match v with
   | String s -> Some (String s)
+  | Null -> Some (String "")
+  | Uninit | Array _ | VArray _ | DArray _ | Vec _ | Keyset _ | Dict _ -> None
   | _ -> cast_to_int v

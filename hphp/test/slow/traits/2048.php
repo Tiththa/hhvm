@@ -30,5 +30,3 @@ class Foo {
 $t = new Foo;
 $t->foo();
 
-?>
-

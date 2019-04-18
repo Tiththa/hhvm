@@ -29,7 +29,7 @@ $patterns = array (
   '$file_path/glob_variation/wonder5',
   "$file_path/glob_variation/?wonder?",
   "$file_path/glob_variation/wonder?",
-  TRUE  // boolean true
+  '1'  // boolean true
 );
 $counter = 1;
 /* loop through $patterns to match each $pattern with the files created
@@ -68,11 +68,8 @@ foreach($patterns as $pattern) {
 }
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = dirname(__FILE__);
 rmdir("$file_path/glob_variation/wonder1/wonder2");
 rmdir("$file_path/glob_variation/wonder1/");
 rmdir("$file_path/glob_variation/");
-?>

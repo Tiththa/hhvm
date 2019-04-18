@@ -27,9 +27,6 @@ function getStr(int $len): string {
   }
   return $ret;
 }
-
-// TEST: simple props
-$shared = getStr(4);
 class SimpleProps {
   private string $prop1 = "one";
   protected int $prop2 = 2;
@@ -40,6 +37,15 @@ class SimpleProps {
   public string $prop6b;
 }
 
+// TEST: dynamic props
+class DynamicClass {}
+
+
+// TEST: simple props
+<<__EntryPoint>>
+function main_strings() {
+$shared = getStr(4);
+
 $myClass = new SimpleProps();
 $myClass->prop4 = getStr(3);
 $myClass->prop5 = getStr(3);
@@ -47,6 +53,7 @@ $myClass->prop6a = $shared;
 $myClass->prop6b = $shared;
 
 $objs = objprof_get_strings(0);
+__hhvm_intrinsics\launder_value($myClass);
 echo get_srefs('one', $objs) === 1 &&
      get_refs('one', $objs) === 1 &&
      get_dups('one', $objs) === 1 &&
@@ -60,9 +67,6 @@ echo get_srefs('one', $objs) === 1 &&
   ? "(GOOD) Agg (props) works\n"
   : "(BAD) Agg (props) failed: ".var_export($objs, true)."\n";
 $objs = null;
-
-// TEST: dynamic props
-class DynamicClass {}
 $var = 'mykey1';
 $var2 = getStr(1);
 $myClass = new DynamicClass();
@@ -70,6 +74,7 @@ $myClass->$var = getStr(2);
 $myClass->$var2 = getStr(3);
 
 $objs = objprof_get_strings(0);
+__hhvm_intrinsics\launder_value($myClass);
 echo get_path('mykey1', $objs) === "DynamicClass" &&
      get_path('X', $objs) === "DynamicClass" &&
      get_path('XX', $objs) === "DynamicClass:[\"mykey1\"]" &&
@@ -86,6 +91,7 @@ $myClass["root"][] = "one";
 $myClass["root"][] = "one";
 $myClass["root"][$two] = getStr(2);
 $objs = objprof_get_strings(0);
+__hhvm_intrinsics\launder_value($myClass);
 echo get_path('one', $objs) === "HH\\Map:array():[\"root\"]:array():[0]" &&
      get_path('root', $objs) === "HH\\Map:array()" &&
      get_path('XX', $objs) === "HH\\Map:array():[\"root\"]:array()" &&
@@ -102,6 +108,7 @@ $objs = null;
 // TEST: pairs
 $myClass = Pair {'lol', 'whut'};
 $objs = objprof_get_strings(0);
+__hhvm_intrinsics\launder_value($myClass);
 echo get_path('lol', $objs) === "HH\\Pair" &&
      get_path('whut', $objs) === "HH\\Pair" &&
      get_dups('lol', $objs) === 1 &&
@@ -115,3 +122,4 @@ echo get_path('lol', $objs) === "HH\\Pair" &&
 $objs = null;
 
 echo "(GOOD) Got here without crashing\n";
+}

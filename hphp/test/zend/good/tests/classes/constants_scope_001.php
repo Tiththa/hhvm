@@ -6,7 +6,6 @@ class ErrorCodes {
 	const INFO = "Informational message\n";
 
 	static function print_fatal_error_codes() {
-		echo "FATAL = " . FATAL . "\n";
 		echo "self::FATAL = " . self::FATAL;
     }
 }
@@ -23,4 +22,3 @@ class ErrorCodesDerived extends ErrorCodes {
 ErrorCodes::print_fatal_error_codes();
 ErrorCodesDerived::print_fatal_error_codes();
 
-?>

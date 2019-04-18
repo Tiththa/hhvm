@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 newtype myshape = shape(
   'x' => int,
@@ -7,7 +7,7 @@ newtype myshape = shape(
 
 // Nested shapes don't grow
 function test(): myshape {
-  $v = Vector {shape('x' => 4)};
+  $v = Vector { shape('x' => 4) };
   $v[0]['y'] = 'aaa';
   return $v[0];
 }

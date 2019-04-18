@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -24,5 +23,17 @@
   is_closure_body: bool ->
   has_this: bool ->
   params: Hhas_param.t list ->
+  is_toplevel: bool ->
+  is_in_static_method: bool ->
+  explicit_use_set: SSet.t ->
   Ast.program ->
   bool * string list
+
+ val vars_from_ast :
+  is_closure_body: bool ->
+  has_this: bool ->
+  params: Ast.fun_param list ->
+  is_toplevel: bool ->
+  is_in_static_method: bool ->
+  Ast.program ->
+  SSet.t

@@ -1,5 +1,8 @@
 <?php
-if (false) {
-  class Integer {}
-}
+
+
+
+
+class Integer {}
+
 echo "Done\n";

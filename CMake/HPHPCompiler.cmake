@@ -142,8 +142,10 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQU
       "maybe-uninitialized"
       "old-style-declaration"
     )
-    list(APPEND GENERAL_CXX_OPTIONS
+    list(APPEND GENERAL_OPTIONS
       "ffunction-sections"
+    )
+    list(APPEND GENERAL_CXX_OPTIONS
       "fdata-sections"
       "fno-gcse"
       "fno-canonical-system-headers"
@@ -163,6 +165,12 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQU
       list(APPEND GENERAL_OPTIONS "fno-delete-null-pointer-checks")
     else()
        message(FATAL_ERROR "${PROJECT_NAME} requires g++ 4.9 or greater.")
+    endif()
+
+    # Warn about a GCC 4.9 bug leading to an incorrect refcounting issue
+    # https://github.com/facebook/hhvm/issues/8011
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.0)
+       message(WARNING "HHVM is known to trigger optimization bugs in GCC 4.9. Upgrading to GCC 5 is recommended. See https://github.com/facebook/hhvm/issues/8011 for more details.")
     endif()
 
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0 OR
@@ -201,6 +209,16 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQU
     # X64
     if(IS_X64)
       list(APPEND GENERAL_CXX_OPTIONS "mcrc32")
+        if(ENABLE_SSE4_2)
+          list(APPEND GENERAL_CXX_OPTIONS
+          # SSE4.2 has been available on processors for quite some time now. This
+          # allows enabling CRC hash function code
+          "msse4.2"
+          )
+          # Also pass the right option to ASM files to avoid inconsistencies
+          # in CRC hash function handling
+          set(CMAKE_ASM_FLAGS  "${CMAKE_ASM_FLAGS} -msse4.2")
+        endif()
     endif()
 
     # ARM64
@@ -321,7 +339,6 @@ elseif (${CMAKE_CXX_COMPILER_ID} STREQUAL "MSVC")
   set(MSVC_ENABLE_PCH ON CACHE BOOL "If enabled, use precompiled headers to speed up the build.")
   set(MSVC_ENABLE_STATIC_ANALYSIS OFF CACHE BOOL "If enabled, do more complex static analysis and generate warnings appropriately.")
   set(MSVC_FAVORED_ARCHITECTURE "blend" CACHE STRING "One of 'blend', 'AMD64', 'INTEL64', or 'ATOM'. This tells the compiler to generate code optimized to run best on the specified architecture.")
-  set(MSVC_NO_ASSERT_IN_DEBUG OFF CACHE BOOL "If enabled, don't do asserts in debug mode. The reduces the size of hphp_runtime_static by ~300mb.")
 
   # The general options passed:
   list(APPEND MSVC_GENERAL_OPTIONS

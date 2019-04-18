@@ -22,7 +22,7 @@ function start_element($xp, $elem, $attribs)
 {
 	print "<$elem";
 	if (sizeof($attribs)) {
-		while (list($k, $v) = each($attribs)) {
+		while (list($k, $v) = each(&$attribs)) {
 			print " $k=\"$v\"";
 		}
 	}
@@ -33,4 +33,3 @@ function end_element($xp, $elem)
 {
 	print "</$elem>\n";
 }
-?>

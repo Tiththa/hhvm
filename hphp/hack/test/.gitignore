@@ -3,6 +3,7 @@
 *.out
 *.decl_out
 *.reparse_out
+*.tast_typecheck_out
 *.type_check_out
 *.hhvm_out
 *.round_trip.hhas
@@ -11,3 +12,5 @@
 *.semdiff
 *.semdiff_messages
 *.hhcodegen_config.json
+*.debug_out
+*.type_check_raised_out

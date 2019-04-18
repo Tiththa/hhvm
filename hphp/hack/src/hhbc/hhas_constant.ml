@@ -2,14 +2,13 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
 type t = {
-  constant_name         : Litstr.id;
+  constant_name         : string;
   constant_value        : Typed_value.t option;
   constant_initializer_instrs : Instruction_sequence.t option;
 }

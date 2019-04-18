@@ -1,7 +1,9 @@
 <?php
 
-$a = function () use(&$a) {};
-var_dump($a);
+class C { public $a; }
 
-?>
-===DONE===
+$c = new C();
+$c->a = function () use($c) {};
+var_dump($c->a);
+
+echo "===DONE===\n";

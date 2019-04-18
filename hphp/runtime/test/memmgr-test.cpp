@@ -16,16 +16,21 @@
 
 #include <folly/portability/GTest.h>
 
+#include "hphp/runtime/ext/collections/ext_collections-vector.h"
+
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/dummy-resource.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/resource-data.h"
-#include "hphp/runtime/base/dummy-resource.h"
-#include "hphp/runtime/ext/collections/ext_collections-vector.h"
+#include "hphp/runtime/base/request-info.h"
 
 namespace HPHP {
 
 static void allocAndJoin(size_t size, bool free) {
   std::thread thread([&]() {
-      MemoryManager::TlsWrapper::getCheck();
+      HPHP::rds::local::init();
+      SCOPE_EXIT { HPHP::rds::local::fini(); };
+      tl_heap.getCheck();
       if (free) {
         String str(size, ReserveString);
       } else {
@@ -38,7 +43,7 @@ static void allocAndJoin(size_t size, bool free) {
 TEST(MemoryManager, OnThreadExit) {
   allocAndJoin(42, true);
   allocAndJoin(kMaxSmallSize + 1, true);
-#ifdef DEBUG
+#ifndef NDEBUG
   EXPECT_DEATH(allocAndJoin(42, false), "");
   EXPECT_DEATH(allocAndJoin(kMaxSmallSize + 1, false), "");
 #endif
@@ -86,21 +91,23 @@ TEST(MemoryManager, LookupSmallSize2Index) {
 }
 
 TEST(MemoryManager, SmallSize2Index) {
-  EXPECT_EQ(MemoryManager::smallSize2Index(1), 0);
-  for (size_t index = 0; index < kNumSmallSizes - 1; index++) {
+  EXPECT_EQ(MemoryManager::size2Index(1), 0);
+  for (size_t index = 0; index + 1 < kNumSmallSizes; index++) {
     auto allocSize = kSizeIndex2Size[index];
-    EXPECT_EQ(MemoryManager::smallSize2Index(allocSize - 1), index);
-    EXPECT_EQ(MemoryManager::smallSize2Index(allocSize), index);
-    EXPECT_EQ(MemoryManager::smallSize2Index(allocSize + 1), index + 1);
+    EXPECT_EQ(MemoryManager::size2Index(allocSize - 1), index);
+    EXPECT_EQ(MemoryManager::size2Index(allocSize), index);
+    EXPECT_EQ(MemoryManager::size2Index(allocSize + 1), index + 1);
   }
-  EXPECT_EQ(
-    MemoryManager::smallSize2Index(kSizeIndex2Size[kNumSmallSizes - 1] - 1),
-    kNumSmallSizes - 1
-  );
-  EXPECT_EQ(
-    MemoryManager::smallSize2Index(kSizeIndex2Size[kNumSmallSizes - 1]),
-    kNumSmallSizes - 1
-  );
+  if (kMaxSmallSize > 0) {
+    EXPECT_EQ(
+      MemoryManager::size2Index(kMaxSmallSize - 1),
+      kNumSmallSizes - 1
+    );
+    EXPECT_EQ(
+      MemoryManager::size2Index(kMaxSmallSize),
+      kNumSmallSizes - 1
+    );
+  }
 }
 
 TEST(MemoryManager, Size2Index) {
@@ -122,23 +129,25 @@ TEST(MemoryManager, Size2Index) {
 }
 
 TEST(MemoryManager, SmallSizeClass) {
-  // this test starts by requesting 2 bytes because smallSizeClass does not
+  // this test starts by requesting 2 bytes because sizeClass() does not
   // support inputs < 2; the others support inputs >= 1
-  EXPECT_EQ(MemoryManager::smallSizeClass(2), kSmallSizeAlign);
-  for (size_t index = 0; index < kNumSmallSizes - 1; index++) {
+  EXPECT_EQ(MemoryManager::sizeClass(2), kSmallSizeAlign);
+  for (size_t index = 0; index + 1 < kNumSmallSizes; index++) {
     auto allocSize = kSizeIndex2Size[index];
-    EXPECT_EQ(MemoryManager::smallSizeClass(allocSize - 1), allocSize);
-    EXPECT_EQ(MemoryManager::smallSizeClass(allocSize), allocSize);
-    EXPECT_GT(MemoryManager::smallSizeClass(allocSize + 1), allocSize);
+    EXPECT_EQ(MemoryManager::sizeClass(allocSize - 1), allocSize);
+    EXPECT_EQ(MemoryManager::sizeClass(allocSize), allocSize);
+    EXPECT_GT(MemoryManager::sizeClass(allocSize + 1), allocSize);
   }
-  EXPECT_EQ(
-    MemoryManager::smallSizeClass(kSizeIndex2Size[kNumSmallSizes - 1] - 1),
-    kSizeIndex2Size[kNumSmallSizes - 1]
-  );
-  EXPECT_EQ(
-    MemoryManager::smallSizeClass(kSizeIndex2Size[kNumSmallSizes - 1]),
-    kSizeIndex2Size[kNumSmallSizes - 1]
-  );
+  if (kMaxSmallSize > 0) {
+    EXPECT_EQ(
+      MemoryManager::sizeClass(kMaxSmallSize - 1),
+      kMaxSmallSize
+    );
+    EXPECT_EQ(
+      MemoryManager::sizeClass(kMaxSmallSize),
+      kMaxSmallSize
+    );
+  }
 }
 
 TEST(MemoryManager, realloc) {
@@ -149,6 +158,61 @@ TEST(MemoryManager, realloc) {
   auto const n2 = static_cast<MallocNode*>(p2) - 1;
   EXPECT_EQ(n2->kind(), HeaderKind::SmallMalloc);
   req::free(p2);
+}
+
+TEST(MemoryManager, ContainsAnySize) {
+  for (size_t i = 0; i < 1000; ++i) {
+    auto p = req::malloc_noptrs(kMaxSmallSize*2);
+    auto const n = static_cast<MallocNode*>(p) - 1;
+    auto p2 = req::malloc_noptrs(kMaxSmallSize/2);
+    auto const n2 = static_cast<MallocNode*>(p2) - 1;
+    EXPECT_TRUE(tl_heap->contains(n));
+    EXPECT_TRUE(tl_heap->contains(n2));
+    req::free(p);
+    req::free(p2);
+    EXPECT_FALSE(tl_heap->contains(n));
+    EXPECT_TRUE(tl_heap->contains(n2));
+  }
+}
+
+static void testLeak(size_t alloc_size) {
+  RuntimeOption::EvalGCTriggerPct = 0.50;
+  RuntimeOption::EvalGCMinTrigger = 4 << 20;
+
+  tl_heap->collect("testLeak");
+  tl_heap->setGCEnabled(true);
+  clearSurpriseFlag(MemExceededFlag);
+  tl_heap->setMemoryLimit(100 << 20);
+
+  auto const target_alloc = int64_t{5} << 30;
+  auto const vec_cap = (alloc_size - sizeof(ArrayData)) / sizeof(TypedValue);
+  auto const vec = [vec_cap] {
+    VecArrayInit vec{vec_cap};
+    for (int j = 0; j < vec_cap; ++j) {
+      vec.append(make_tv<KindOfNull>());
+    }
+    return vec.toArray();
+  }();
+
+  auto const start_alloc = tl_heap->getStatsRaw().mmAllocated();
+  for (int64_t i = 0; ; ++i) {
+    auto vec_copy = vec;
+    vec_copy.set(0, make_tv<KindOfInt64>(i));
+    vec_copy.detach();
+
+    if (tl_heap->getStatsRaw().mmAllocated() - start_alloc > target_alloc) {
+      break;
+    }
+    if (UNLIKELY(checkSurpriseFlags())) handle_request_surprise();
+  }
+}
+
+TEST(MemoryManager, GCLeakSmall) {
+  testLeak(kMaxSmallSize / 16);
+}
+
+TEST(MemoryManager, GCLeakBig) {
+  testLeak(kMaxSmallSize * 2);
 }
 
 }

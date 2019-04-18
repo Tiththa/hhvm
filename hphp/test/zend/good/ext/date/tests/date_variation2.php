@@ -95,11 +95,10 @@ $format = "F j, Y, g:i a";
 
 foreach($inputs as $variation =>$timestamp) {
       echo "\n-- $variation --\n";
-      var_dump( date($format, $timestamp) );
+      try { var_dump( date($format, $timestamp) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
 // closing the resource
 fclose( $file_handle );
 
-?>
-===DONE===
+echo "===DONE===\n";

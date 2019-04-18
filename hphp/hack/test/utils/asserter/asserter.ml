@@ -40,15 +40,6 @@ module Hh_json_json_comparator = struct
     String.equal exp actual
 end;;
 
-
-module Recorder_event_comparator = struct
-  type t = Recorder_types.event
-  let to_string x = Recorder_types.to_string x
-  let is_equal x y =
-    (Recorder_types.to_string x) = (Recorder_types.to_string y)
-end;;
-
-
 module Process_status_comparator = struct
   type t = Unix.process_status
   let to_string v = match v with
@@ -61,7 +52,6 @@ module Process_status_comparator = struct
 
     let is_equal exp actual = exp = actual
 end;;
-
 
 module type Pattern_substitutions = sig
   (** List of key-value pairs. We perform these key to value
@@ -144,9 +134,10 @@ module Make_asserter (Comp : Comparator) = struct
     if Comp.is_equal exp actual then
       ()
     else
-      let () = Printf.eprintf "Expected: %s; But Found: %s\n"
+      let () = Printf.eprintf
+        "Error: assertion failure. Expected: '%s'; But Found: '%s'\n"
         (Comp.to_string exp) (Comp.to_string actual) in
-      let () = Printf.eprintf "%s" failure_msg in
+      let () = Printf.eprintf "Assertion msg: %s\n" failure_msg in
       assert false
 
   let assert_list_equals exp actual failure_msg =
@@ -160,9 +151,9 @@ module Make_asserter (Comp : Comparator) = struct
       let exp_strs = List.map Comp.to_string exp in
       let actual_strs = List.map Comp.to_string actual in
       let () = Printf.eprintf
-        "Expected:\n%s\n\n But Found:\n%s\n"
+        "Error: Assertion failure. Expected:\n'%s'\n\n But Found:\n'%s'\n"
         (String.concat "\n" exp_strs) (String.concat "\n" actual_strs) in
-      let () = Printf.eprintf "%s" failure_msg in
+      let () = Printf.eprintf "Assertion msg: %s" failure_msg in
       assert false
 
   let assert_option_equals exp actual failure_msg =
@@ -172,11 +163,15 @@ module Make_asserter (Comp : Comparator) = struct
     | None, Some v ->
       Printf.eprintf
         "assert_option_equals failed. Expected None but got Some(%s)"
-        (Comp.to_string v)
+        (Comp.to_string v);
+      Printf.eprintf "Assertion msg: %s" failure_msg;
+      assert false
     | Some v, None ->
       Printf.eprintf
         "assert_option_equals failed. Expected Some(%s) but got None"
-        (Comp.to_string v)
+        (Comp.to_string v);
+      Printf.eprintf "Assertion msg: %s" failure_msg;
+      assert false
     | Some exp, Some actual ->
       assert_equals exp actual failure_msg
 
@@ -185,10 +180,10 @@ end;;
 
 module Hh_json_json_option_comparator =
   Make_option_comparator (Hh_json_json_comparator);;
+module Int_option_comparator = Make_option_comparator (Int_comparator);;
 
 module String_asserter = Make_asserter (String_comparator);;
 module Bool_asserter = Make_asserter (Bool_comparator);;
 module Hh_json_json_asserter = Make_asserter (Hh_json_json_comparator);;
 module Int_asserter = Make_asserter (Int_comparator);;
 module Process_status_asserter = Make_asserter (Process_status_comparator);;
-module Recorder_event_asserter = Make_asserter (Recorder_event_comparator);;

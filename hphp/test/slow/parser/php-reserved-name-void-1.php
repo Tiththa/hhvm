@@ -1,5 +1,8 @@
 <?php
-if (false) {
-  class Void {}
-}
+
+
+
+
+class Void {}
+
 echo "Done\n";

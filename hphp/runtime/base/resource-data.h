@@ -64,34 +64,34 @@ make(Args&&... args);
  * In the JIT, SSATmps of type Res are ResourceHdr pointers.
  */
 struct ResourceHdr final : Countable, // aux stores heap size
-                           type_scan::MarkCountable<ResourceHdr> {
+                           type_scan::MarkCollectable<ResourceHdr> {
   static void resetMaxId();
 
   ALWAYS_INLINE void decRefAndRelease() {
-    assert(kindIsValid());
+    assertx(kindIsValid());
     if (decReleaseCheck()) release();
   }
   bool kindIsValid() const { return m_kind == HeaderKind::Resource; }
   void release() noexcept;
 
   void init(uint16_t size, type_scan::Index tyindex) {
-    assert(type_scan::isKnownType(tyindex));
-    initHeader(size, HeaderKind::Resource, 1);
+    assertx(type_scan::isKnownType(tyindex));
+    initHeader_16(HeaderKind::Resource, OneReference, size);
     m_type_index = tyindex;
   }
 
   ResourceData* data() {
-    assert(kindIsValid());
+    assertx(kindIsValid());
     return reinterpret_cast<ResourceData*>(this + 1);
   }
   const ResourceData* data() const {
-    assert(kindIsValid());
+    assertx(kindIsValid());
     return reinterpret_cast<const ResourceData*>(this + 1);
   }
 
   size_t heapSize() const {
-    assert(kindIsValid());
-    assert(m_aux16 != 0);
+    assertx(kindIsValid());
+    assertx(m_aux16 != 0);
     return m_aux16;
   }
 
@@ -112,7 +112,7 @@ private:
 /**
  * Base class of all PHP resources.
  */
-struct ResourceData : type_scan::MarkCountable<ResourceData> {
+struct ResourceData : type_scan::MarkCollectable<ResourceData> {
   ResourceData();
 
   ResourceData(const ResourceData&) = delete;
@@ -120,12 +120,12 @@ struct ResourceData : type_scan::MarkCountable<ResourceData> {
 
   const ResourceHdr* hdr() const {
     auto h = reinterpret_cast<const ResourceHdr*>(this) - 1;
-    assert(h->kindIsValid());
+    assertx(h->kindIsValid());
     return h;
   }
   ResourceHdr* hdr() {
     auto h = reinterpret_cast<ResourceHdr*>(this) - 1;
-    assert(h->kindIsValid());
+    assertx(h->kindIsValid());
     return h;
   }
 
@@ -147,7 +147,12 @@ struct ResourceData : type_scan::MarkCountable<ResourceData> {
   virtual bool isInvalid() const { return false; }
 
   template <typename T>
-  bool instanceof() const { return dynamic_cast<const T*>(this) != nullptr; }
+  typename std::enable_if<!std::is_same<ResourceData,T>::value, bool>::type
+  instanceof() const { return dynamic_cast<const T*>(this) != nullptr; }
+
+  template <typename T>
+  typename std::enable_if<std::is_same<ResourceData,T>::value, bool>::type
+  instanceof() const { return true; }
 
   bool o_toBoolean() const { return true; }
   int64_t o_toInt64() const { return hdr()->getId(); }
@@ -162,8 +167,9 @@ struct ResourceData : type_scan::MarkCountable<ResourceData> {
 };
 
 inline void ResourceHdr::release() noexcept {
-  assert(kindIsValid());
+  assertx(kindIsValid());
   delete data();
+  AARCH64_WALKABLE_FRAME();
 }
 
 inline ResourceData* safedata(ResourceHdr* hdr) {
@@ -270,15 +276,15 @@ ALWAYS_INLINE void decRefRes(ResourceHdr* res) {
     static_assert(std::is_base_of<ResourceData,T>::value, "");  \
     constexpr auto size = sizeof(ResourceHdr) + sizeof(T);      \
     auto h = static_cast<ResourceData*>(p)->hdr();              \
-    assert(h->heapSize() == size);                              \
-    MM().freeSmallSize(h, size);                                \
+    assertx(h->heapSize() == size);                              \
+    tl_heap->objFree(h, size);                                  \
   }
 
 #define DECLARE_RESOURCE_ALLOCATION(T)                          \
   DECLARE_RESOURCE_ALLOCATION_NO_SWEEP(T)                       \
   void sweep() override;
 
-#define IMPLEMENT_RESOURCE_ALLOCATION_NS(NS, T)                          \
+#define IMPLEMENT_RESOURCE_ALLOCATION_NS(NS, T)                        \
   static_assert(std::is_base_of<HPHP::ResourceData,NS::T>::value, ""); \
   void NS::T::sweep() { this->~T(); }
 
@@ -294,17 +300,17 @@ typename std::enable_if<
   req::ptr<T>
 >::type make(Args&&... args) {
   constexpr auto size = sizeof(ResourceHdr) + sizeof(T);
-  static_assert(uint16_t(size) == size && size < kMaxSmallSize, "");
+  static_assert(uint16_t(size) == size, "size must fit in 16 bits");
   static_assert(std::is_convertible<T*,ResourceData*>::value, "");
-  auto const b = static_cast<ResourceHdr*>(MM().mallocSmallSize(size));
+  auto const b = static_cast<ResourceHdr*>(tl_heap->objMalloc(size));
   // initialize HeapObject
   b->init(size, type_scan::getIndexForMalloc<T>());
   try {
     auto r = new (b->data()) T(std::forward<Args>(args)...);
-    assert(r->hasExactlyOneRef());
+    assertx(r->hasExactlyOneRef());
     return req::ptr<T>::attach(r);
   } catch (...) {
-    MM().freeSmallSize(b, size);
+    tl_heap->objFree(b, size);
     throw;
   }
 }

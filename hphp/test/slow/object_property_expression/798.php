@@ -18,12 +18,9 @@ function foo() {
  var_dump('foo');
  return 'foo';
  }
-function test($x, $a, $s) {
-  $t = &$s->t;
+function test($x, $a, &$t, $s) {
   unset($x->bar()->x);
-  unset($x->q->r->s->${
-foo()}
-);
+  unset($x->q->r->s->$foo);
   unset($x->y->a->b->c);
   unset($x->a['x']->y->a->b->c);
   unset($a['a']['y'][foo()]);
@@ -31,4 +28,9 @@ foo()}
   unset($a->c->d);
   var_dump($x, $a, $s);
 }
-test(new X, array(), false);
+
+<<__EntryPoint>>
+function main_798() {
+  $s = false;
+  test(new X, array(), &$s->t, $s);
+}

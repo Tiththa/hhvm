@@ -1,5 +1,8 @@
 <?hh
-if (false) {
-  class Callable {}
-}
+
+
+
+
+class Callable {}
+
 echo "Done\n";

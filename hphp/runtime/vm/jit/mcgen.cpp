@@ -53,7 +53,7 @@ bool s_inited{false};
 void processInit() {
   TRACE(1, "mcgen startup\n");
 
-  g_unwind_rds.bind();
+  g_unwind_rds.bind(rds::Mode::Normal);
 
   Debug::initDebugInfo();
   tc::processInit();
@@ -74,9 +74,9 @@ bool initialized() { return s_inited; }
 
 int64_t jitInitTime() { return s_startTime; }
 
-bool dumpTCAnnotation(const Func& func, TransKind transKind) {
+bool dumpTCAnnotation(TransKind transKind) {
   return RuntimeOption::EvalDumpTCAnnotationsForAllTrans ||
-    (transKind == TransKind::Optimize && (func.attrs() & AttrHot));
+         transKind == TransKind::Optimize;
 }
 
 }}}

@@ -23,14 +23,15 @@
 
 #include <folly/String.h>
 
-#include "hphp/runtime/base/builtin-functions.h" // f_serialize
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/base/repo-auth-type-codec.h"
+#include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/vm/as-shared.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/util/match.h"
@@ -95,9 +96,12 @@ std::string format_line_pair(T* ptr) {
 
 //////////////////////////////////////////////////////////////////////
 
+std::string escaped(const folly::StringPiece str) {
+  return folly::format("\"{}\"", folly::cEscape<std::string>(str)).str();
+}
+
 std::string escaped(const StringData* sd) {
-  auto const sl = sd->slice();
-  return folly::format("\"{}\"", folly::cEscape<std::string>(sl)).str();
+  return escaped(sd->slice());
 }
 
 /*
@@ -113,13 +117,13 @@ std::string escaped_long(const StringData* sd) {
 }
 
 std::string escaped_long(const ArrayData* ad) {
-  auto const str = f_serialize(Variant{const_cast<ArrayData*>(ad)});
+  auto const str = internal_serialize(Variant{const_cast<ArrayData*>(ad)});
   return escaped_long(str.get());
 }
 
 std::string escaped_long(Cell cell) {
-  assert(cellIsPlausible(cell));
-  auto const str = f_serialize(tvAsCVarRef(&cell));
+  assertx(cellIsPlausible(cell));
+  auto const str = internal_serialize(tvAsCVarRef(&cell));
   return escaped_long(str.get());
 }
 
@@ -130,13 +134,9 @@ std::string opt_escaped_long(const StringData* sd) {
 
 //////////////////////////////////////////////////////////////////////
 
-struct EHFault { std::string label; };
 struct EHCatchLegacy { std::string label; };
 struct EHCatch { Offset end; };
-using EHInfo = boost::variant< EHFault
-                             , EHCatchLegacy
-                             , EHCatch
-                             >;
+using EHInfo = boost::variant<EHCatchLegacy, EHCatch>;
 
 struct FuncInfo {
   FuncInfo(const Unit* u, const Func* f) : unit(u), func(f) {}
@@ -151,7 +151,7 @@ struct FuncInfo {
   // names we chose for its handlers).
   std::unordered_map<const EHEnt*,EHInfo> ehInfo;
 
-  // Fault and catch protected region starts in order.
+  // Try/catch protected region starts in order.
   std::vector<std::pair<Offset,const EHEnt*>> ehStarts;
 };
 
@@ -177,18 +177,10 @@ FuncInfo find_func_info(const Func* func) {
     auto const bcBase = func->unit()->at(0);
 
     for (; pc != stop; pc += instrLen(pc)) {
-      auto const op = peek_op(pc);
-      if (isSwitch(op)) {
-        foreachSwitchTarget(pc, [&] (Offset off) {
-          add_target("L", pc - bcBase + off);
-        });
-        continue;
-      }
       auto const off = func->unit()->offsetOf(pc);
-      auto const target = instrJumpTarget(bcBase, off);
-      if (target != InvalidAbsoluteOffset) {
+      auto const targets = instrJumpTargets(bcBase, off);
+      for (auto const& target : targets) {
         add_target("L", target);
-        continue;
       }
     }
   };
@@ -196,14 +188,8 @@ FuncInfo find_func_info(const Func* func) {
   auto find_eh_entries = [&] {
     for (auto& eh : func->ehtab()) {
       finfo.ehInfo[&eh] = [&]() -> EHInfo {
-        switch (eh.m_type) {
-        case EHEnt::Type::Catch:
-          if (eh.m_end != kInvalidOffset) return EHCatch { eh.m_end };
-          return EHCatchLegacy { add_target("C", eh.m_handler) };
-        case EHEnt::Type::Fault:
-          return EHFault { add_target("F", eh.m_handler) };
-        }
-        not_reached();
+        if (eh.m_end != kInvalidOffset) return EHCatch { eh.m_end };
+        return EHCatchLegacy { add_target("C", eh.m_handler) };
       }();
       finfo.ehStarts.emplace_back(eh.m_base, &eh);
     }
@@ -255,7 +241,7 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
   };
 
   auto print_switch = [&] {
-    auto const vecLen = decode<int32_t>(pc);
+    auto const vecLen = decode_iva(pc);
     out.fmt(" <");
     for (auto i = int32_t{0}; i < vecLen; ++i) {
       auto const off = decode<Offset>(pc);
@@ -266,7 +252,7 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
   };
 
   auto print_sswitch = [&] {
-    auto const vecLen = decode<int32_t>(pc);
+    auto const vecLen = decode_iva(pc);
     out.fmt(" <");
     for (auto i = int32_t{0}; i < vecLen; ++i) {
       auto const strId  = decode<Id>(pc);
@@ -281,26 +267,44 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
   };
 
   auto print_itertab = [&] {
-    auto const vecLen = decode<int32_t>(pc);
+    auto const vecLen = decode_iva(pc);
     out.fmt(" <");
     for (auto i = int32_t{0}; i < vecLen; ++i) {
-      auto const kind = static_cast<IterKind>(decode<int32_t>(pc));
-      auto const id   = decode<int32_t>(pc);
+      auto const kind = static_cast<IterKind>(decode_iva(pc));
+      auto const id   = decode_iva(pc);
       auto const kindStr = [&]() -> const char* {
         switch (kind) {
         case KindOfIter:   return "(Iter)";
-        case KindOfMIter:  return "(MIter)";
-        case KindOfCIter:  return "(CIter)";
+        case KindOfLIter:  return "(LIter)";
         }
         not_reached();
       }();
-      out.fmt("{}{} {}", i != 0 ? ", " : "", kindStr, id);
+      if (kind == KindOfLIter) {
+        out.fmt(
+          "{}{} {} {}",
+          i != 0 ? ", " : " ",
+          kindStr, id, loc_name(finfo, decode_iva(pc))
+        );
+      } else {
+        out.fmt("{}{} {}", i != 0 ? ", " : " ", kindStr, id);
+      }
+    }
+    out.fmt(">");
+  };
+
+  auto print_argv32 = [&] {
+    auto const vecLen = decode_iva(pc);
+    if (!vecLen) return;
+    out.fmt(" <");
+    for (auto i = uint32_t{0}; i < vecLen; ++i) {
+      auto const num = decode<uint32_t>(pc);
+      out.fmt("{}{}", i != 0 ? ", " : "", num);
     }
     out.fmt(">");
   };
 
   auto print_stringvec = [&] {
-    auto const vecLen = decode<int32_t>(pc);
+    auto const vecLen = decode_iva(pc);
     out.fmt(" <");
     for (auto i = uint32_t{0}; i < vecLen; ++i) {
       auto const str = finfo.unit->lookupLitstrId(decode<int32_t>(pc));
@@ -318,9 +322,17 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
     return show(m);
   };
 
+  auto print_fca = [&] (FCallArgs fca) {
+    auto const aeLabel = fca.asyncEagerOffset != kInvalidOffset
+      ? rel_label(fca.asyncEagerOffset)
+      : "-";
+    return show(fca, fca.byRefs, aeLabel);
+  };
+
 #define IMM_BLA    print_switch();
 #define IMM_SLA    print_sswitch();
 #define IMM_ILA    print_itertab();
+#define IMM_I32LA  print_argv32();
 #define IMM_IVA    out.fmt(" {}", decode_iva(pc));
 #define IMM_I64A   out.fmt(" {}", decode<int64_t>(pc));
 #define IMM_LA     out.fmt(" {}", loc_name(finfo, decode_iva(pc)));
@@ -338,12 +350,14 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #define IMM_VSA    print_stringvec();
 #define IMM_KA     out.fmt(" {}", print_mk(decode_member_key(pc, finfo.unit)));
 #define IMM_LAR    out.fmt(" {}", show(decodeLocalRange(pc)));
+#define IMM_FCA    out.fmt(" {}", print_fca(decodeFCallArgs(pc)));
 
 #define IMM_NA
 #define IMM_ONE(x)           IMM_##x
 #define IMM_TWO(x,y)         IMM_ONE(x)       IMM_ONE(y)
 #define IMM_THREE(x,y,z)     IMM_TWO(x,y)     IMM_ONE(z)
 #define IMM_FOUR(x,y,z,l)    IMM_THREE(x,y,z) IMM_ONE(l)
+#define IMM_FIVE(x,y,z,l,m)  IMM_FOUR(x,y,z,l) IMM_ONE(m)
 
   out.indent();
 #define O(opcode, imms, ...)                              \
@@ -355,17 +369,19 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
   switch (peek_op(pc)) { OPCODES }
 #undef O
 
-  assert(pc == startPc + instrLen(startPc));
+  assertx(pc == startPc + instrLen(startPc));
 
 #undef IMM_NA
 #undef IMM_ONE
 #undef IMM_TWO
 #undef IMM_THREE
 #undef IMM_FOUR
+#undef IMM_FIVE
 
 #undef IMM_BLA
 #undef IMM_SLA
 #undef IMM_ILA
+#undef IMM_I32LA
 #undef IMM_IVA
 #undef IMM_I64A
 #undef IMM_LA
@@ -381,6 +397,7 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #undef IMM_VSA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_FCA
 
   out.nl();
 }
@@ -395,8 +412,8 @@ void print_func_directives(Output& out, const FuncInfo& finfo) {
   if (func->isMemoizeWrapper()) {
     out.fmtln(".ismemoizewrapper;");
   }
-  if (auto const wrapper = func->dynCallWrapper()) {
-    out.fmtln(".dyncallwrapper \"{}\";", wrapper->name());
+  if (func->isMemoizeWrapperLSB()) {
+    out.fmtln(".ismemoizewrapperlsb;");
   }
   if (auto const niters = func->numIterators()) {
     out.fmtln(".numiters {};", niters);
@@ -407,12 +424,13 @@ void print_func_directives(Output& out, const FuncInfo& finfo) {
   if (func->numNamedLocals() > func->numParams()) {
     std::vector<std::string> locals;
     for (int i = func->numParams(); i < func->numNamedLocals(); i++) {
-      locals.push_back(loc_name(finfo, i));
+      auto local = loc_name(finfo, i);
+      if (!std::all_of(local.begin(), local.end(), is_bareword())) {
+        local = escaped(local);
+      }
+      locals.push_back(local);
     }
     out.fmtln(".declvars {};", folly::join(" ", locals));
-  }
-  for (auto& info : func->staticVars()) {
-    out.fmtln(".static ${};", info.name);
   }
 }
 
@@ -460,10 +478,6 @@ void print_func_body(Output& out, const FuncInfo& finfo) {
 
       // You can't have multiple handlers at the same location.
       assertx(ehHandlers.empty() || ehHandlers.top() != off);
-
-      // Skip the implicitly defined Catch opcode by .catch {} directive.
-      assertx(peek_op(bcIter) == OpCatch);
-      bcIter += instrLen(bcIter);
       continue;
     }
 
@@ -481,10 +495,6 @@ void print_func_body(Output& out, const FuncInfo& finfo) {
         },
         [&] (const EHCatchLegacy& ehCatch) {
           out.fmtln(".try_catch {} {{", ehCatch.label);
-          ehEnds.push(ehIter->second->m_past);
-        },
-        [&] (const EHFault& fault) {
-          out.fmtln(".try_fault {} {{", fault.label);
           ehEnds.push(ehIter->second->m_past);
         }
       );
@@ -530,6 +540,22 @@ std::string opt_type_info(const StringData *userType,
   return "";
 }
 
+std::string opt_attrs(AttrContext ctx, Attr attrs,
+                      const UserAttributeMap* userAttrs = nullptr,
+                      bool isTop = true,
+                      bool needPrefix = true) {
+  auto str = folly::trimWhitespace(folly::sformat(
+               "{} {}",
+               attrs_to_string(ctx, attrs), user_attrs(userAttrs))).str();
+  if (!str.empty()) {
+    str = folly::sformat("{}[{}{}]",
+      needPrefix ? " " : "", str, isTop ? "" : " nontop");
+  } else if (!isTop) {
+    str = " [nontop]";
+  }
+  return str;
+}
+
 std::string func_param_list(const FuncInfo& finfo) {
   auto ret = std::string{};
   auto const func = finfo.func;
@@ -537,8 +563,15 @@ std::string func_param_list(const FuncInfo& finfo) {
   for (auto i = uint32_t{0}; i < func->numParams(); ++i) {
     if (i != 0) ret += ", ";
 
+    ret += opt_attrs(AttrContext::Parameter,
+        Attr(), &func->params()[i].userAttributes,
+        /*isTop*/true, /*needPrefix*/false);
+
     if (func->params()[i].variadic) {
       ret += "...";
+    }
+    if (func->params()[i].inout) {
+      ret += "inout ";
     }
     ret += opt_type_info(func->params()[i].userType,
                          func->params()[i].typeConstraint);
@@ -564,37 +597,11 @@ std::string func_flag_list(const FuncInfo& finfo) {
   if (func->isAsync()) flags.push_back("isAsync");
   if (func->isClosureBody()) flags.push_back("isClosureBody");
   if (func->isPairGenerator()) flags.push_back("isPairGenerator");
+  if (func->isRxDisabled()) flags.push_back("isRxDisabled");
 
   std::string strflags = folly::join(" ", flags);
   if (!strflags.empty()) return " " + strflags + " ";
   return " ";
-}
-
-std::string user_attrs(const UserAttributeMap* attrsMap) {
-  if (!attrsMap || attrsMap->empty()) return "";
-
-  std::vector<std::string> attrs;
-
-  for (auto& entry : *attrsMap) {
-    attrs.push_back(
-      folly::format("{}({})", escaped(entry.first),
-                    escaped_long(entry.second)).str());
-  }
-  return folly::join(" ", attrs);
-}
-
-std::string opt_attrs(AttrContext ctx, Attr attrs,
-                      const UserAttributeMap* userAttrs = nullptr,
-                      bool isTop = true) {
-  auto str = folly::trimWhitespace(folly::sformat(
-               "{} {}",
-               attrs_to_string(ctx, attrs), user_attrs(userAttrs))).str();
-  if (!str.empty()) {
-    str = folly::sformat(" [{}{}]", str, isTop ? "" : " nontop");
-  } else if (!isTop) {
-    str = " [nontop]";
-  }
-  return str;
 }
 
 void print_func(Output& out, const Func* func) {
@@ -621,7 +628,7 @@ void print_func(Output& out, const Func* func) {
 }
 
 std::string member_tv_initializer(Cell cell) {
-  assert(cellIsPlausible(cell));
+  assertx(cellIsPlausible(cell));
   if (cell.m_type == KindOfUninit) return "uninit";
   return escaped_long(cell);
 }
@@ -637,18 +644,27 @@ void print_constant(Output& out, const PreClass::Const* cns) {
     member_tv_initializer(cns->val()));
 }
 
-void print_property(Output& out, const PreClass::Prop* prop) {
+template<class T>
+void print_prop_or_field_impl(Output& out, const T& f) {
   out.fmtln(".property{}{} {}{} =",
-    opt_attrs(AttrContext::Prop, prop->attrs()),
+    opt_attrs(AttrContext::Prop, f.attrs(), &f.userAttributes()),
     RuntimeOption::EvalDisassemblerDocComments &&
     RuntimeOption::EvalDisassemblerPropDocComments
-      ? opt_escaped_long(prop->docComment())
+      ? opt_escaped_long(f.docComment())
       : std::string(""),
-    opt_type_info(prop->typeConstraint(), TypeConstraint{}),
-    prop->name()->data());
+    opt_type_info(f.userType(), f.typeConstraint()),
+    f.name()->data());
   indented(out, [&] {
-    out.fmtln("{};", member_tv_initializer(prop->val()));
+      out.fmtln("{};", member_tv_initializer(f.val()));
   });
+}
+
+void print_field(Output& out, const Record::Field& field) {
+  print_prop_or_field_impl(out, field);
+}
+
+void print_property(Output& out, const PreClass::Prop* prop) {
+  print_prop_or_field_impl(out, *prop);
 }
 
 void print_method(Output& out, const Func* func) {
@@ -723,13 +739,19 @@ void print_cls_used_traits(Output& out, const PreClass* cls) {
     }
 
     for (auto& alias : aliasRules) {
-      out.fmtln("{}{} as{}{};",
+      out.fmtln("{}{} as{}{}{}{};",
         alias.traitName()->empty()
           ? std::string{}
           : folly::format("{}::", alias.traitName()).str(),
         alias.origMethodName()->data(),
+        alias.strict()
+          ? std::string(" strict")
+          : std::string{},
+        alias.async() && alias.strict()
+          ? std::string(" async")
+          : std::string{},
         opt_attrs(AttrContext::TraitImport, alias.modifiers()),
-        alias.newMethodName() != alias.origMethodName()
+        alias.strict() || (alias.newMethodName() != alias.origMethodName())
           ? std::string(" ") + alias.newMethodName()->data()
           : std::string{}
       );
@@ -757,12 +779,38 @@ void print_cls_directives(Output& out, const PreClass* cls) {
   for (auto* m : cls->allMethods())    print_method(out, m);
 }
 
+void print_rec_fields(Output& out, const Record* rec) {
+  for (auto& f : rec->allFields()) print_field(out, f);
+}
+
+void print_rec(Output& out, const Record* rec) {
+  out.indent();
+  out.fmt(".record {}", rec->name()->toCppString());
+  out.fmt(" {{");
+  out.nl();
+  if (RuntimeOption::EvalDisassemblerDocComments) {
+    if (rec->docComment() && !rec->docComment()->empty()) {
+      out.fmtln(".doc {};", escaped_long(rec->docComment()));
+    }
+  }
+  indented(out, [&] { print_rec_fields(out, rec); });
+  out.fmt("}}");
+  out.nl();
+}
+
 void print_cls(Output& out, const PreClass* cls) {
   out.indent();
+  auto name = cls->name()->toCppString();
+  if (PreClassEmitter::IsAnonymousClassName(name)) {
+    auto p = name.find(';');
+    if (p != std::string::npos) {
+      name = name.substr(0, p);
+    }
+  }
   out.fmt(".class{} {}",
     opt_attrs(AttrContext::Class, cls->attrs(), &cls->userAttributes(),
               cls->hoistability() != PreClass::NotHoistable),
-    cls->name(),
+    name,
     format_line_pair(cls));
   print_cls_inheritance_list(out, cls);
   out.fmt(" {{");
@@ -778,7 +826,7 @@ void print_alias(Output& out, const TypeAlias& alias) {
   TypeConstraint constraint(alias.value, flags);
 
   out.fmtln(".alias{} {} = <{}> {};",
-            opt_attrs(AttrContext::Alias, alias.attrs),
+            opt_attrs(AttrContext::Alias, alias.attrs, &alias.userAttrs),
             (const StringData*)alias.name,
             type_constraint(constraint),
             escaped_long(alias.typeStructure.get()));
@@ -786,13 +834,37 @@ void print_alias(Output& out, const TypeAlias& alias) {
 
 void print_unit_strict_types(Output& out, const Unit* unit) {
   if (!RuntimeOption::PHP7_ScalarTypes) return;
-  if (unit->useStrictTypes()) out.fmtln(".strict 1;");
+  if (unit->useStrictTypesForBuiltins()) out.fmtln(".strict 1;");
   else out.fmtln(".strict 0;");
+}
+
+void print_hh_file(Output& out, const Unit* unit) {
+  out.nl();
+  if (unit->isHHFile()) out.fmtln(".hh_file 1;");
+  else out.fmtln(".hh_file 0;");
 }
 
 void print_unit_metadata(Output& out, const Unit* unit) {
   out.nl();
+
   out.fmtln(".filepath {};", escaped(unit->filepath()));
+  print_hh_file(out, unit);
+  auto const metaData = unit->metaData();
+  for (auto kv : metaData) {
+    if (isStringType(kv.second.m_type)) {
+      auto isBareWord = true;
+      auto isQuoted = true;
+      auto const str = kv.second.m_data.pstr;
+      for (auto ch : str->slice()) {
+        if (!is_bareword()(ch)) isBareWord = false;
+        if (ch < ' ' || ch == '"' || ch >= 0x7f) isQuoted = false;
+      }
+      out.fmtln(".metadata {} = {};",
+                kv.first,
+                isBareWord ? str->toCppString() :
+                isQuoted ? escaped(str) : escaped_long(str));
+    }
+  }
   for (auto i = size_t{0}; i < unit->numArrays(); ++i) {
     auto const ad = unit->lookupArrayId(i);
     out.fmtln(".adata A_{} = {};", i, escaped_long(ad));
@@ -807,6 +879,7 @@ void print_unit(Output& out, const Unit* unit) {
   print_unit_metadata(out, unit);
   for (auto* func : unit->funcs())        print_func(out, func);
   for (auto& cls : unit->preclasses())    print_cls(out, cls.get());
+  for (auto& rec : unit->records())       print_rec(out, rec.get());
   for (auto& alias : unit->typeAliases()) print_alias(out, alias);
   out.fmtln("# {} ends here", unit->filepath());
 }
@@ -820,8 +893,6 @@ void print_unit(Output& out, const Unit* unit) {
  * conjunction with as.cpp):
  *
  * - .line/.srcpos directives
- *
- * - Static locals.
  */
 
 std::string disassemble(const Unit* unit) {
@@ -829,6 +900,19 @@ std::string disassemble(const Unit* unit) {
   Output out { os };
   print_unit(out, unit);
   return os.str();
+}
+
+std::string user_attrs(const UserAttributeMap* attrsMap) {
+  if (!attrsMap || attrsMap->empty()) return "";
+
+  std::vector<std::string> attrs;
+
+  for (auto& entry : *attrsMap) {
+    attrs.push_back(
+      folly::format("{}({})", escaped(entry.first),
+                    escaped_long(entry.second)).str());
+  }
+  return folly::join(" ", attrs);
 }
 
 //////////////////////////////////////////////////////////////////////

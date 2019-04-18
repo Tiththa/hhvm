@@ -33,18 +33,17 @@ foreach ($various_arrays as $array) {
 
   echo "- With Default sort flag -\n";
   $temp_array = $array;
-  var_dump(sort($temp_array) ); // expecting : bool(true)
+  var_dump(sort(&$temp_array) ); // expecting : bool(true)
   var_dump($temp_array);
 
   // loop through $flags array and setting all possible flag values
   foreach($flags as $key => $flag){
     echo "- Sort flag = $key -\n";
     $temp_array = $array;
-    var_dump(sort($temp_array, $flag) ); // expecting : bool(true)
+    var_dump(sort(&$temp_array, $flag) ); // expecting : bool(true)
     var_dump($temp_array);
   }
   $count++;
 }
 
 echo "Done\n";
-?>

@@ -2,14 +2,14 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
 (* This module implements the typing for type_structure. *)
-open Core
+open Core_kernel
+open Common
 open Nast
 open Typing_defs
 
@@ -19,12 +19,13 @@ module Reason = Typing_reason
 module SN = Naming_special_names
 module Subst = Decl_subst
 module TUtils = Typing_utils
+module SubType = Typing_subtype
 
 let make_ts env ty =
   match Env.get_typedef env SN.FB.cTypeStructure with
   | Some {td_tparams; _} ->
       (* Typedef parameters can not have constraints *)
-      let params = List.map ~f:begin fun (_, (p, x), _) ->
+      let params = List.map ~f:begin fun { tp_name = (p,x); _ } ->
         Reason.Rwitness p, Tgeneric x
       end td_tparams in
       let ts = fst ty, Tapply ((Pos.none, SN.FB.cTypeStructure), params) in
@@ -35,26 +36,27 @@ let make_ts env ty =
       (* Should not hit this because TypeStructure should always be defined *)
       env, (fst ty, Tany)
 
-let rec transform_shapemap ?(nullable = false) env ty shape =
+let rec transform_shapemap ?(nullable = false) env pos ty shape =
+  let env, ty =
+    SubType.expand_type_and_solve ~description_of_expected:"a shape" env pos ty in
   let env, ty = TUtils.fold_unresolved env ty in
-  let env, ety = Env.expand_type env ty in
   (* If there are Tanys, be conservative and don't try to represent the
    * type more precisely
    *)
   if TUtils.HasTany.check ty then env, shape else
-  match ety with
+  match ty with
   | _, Toption ty ->
-      transform_shapemap ~nullable:true env ty shape
+      transform_shapemap ~nullable:true env pos ty shape
   | _ ->
       (* If the abstract type is unbounded we do not specialize at all *)
-      let is_unbound = match ety |> TUtils.get_base_type env |> snd with
+      let is_unbound = match ty |> TUtils.get_base_type env |> snd with
         (* An enum is considered a valid bound *)
         | Tabstract (AKenum _, _) -> false
         | Tabstract (_, None) -> true
         | _ -> false in
       if is_unbound then (env, shape) else
       let is_generic =
-        match snd ety with Tabstract (AKgeneric _, _) -> true | _ -> false in
+        match snd ty with Tabstract (AKgeneric _, _) -> true | _ -> false in
       let transform_shape_field field { sft_ty; _ } (env, shape) =
         let open Ast in
 
@@ -64,25 +66,25 @@ let rec transform_shapemap ?(nullable = false) env ty shape =
         let acc_field_with_type sft_ty =
           ShapeMap.add field { sft_optional = false; sft_ty } shape in
 
-        match field, sft_ty, TUtils.get_base_type env ety with
-        | SFlit (_, "nullable"), (_, Toption (fty)), _ when nullable ->
+        match field, sft_ty, TUtils.get_base_type env ty with
+        | SFlit_str (_, "nullable"), (_, Toption (fty)), _ when nullable ->
             env, acc_field_with_type fty
-        | SFlit (_, "nullable"), (_, Toption (fty)), (_, Toption _) ->
+        | SFlit_str (_, "nullable"), (_, Toption (fty)), (_, Toption _) ->
             env, acc_field_with_type fty
-        | SFlit (_, "classname"), (_, Toption (fty)),
+        | SFlit_str (_, "classname"), (_, Toption (fty)),
           (_, (Tclass _ | Tabstract (AKenum _, _))) ->
             env, acc_field_with_type fty
-        | SFlit (_, "elem_types"), _, (r, Ttuple tyl) ->
+        | SFlit_str (_, "elem_types"), _, (r, Ttuple tyl) ->
             let env, tyl = List.map_env env tyl make_ts in
             env, acc_field_with_type (r, Ttuple tyl)
-        | SFlit (_, "param_types"), _, (r, (Tfun funty)) ->
-            let tyl = List.map ~f:snd funty.ft_params in
+        | SFlit_str (_, "param_types"), _, (r, (Tfun funty)) ->
+            let tyl = List.map funty.ft_params (fun x -> x.fp_type) in
             let env, tyl = List.map_env env tyl make_ts in
             env, acc_field_with_type (r, Ttuple tyl)
-        | SFlit (_, "return_type"), _, (r, Tfun funty) ->
+        | SFlit_str (_, "return_type"), _, (r, Tfun funty) ->
             let env, ty = make_ts env funty.ft_ret in
             env, acc_field_with_type (r, Ttuple [ty])
-        | SFlit (_, "fields"), _, (r, Tshape (fk, fields)) ->
+        | SFlit_str (_, "fields"), _, (r, Tshape (fk, fields)) ->
             let env, fields = ShapeFieldMap.map_env make_ts env fields in
             env, acc_field_with_type (r, Tshape (fk, fields))
         (* For generics we cannot specialize the generic_types field. Consider:
@@ -96,23 +98,23 @@ let rec transform_shapemap ?(nullable = false) env ty shape =
          *
          * For test(TypeStructure<D>) there will not be a generic_types field
          *)
-        | SFlit (_, "generic_types"), _, _ when is_generic ->
+        | SFlit_str (_, "generic_types"), _, _ when is_generic ->
             env, acc_field_with_type sft_ty
-        | SFlit (_, "generic_types"), _, (r, Tarraykind (AKvec ty))
+        | SFlit_str (_, "generic_types"), _, (r, Tarraykind (AKvec ty))
               when not is_generic ->
             let env, ty = make_ts env ty in
             env, acc_field_with_type (r, Ttuple [ty])
-        | SFlit (_, "generic_types"), _,
+        | SFlit_str (_, "generic_types"), _,
           (r, Tarraykind (AKmap (ty1, ty2)))
               when not is_generic ->
             let tyl = [ty1; ty2] in
             let env, tyl = List.map_env env tyl make_ts in
             env, acc_field_with_type (r, Ttuple tyl)
-        | SFlit (_, "generic_types"), _, (r, Tclass (_, tyl))
+        | SFlit_str (_, "generic_types"), _, (r, Tclass (_, _, tyl))
               when List.length tyl > 0 ->
             let env, tyl = List.map_env env tyl make_ts in
             env, acc_field_with_type (r, Ttuple tyl)
-        | SFlit (_, ("kind" | "name" | "alias")), _, _ ->
+        | SFlit_str (_, ("kind" | "name" | "alias")), _, _ ->
             env, acc_field_with_type sft_ty
         | _, _, _ ->
             env, shape in

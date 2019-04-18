@@ -2,9 +2,8 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -16,9 +15,9 @@
  *)
 (*****************************************************************************)
 
-open Core
+open Core_kernel
 open Decl_defs
-open Nast
+open Shallow_decl_defs
 open Typing_defs
 
 module Inst = Decl_instantiate
@@ -29,7 +28,7 @@ module Inst = Decl_instantiate
 
 type inherited = {
   ih_substs   : subst_context SMap.t;
-  ih_cstr     : element option * bool (* consistency required *);
+  ih_cstr     : element option * consistent_kind;
   ih_consts   : class_const SMap.t ;
   ih_typeconsts : typeconst_type SMap.t ;
   ih_props    : element SMap.t ;
@@ -40,7 +39,7 @@ type inherited = {
 
 let empty = {
   ih_substs   = SMap.empty;
-  ih_cstr     = None, false;
+  ih_cstr     = None, Inconsistent;
   ih_consts   = SMap.empty;
   ih_typeconsts = SMap.empty;
   ih_props    = SMap.empty;
@@ -106,54 +105,51 @@ let add_const name const acc =
 let add_members members acc =
   SMap.fold SMap.add members acc
 
-let is_abstract_typeconst x = x.ttc_type = None
-
-let can_override_typeconst x =
-  (is_abstract_typeconst x) || x.ttc_constraint <> None
-
 let add_typeconst name sig_ typeconsts =
   match SMap.get name typeconsts with
   | None ->
       (* The type constant didn't exist so far, let's add it *)
       SMap.add name sig_ typeconsts
-  (* This covers the following case
-   *
-   * interface I1 { abstract const type T; }
-   * interface I2 { const type T = int; }
-   *
-   * class C implements I1, I2 {}
-   *
-   * Then C::T == I2::T since I2::T is not abstract
-   *)
-  | Some old_sig
-    when not (is_abstract_typeconst old_sig) && (is_abstract_typeconst sig_) ->
+  | Some old_sig ->
+    let open Nast in
+    match old_sig.ttc_abstract, sig_.ttc_abstract with
+    (* This covers the following case
+     *
+     * interface I1 { abstract const type T; }
+     * interface I2 { const type T = int; }
+     *
+     * class C implements I1, I2 {}
+     *
+     * Then C::T == I2::T since I2::T is not abstract
+     *)
+    | TCConcrete, TCAbstract _
+    | TCPartiallyAbstract, TCAbstract _ ->
       typeconsts
-  (* This covers the following case
-   *
-   * abstract P { const type T as arraykey = arraykey; }
-   * interface I { const type T = int; }
-   *
-   * class C extends P implements I {}
-   *
-   * Then C::T == I::T since P::T has a constraint and thus can be overridden
-   * by it's child, while I::T cannot be overridden.
-   *)
-  | Some old_sig
-    when not (can_override_typeconst old_sig) && (can_override_typeconst sig_) ->
+    (* This covers the following case
+     *
+     * abstract P { const type T as arraykey = arraykey; }
+     * interface I { const type T = int; }
+     *
+     * class C extends P implements I {}
+     *
+     * Then C::T == I::T since P::T has a constraint and thus can be overridden
+     * by it's child, while I::T cannot be overridden.
+     *)
+    | TCConcrete, TCPartiallyAbstract ->
       typeconsts
-  (* When a type constant is declared in multiple parents we need to make a
-   * subtle choice of what type we inherit. For example in:
-   *
-   * interface I1 { abstract const type t as Container<int>; }
-   * interface I2 { abstract const type t as KeyedContainer<int, int>; }
-   * abstract class C implements I1, I2 {}
-   *
-   * Depending on the order the interfaces are declared, we may report an error.
-   * Since this could be confusing there is special logic in Typing_extends that
-   * checks for this potentially ambiguous situation and warns the programmer to
-   * explicitly declare T in C.
-   *)
-  | _ ->
+    | _, _ ->
+     (* When a type constant is declared in multiple parents we need to make a
+      * subtle choice of what type we inherit. For example in:
+      *
+      * interface I1 { abstract const type t as Container<int>; }
+      * interface I2 { abstract const type t as KeyedContainer<int, int>; }
+      * abstract class C implements I1, I2 {}
+      *
+      * Depending on the order the interfaces are declared, we may report an error.
+      * Since this could be confusing there is special logic in Typing_extends that
+      * checks for this potentially ambiguous situation and warns the programmer to
+      * explicitly declare T in C.
+      *)
       SMap.add name sig_ typeconsts
 
 let add_constructor (cstr, cstr_consist) (acc, acc_consist) =
@@ -162,7 +158,7 @@ let add_constructor (cstr, cstr_consist) (acc, acc_consist) =
     | Some ce, Some acce when should_keep_old_sig ce acce ->
       acc
     | _ -> cstr
-  in ce, cstr_consist || acc_consist
+  in ce, Decl_utils.coalesce_consistent acc_consist cstr_consist
 
 let add_inherited inherited acc = {
   ih_substs = SMap.merge begin fun _ sub old_sub ->
@@ -196,6 +192,35 @@ let add_inherited inherited acc = {
   ih_smethods = add_methods inherited.ih_smethods acc.ih_smethods;
 }
 
+let remove_trait_redeclared (methods, smethods) m =
+  let (pos, trait, _) = Decl_utils.unwrap_class_hint m.smr_trait in
+  let (_, trait_method) = m.smr_method in
+
+  let remove_from map =
+    match SMap.get trait_method map with
+    | Some decls ->
+      let decls = List.filter ~f:(fun d -> d.elt_origin <> trait) decls in
+      SMap.add trait_method decls map
+    | None ->
+      Errors.redeclaring_missing_method pos trait_method;
+      map in
+
+  if m.smr_static
+  then (methods, remove_from smethods)
+  else (remove_from methods, smethods)
+
+
+let collapse_trait_inherited methods smethods acc =
+  let collapse_methods name sigs acc =
+    (* fold_right because when traits get considered in order
+     * T1, T2, T3, the list will be built up as [T3::f; T2::f; T1::f],
+     * so this way we still call add_method in the declared order *)
+    List.fold_right sigs ~f:(add_method name) ~init:acc in
+  { acc with
+    ih_methods  = SMap.fold collapse_methods methods acc.ih_methods;
+    ih_smethods = SMap.fold collapse_methods smethods acc.ih_smethods;
+  }
+
 (*****************************************************************************)
 (* Helpers *)
 (*****************************************************************************)
@@ -221,6 +246,7 @@ let mark_as_synthesized inh =
     ih_sprops   = SMap.map mark_elt inh.ih_sprops;
     ih_methods  = SMap.map mark_elt inh.ih_methods;
     ih_smethods = SMap.map mark_elt inh.ih_smethods;
+    ih_consts = SMap.map (fun const -> { const with cc_synthesized = true } ) inh.ih_consts;
   }
 
 (*****************************************************************************)
@@ -229,6 +255,7 @@ let mark_as_synthesized inh =
 
 let filter_privates class_type =
   let is_not_private _ elt = match elt.elt_visibility with
+    | Vprivate _ when elt.elt_lsb -> true
     | Vprivate _ -> false
     | Vpublic | Vprotected _ -> true
   in
@@ -263,10 +290,10 @@ let inherit_hack_class env c p class_name class_type argl =
     match class_type.dc_kind with
     | Ast.Ctrait ->
         (* Change the private visibility to point to the inheriting class *)
-        chown_privates (snd c.c_name) class_type
+        chown_privates (snd c.sc_name) class_type
     | Ast.Cnormal | Ast.Cabstract | Ast.Cinterface ->
         filter_privates class_type
-    | Ast.Cenum -> class_type
+    | Ast.Cenum | Ast.Crecord -> class_type
   in
   let typeconsts = SMap.map (Inst.instantiate_typeconst subst)
     class_type.dc_typeconsts in
@@ -278,7 +305,7 @@ let inherit_hack_class env c p class_name class_type argl =
   let cstr     = Decl_env.get_construct env class_type in
   let subst_ctx = {
     sc_subst = subst;
-    sc_class_context = snd c.c_name;
+    sc_class_context = snd c.sc_name;
     sc_from_req_extends = false;
   } in
   let substs = SMap.add class_name subst_ctx class_type.dc_substs in
@@ -320,9 +347,8 @@ let inherit_hack_xhp_attrs_only class_type =
 
 (*****************************************************************************)
 
-let from_class env c hint =
-  let pos, class_name, class_params = Decl_utils.unwrap_class_hint hint in
-  let class_params = List.map class_params (Decl_hint.hint env) in
+let from_class env c ty =
+  let _, (pos, class_name), class_params = Decl_utils.unwrap_class_type ty in
   let class_type = Decl_env.get_class_dep env class_name in
   match class_type with
   | None ->
@@ -333,9 +359,8 @@ let from_class env c hint =
     inherit_hack_class env c pos class_name class_ class_params
 
 (* mostly copy paste of from_class *)
-let from_class_constants_only env hint =
-  let pos, class_name, class_params = Decl_utils.unwrap_class_hint hint in
-  let class_params = List.map class_params (Decl_hint.hint env) in
+let from_class_constants_only env ty =
+  let _, (pos, class_name), class_params = Decl_utils.unwrap_class_type ty in
   let class_type = Decl_env.get_class_dep env class_name in
   match class_type with
   | None ->
@@ -345,8 +370,8 @@ let from_class_constants_only env hint =
     (* The class lives in Hack *)
     inherit_hack_class_constants_only pos class_name class_ class_params
 
-let from_class_xhp_attrs_only env hint =
-  let _pos, class_name, _class_params = Decl_utils.unwrap_class_hint hint in
+let from_class_xhp_attrs_only env ty =
+  let _, (_pos, class_name), _class_params = Decl_utils.unwrap_class_type ty in
   let class_type = Decl_env.get_class_dep env class_name in
   match class_type with
   | None ->
@@ -362,10 +387,10 @@ let from_parent env c =
      * will be implemented in the future, so we take them as
      * part of the class (as requested by dependency injection implementers)
      *)
-    match c.c_kind with
-      | Ast.Cabstract -> c.c_implements @ c.c_extends
-      | Ast.Ctrait -> c.c_implements @ c.c_extends @ c.c_req_implements
-      | _ -> c.c_extends
+    match c.sc_kind with
+      | Ast.Cabstract -> c.sc_implements @ c.sc_extends
+      | Ast.Ctrait -> c.sc_implements @ c.sc_extends @ c.sc_req_implements
+      | _ -> c.sc_extends
   in
   let inherited_l = List.map extends (from_class env c) in
   List.fold_right ~f:add_inherited inherited_l ~init:empty
@@ -375,9 +400,18 @@ let from_requirements env c acc reqs =
   let inherited = mark_as_synthesized inherited in
   add_inherited inherited acc
 
-let from_trait env c acc uses =
-  let inherited = from_class env c uses in
-  add_inherited inherited acc
+let from_trait env c (acc, methods, smethods) uses =
+  let { ih_methods; ih_smethods; _ } as inherited =
+    from_class env c uses in
+  let inherited = { inherited with ih_methods = SMap.empty; ih_smethods = SMap.empty } in
+
+  let extend_methods name sig_ methods =
+    let sigs = Option.value ~default:[] (SMap.find_opt name methods) in
+    SMap.add name (sig_ :: sigs) methods in
+  let methods = SMap.fold extend_methods ih_methods methods in
+  let smethods = SMap.fold extend_methods ih_smethods smethods in
+
+  (add_inherited inherited acc, methods, smethods)
 
 let from_xhp_attr_use env acc uses =
   let inherited = from_class_xhp_attrs_only env uses in
@@ -395,16 +429,22 @@ let make env c =
   (* members inherited from parent class ... *)
   let acc = from_parent env c in
   let acc = List.fold_left ~f:(from_requirements env c)
-    ~init:acc c.c_req_extends in
+    ~init:acc c.sc_req_extends in
   (* ... are overridden with those inherited from used traits *)
-  let acc = List.fold_left ~f:(from_trait env c) ~init:acc c.c_uses in
+  let (acc, methods, smethods) = List.fold_left
+    ~f:(from_trait env c)
+    ~init:(acc, SMap.empty, SMap.empty)
+    c.sc_uses in
+  let (methods, smethods) = List.fold_left ~f:remove_trait_redeclared
+    ~init:(methods, smethods) c.sc_method_redeclarations in
+  let acc = collapse_trait_inherited methods smethods acc in
   let acc = List.fold_left ~f:(from_xhp_attr_use env)
-    ~init:acc c.c_xhp_attr_uses in
+    ~init:acc c.sc_xhp_attr_uses in
   (* todo: what about the same constant defined in different interfaces
    * we implement? We should forbid and say "constant already defined".
    * to julien: where is the logic that check for duplicated things?
    * todo: improve constant handling, see task #2487051
    *)
   let acc = List.fold_left ~f:(from_interface_constants env)
-    ~init:acc c.c_req_implements in
-  List.fold_left ~f:(from_interface_constants env) ~init:acc c.c_implements
+    ~init:acc c.sc_req_implements in
+  List.fold_left ~f:(from_interface_constants env) ~init:acc c.sc_implements

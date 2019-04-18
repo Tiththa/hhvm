@@ -21,19 +21,18 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/memory-manager.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/system-profiler.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/zend-math.h"
 #include "hphp/runtime/ext/extension-registry.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/std/ext_std_misc.h"
-#include "hphp/runtime/ext/xdebug/xdebug_profiler.h"
 #include "hphp/runtime/vm/event-hook.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/cycles.h"
-#include "hphp/util/vdso.h"
+#include "hphp/util/timer.h"
 
 #include <iostream>
 #include <fstream>
@@ -239,15 +238,14 @@ to_usec(int64_t cycles, int64_t MHz, bool cpu_time = false)
 }
 
 static inline uint64_t cpuTime(int64_t /*MHz*/) {
-  return vdso::clock_gettime_ns(CLOCK_THREAD_CPUTIME_ID);
+  return gettime_ns(CLOCK_THREAD_CPUTIME_ID);
 }
 
 uint64_t
 get_allocs()
 {
 #ifdef USE_JEMALLOC
-  auto& mm = MM();
-  return mm.getAllocated();
+  return tl_heap->getAllocated();
 #endif
 #ifdef USE_TCMALLOC
   if (MallocExtensionInstance) {
@@ -264,8 +262,7 @@ uint64_t
 get_frees()
 {
 #ifdef USE_JEMALLOC
-  auto& mm = MM();
-  return mm.getDeallocated();
+  return tl_heap->getDeallocated();
 #endif
 #ifdef USE_TCMALLOC
   if (MallocExtensionInstance) {
@@ -486,7 +483,7 @@ private:
     int64_t         m_vtsc_start;  // user/sys time start
   };
 
-  typedef hphp_hash_map<std::string, CountMap, string_hash> StatsMap;
+  using StatsMap = hphp_hash_map<std::string, CountMap, string_hash>;
   StatsMap m_stats; // outcome
 
 public:
@@ -507,7 +504,7 @@ public:
     }
 
     if (m_flags & TrackMemory) {
-      auto const stats = MM().getStats();
+      auto const stats = tl_heap->getStats();
       frame->m_mu_start  = stats.usage();
       frame->m_pmu_start = stats.peakUsage;
     } else if (m_flags & TrackMalloc) {
@@ -531,7 +528,7 @@ public:
     }
 
     if (m_flags & TrackMemory) {
-      auto const stats = MM().getStats();
+      auto const stats = tl_heap->getStats();
       int64_t mu_end = stats.usage();
       int64_t pmu_end = stats.peakUsage;
       counts.memory += mu_end - frame->m_mu_start;
@@ -620,7 +617,7 @@ struct TraceWalker {
     // off. This ensures main() represents the entire run, even if we
     // run out of log space.
     if (!m_stack.empty()) {
-      assert(strcmp(m_stack.back().trace->symbol, "main()") == 0);
+      assertx(strcmp(m_stack.back().trace->symbol, "main()") == 0);
       incStats(m_stack.back().trace->symbol, final, m_stack.back(), stats);
     }
     if (m_badArcCount > 0) {
@@ -751,14 +748,14 @@ struct TraceProfiler final : Profiler {
     } else {
       m_maxTraceBuffer = RuntimeOption::ProfilerMaxTraceBuffer;
       Extension* ext = ExtensionRegistry::get(s_hotprofiler);
-      assert(ext);
+      assertx(ext);
       IniSetting::Bind(ext, IniSetting::PHP_INI_ALL,
                        "profiler.max_trace_buffer",
                        &m_maxTraceBuffer);
     }
   }
 
-  ~TraceProfiler() {
+  ~TraceProfiler() override {
     if (m_successful) {
       free(m_traceBuffer);
       IniSetting::Unbind("profiler.max_trace_buffer");
@@ -832,7 +829,7 @@ struct TraceProfiler final : Profiler {
                    m_traceBuffer[m_nextTraceEntry++]);
     }
     {
-      MemoryManager::MaskAlloc masker(MM());
+      MemoryManager::MaskAlloc masker(*tl_heap);
       auto r = (TraceEntry*)realloc((void*)m_traceBuffer,
                                     new_array_size * sizeof(TraceEntry));
 
@@ -883,7 +880,7 @@ struct TraceProfiler final : Profiler {
       te.cpu = cpuTime(m_MHz);
     }
     if (m_flags & TrackMemory) {
-      auto const stats = MM().getStats();
+      auto const stats = tl_heap->getStats();
       te.memory = stats.usage();
       te.peak_memory = stats.peakUsage;
     } else if (m_flags & TrackMalloc) {
@@ -961,7 +958,7 @@ struct TraceProfiler final : Profiler {
     int64_t count;
     CountedTraceData() : count(0)  { clear(); }
   };
-  typedef hphp_hash_map<std::string, CountedTraceData, string_hash> StatsMap;
+  using StatsMap = hphp_hash_map<std::string, CountedTraceData, string_hash>;
   StatsMap m_stats; // outcome
 
   static pthread_mutex_t s_inUse;
@@ -1104,7 +1101,7 @@ private:
 struct MemoProfiler final : Profiler {
   explicit MemoProfiler(int /*flags*/) : Profiler(true) {}
 
-  ~MemoProfiler() {
+  ~MemoProfiler() override {
   }
 
  private:
@@ -1120,7 +1117,7 @@ struct MemoProfiler final : Profiler {
         VariableSerializer vs(VariableSerializer::Type::DebuggerSerialize);
         String sdata;
         try {
-          sdata = vs.serialize(args, true);
+          sdata = vs.serialize(VarNR{args}, true);
           f.m_args = sdata;
         } catch (...) {
           fprintf(stderr, "Args Serialization failure: %s\n", symbol);
@@ -1150,7 +1147,6 @@ struct MemoProfiler final : Profiler {
     ActRec *ar = vmfp();
     // Lots of random cases to skip just to keep this simple for
     // now. There's no reason not to do more later.
-    if (!g_context->m_faults.empty()) return;
     if (ar->m_func->isCPPBuiltin() || ar->resumed()) return;
     auto ret = tvAsCVarRef(retval);
     if (ret.isNull()) return;
@@ -1302,9 +1298,6 @@ bool ProfilerFactory::start(ProfilerKind kind,
   case ProfilerKind::Memo:
     m_profiler = req::make_raw<MemoProfiler>(flags);
     break;
-  case ProfilerKind::XDebug:
-    m_profiler = req::make_raw<XDebugProfiler>();
-    break;
   case ProfilerKind::External:
     if (g_system_profiler) {
       m_profiler = g_system_profiler->getHotProfiler();
@@ -1323,7 +1316,7 @@ bool ProfilerFactory::start(ProfilerKind kind,
   if (m_profiler && m_profiler->m_successful) {
     // This will be disabled automatically when the thread completes the request
     HPHP::EventHook::Enable();
-    ThreadInfo::s_threadInfo->m_profiler = m_profiler;
+    RequestInfo::s_requestInfo->m_profiler = m_profiler;
     if (beginFrame) {
       m_profiler->beginFrame("main()");
     }
@@ -1342,7 +1335,7 @@ Variant ProfilerFactory::stop() {
     m_profiler->writeStats(ret);
     req::destroy_raw(m_profiler);
     m_profiler = nullptr;
-    ThreadInfo::s_threadInfo->m_profiler = nullptr;
+    RequestInfo::s_requestInfo->m_profiler = nullptr;
 
     return ret;
   }

@@ -5,7 +5,7 @@ $start_element = function ($xp, $elem, $attribs)
 {
 	print "<$elem";
 	if (sizeof($attribs)) {
-		while (list($k, $v) = each($attribs)) {
+		while (list($k, $v) = each(&$attribs)) {
 			print " $k=\"$v\"";
 		}
 	}
@@ -26,4 +26,3 @@ while ($data = fread($fp, 4096)) {
 }
 xml_parser_free($xp);
 
-?>

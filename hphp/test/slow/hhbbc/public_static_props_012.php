@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Foo {
   static $y = 'asd';
@@ -16,9 +16,17 @@ class B extends IDunno {
 
 function go(IDunno $idunno) {
   var_dump(is_string(Foo::$y));
-  $idunno->x(Foo::$y);
+  if ($idunno is A) {
+    $idunno->x(&Foo::$y);
+  } else {
+    $idunno->x(Foo::$y);
+  }
   var_dump(is_string(Foo::$y));
 }
 
+
+<<__EntryPoint>>
+function main_public_static_props_012() {
 go(new B);
 go(new A);
+}

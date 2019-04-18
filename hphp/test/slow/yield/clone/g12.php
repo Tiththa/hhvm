@@ -1,25 +1,25 @@
 <?php
 
-function foo($a, &$b) {
-  $var1 = 'x';
-  $var2 = 'y';
-  $$var1 = $a;
-  $$var2 =& $b;
+function foo($a, &$b, &$y) {
+  $x = $a;
   unset($a);
   unset($b);
-  $$var1 += 10;
-  $$var2 += 100;
-  yield $$var1 * 10000 + $$var2;
-  $$var1 += 20;
-  $$var2 += 200;
-  yield $$var1 * 10000 + $$var2;
-  $$var1 += 30;
-  $$var2 += 300;
-  yield $$var1 * 10000 + $$var2;
+  $x += 10;
+  $y += 100;
+  yield $x * 10000 + $y;
+  $x += 20;
+  $y += 200;
+  yield $x * 10000 + $y;
+  $x += 30;
+  $y += 300;
+  yield $x * 10000 + $y;
 }
+
+<<__EntryPoint>>
+function main_g12() {
 $a1 = 1;
 $a2 = -999999999;
-$x = foo($a1, $a2);
+$x = foo($a1, &$a2, &$a2);
 $a2 = 2;
 $x->rewind();
 $y1 = clone $x;
@@ -53,3 +53,4 @@ for ($x->next(); $x->valid(); $x->next()) {
 }
 echo "--------\n";
 var_dump($a1, $a2);
+}

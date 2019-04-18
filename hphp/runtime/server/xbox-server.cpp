@@ -105,9 +105,8 @@ String XboxTransport::getResults(int &code, int timeout_ms /* = 0 */) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static IMPLEMENT_THREAD_LOCAL(std::shared_ptr<XboxServerInfo>,
-  s_xbox_server_info);
-static IMPLEMENT_THREAD_LOCAL(std::string, s_xbox_prev_req_init_doc);
+static THREAD_LOCAL(std::shared_ptr<XboxServerInfo>, s_xbox_server_info);
+static THREAD_LOCAL(std::string, s_xbox_prev_req_init_doc);
 
 struct XboxRequestHandler : RPCRequestHandler {
   XboxRequestHandler() : RPCRequestHandler(
@@ -117,14 +116,14 @@ struct XboxRequestHandler : RPCRequestHandler {
 
 bool XboxRequestHandler::Info = false;
 
-static IMPLEMENT_THREAD_LOCAL(XboxRequestHandler, s_xbox_request_handler);
+static THREAD_LOCAL(XboxRequestHandler, s_xbox_request_handler);
 
 ///////////////////////////////////////////////////////////////////////////////
 
 struct XboxWorker
   : JobQueueWorker<XboxTransport*,Server*,true,false,JobQueueDropVMStack>
 {
-  virtual void doJob(XboxTransport *job) {
+  void doJob(XboxTransport *job) override {
     try {
       // If this job or the previous job that ran on this thread have
       // a custom initial document, make sure we do a reset
@@ -157,7 +156,7 @@ private:
     }
   }
 
-  virtual void onThreadExit() {
+  void onThreadExit() override {
     if (!s_xbox_request_handler.isNull()) {
       s_xbox_request_handler.destroy();
     }
@@ -177,6 +176,7 @@ void XboxServer::Restart() {
       Lock l(s_dispatchMutex);
       s_dispatcher = new JobQueueDispatcher<XboxWorker>
         (RuntimeOption::XboxServerThreadCount,
+         RuntimeOption::XboxServerThreadCount,
          RuntimeOption::ServerThreadDropCacheTimeoutSeconds,
          RuntimeOption::ServerThreadDropStack,
          nullptr);
@@ -189,13 +189,14 @@ void XboxServer::Restart() {
 }
 
 void XboxServer::Stop() {
-  if (s_dispatcher) {
-    s_dispatcher->stop();
+  if (!s_dispatcher) return;
 
-    Lock l(s_dispatchMutex);
-    delete s_dispatcher;
-    s_dispatcher = nullptr;
-  }
+  Lock l(s_dispatchMutex);
+  if (!s_dispatcher) return;
+
+  s_dispatcher->stop();
+  delete s_dispatcher;
+  s_dispatcher = nullptr;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -226,7 +227,7 @@ bool XboxServer::SendMessage(const String& message,
       job = new XboxTransport(message.toCppString());
       job->incRefCount(); // paired with worker's decRefCount()
       job->incRefCount(); // paired with decRefCount() at below
-      assert(s_dispatcher);
+      assertx(s_dispatcher);
       s_dispatcher->enqueue(job);
     }
 
@@ -241,7 +242,13 @@ bool XboxServer::SendMessage(const String& message,
     if (code > 0) {
       ret.set(s_code, code);
       if (code == 200) {
-        ret.set(s_response, unserialize_from_string(response));
+        ret.set(
+          s_response,
+          unserialize_from_string(
+            response,
+            VariableUnserializer::Type::Internal
+          )
+        );
       } else {
         ret.set(s_error, response);
       }
@@ -273,7 +280,13 @@ bool XboxServer::SendMessage(const String& message,
         String sresponse(response, len, AttachString);
         ret.set(s_code, code);
         if (code == 200) {
-          ret.set(s_response, unserialize_from_string(sresponse));
+          ret.set(
+            s_response,
+            unserialize_from_string(
+              sresponse,
+              VariableUnserializer::Type::Internal
+            )
+          );
         } else {
           ret.set(s_error, sresponse);
         }
@@ -298,7 +311,7 @@ bool XboxServer::PostMessage(const String& message,
 
     XboxTransport *job = new XboxTransport(message.toCppString());
     job->incRefCount(); // paired with worker's decRefCount()
-    assert(s_dispatcher);
+    assertx(s_dispatcher);
     s_dispatcher->enqueue(job);
     return true;
 
@@ -318,7 +331,15 @@ bool XboxServer::PostMessage(const String& message,
         int len = 0;
         char *response = http->recv(len);
         String sresponse(response, len, AttachString);
-        if (code == 200 && same(unserialize_from_string(sresponse), true)) {
+        if (code == 200 &&
+            same(
+              unserialize_from_string(
+                sresponse,
+                VariableUnserializer::Type::Internal
+              ),
+              true
+            )
+           ) {
           return true;
         }
       }
@@ -338,7 +359,7 @@ struct XboxTask : SweepableResourceData {
     m_job->incRefCount();
   }
 
-  ~XboxTask() {
+  ~XboxTask() override {
     m_job->decRefCount();
   }
 
@@ -379,7 +400,7 @@ Resource XboxServer::TaskStart(const String& msg,
         event->setJob(job);
       }
 
-      assert(s_dispatcher);
+      assertx(s_dispatcher);
       s_dispatcher->enqueue(job);
 
       return Resource(std::move(task));
@@ -409,7 +430,7 @@ void XboxServer::TaskStartFromNonRequest(
         XboxTransport *job = new XboxTransport(msg, reqInitDoc);
         job->incRefCount(); // paired with worker's decRefCount()
 
-        assert(s_dispatcher);
+        assertx(s_dispatcher);
         s_dispatcher->enqueue(job);
         return;
       }
@@ -436,7 +457,8 @@ int XboxServer::TaskResult(XboxTransport *job, int timeout_ms, Variant *ret) {
   String response = job->getResults(code, timeout_ms);
   if (ret) {
     if (code == 200) {
-      *ret = unserialize_from_string(response);
+      *ret =
+        unserialize_from_string(response, VariableUnserializer::Type::Internal);
     } else {
       *ret = response;
     }

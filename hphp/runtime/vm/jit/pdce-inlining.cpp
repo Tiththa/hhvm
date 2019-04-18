@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2015 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -30,7 +30,7 @@ of a catch trace, where the unwinder will have to walk the callee frame and
 inspect its live ActRec.
 
 In particular notice that any instructions which may raise, as well as Call,
-CallArray, and CallBuiltin all require catch traces. Many of these instructions
+CallUnpack, and CallBuiltin all require catch traces. Many of these instructions
 can be found within very simple callees and without such a pass would require
 that the callee's frame be stored to the stack and the frame pointer be updated
 to reference it.
@@ -167,10 +167,7 @@ An additional EagerSyncVMRegs is inserted following EndCatch in catch traces to
 ensure that the callee frame is visited by the unwinder.
 */
 
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
+#include "hphp/runtime/vm/jit/containers.h"
 #include "hphp/runtime/vm/jit/cfg.h"
 #include "hphp/runtime/vm/jit/dce.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
@@ -185,10 +182,10 @@ namespace {
 
 TRACE_SET_MOD(pdce_inline);
 
-using InstructionList = std::vector<IRInstruction*>;
-using InstructionSet = std::unordered_set<IRInstruction*>;
-using FPUseMap = std::unordered_map<SSATmp*, InstructionSet>;
-using FPMap = std::unordered_map<Block*, SSATmp*>;
+using InstructionList = jit::vector<IRInstruction*>;
+using InstructionSet = jit::fast_set<IRInstruction*>;
+using FPUseMap = jit::fast_map<SSATmp*, InstructionSet>;
+using FPMap = jit::fast_map<Block*, SSATmp*>;
 
 struct InlineAnalysis {
   IRUnit* unit;
@@ -207,7 +204,7 @@ struct InlineAnalysis {
    * Map fp -> set, where all blocks in set exit the unit while still within the
    * the inlined region for fp.
    */
-  std::unordered_map<SSATmp*, BlockSet> exitBlocks;
+  jit::fast_map<SSATmp*, BlockSet> exitBlocks;
 };
 
 struct OptimizeContext {
@@ -249,6 +246,12 @@ struct OptimizeContext {
    * region.
    */
   FPMap fpMap;
+
+  /*
+   * If the region contains an InitCtx with a *constant* value it can be pushed
+   * into a side exit along with the DefInlineFP.
+   */
+  const IRInstruction* initCtx{nullptr};
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -260,16 +263,21 @@ struct BlockInfo {
 };
 
 /*
- * These instructions all read from the ActRec. In particular all three can call
+ * The Verify* instructions all read from the ActRec. In particular all can call
  * through to VerifyParamFail, which can read locals from the frame, check the
  * weak types flag on the ActRec; The other two can also check is_callable which
  * may read the context from the frame.
  *
+ * InitThrowableFileAndLine reads the current ActRec, and asserts
+ * that it's a builtin frame.
+ *
  * TODO(#9876771): these should be cleaned up.
  */
 bool isDangerousActRecInst(IRInstruction& inst) {
+  if (debug && inst.is(InitThrowableFileAndLine)) return true;
   return inst.is(VerifyParamCls, VerifyParamCallable,
-                 VerifyParamFail, VerifyRetFail);
+                 VerifyParamFail, VerifyRetFail,
+                 VerifyReifiedLocalType, VerifyReifiedReturnType);
 }
 
 /*
@@ -286,7 +294,7 @@ InlineAnalysis analyze(IRUnit& unit) {
 
   // Exit blocks are all associated with FPs that are defined on the main trace
   // as part of a DefInlineFP/InlineReturn pair (mainFPs)
-  std::unordered_set<SSATmp*> mainFPs;
+  jit::fast_set<SSATmp*> mainFPs;
 
   auto addFPUse = [&] (IRInstruction& inst, SSATmp* use) {
     auto it = ia.fpUses.find(use);
@@ -308,6 +316,20 @@ InlineAnalysis analyze(IRUnit& unit) {
         ia.inlineReturns.push_back(&inst);
         mainFPs.insert(inst.src(0));
         ITRACE(2, "Found InlineReturn (depth = {}, fp = {}): {}\n",
+               depth, inst, *fpInst->dst());
+      } else if (inst.is(InlineSuspend)) {
+        assertx(depth && fpInst->is(DefInlineFP));
+        assertx(fpInst == inst.src(0)->inst());
+
+        // Note that even though this block isn't necessarily an exit, we treat
+        // it as though it were an exit block for this FP, as we will need to
+        // sink the DefInlineFP to here.
+        addFPUse(inst, inst.src(0));
+        ia.exitBlocks[fpInst->dst()].insert(info.block);
+
+        depth--;
+        fpInst = fpInst->src(1)->inst();
+        ITRACE(2, "Found InlineSuspend (depth = {}, fp = {}): {}\n",
                depth, inst, *fpInst->dst());
       } else if (inst.is(DefFP)) {
         assertx(!depth && !fpInst);
@@ -366,31 +388,42 @@ InlineAnalysis analyze(IRUnit& unit) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void replace(IRInstruction& inst, SSATmp* oldSrc, SSATmp* newSrc) {
+bool replaceFP(IRInstruction& inst, SSATmp* oldSrc, SSATmp* newSrc) {
+  bool replaced = false;
   for (int i = 0; i < inst.numSrcs(); ++i) {
     if (inst.src(i) == oldSrc) {
       ITRACE(5, "Replacing use (oldFp = {}, newFp = {}); {}\n",
              *oldSrc, *newSrc, inst);
       inst.setSrc(i, newSrc);
+      replaced = true;
     }
   }
+  return replaced;
 }
 
-void replace(Block* block, SSATmp* oldSrc, SSATmp* newSrc, FPUseMap& map) {
-  ITRACE(4, "replace(): oldFp = {}, newFp = {}\n", *oldSrc, *newSrc);
+/**
+ * Replace uses of DefInlineFP in the block. Returns true iff this block returns
+ * from the inlined callee into the caller.
+ */
+bool replaceFP(Block* block, SSATmp* oldSrc, SSATmp* newSrc, FPUseMap& map) {
+  ITRACE(4, "replaceFP(): oldFp = {}, newFp = {}\n", *oldSrc, *newSrc);
   Trace::Indent _i;
 
-  if (oldSrc == newSrc) return;
+  assertx(oldSrc != newSrc);
 
   for (auto& inst : *block) {
-    replace(inst, oldSrc, newSrc);
+    auto const replaced = replaceFP(inst, oldSrc, newSrc);
     // Intentionally only adjusting the fp here, as the stack offsets should be
     // unchanged in places where we've sunk the DefInlineFP
     if (inst.marker().fp() == oldSrc) {
       inst.marker() = inst.marker().adjustFP(newSrc);
     }
     if (map.count(oldSrc)) map[oldSrc].erase(&inst);
+    assertx(!(replaced && inst.is(InlineReturn)));
+    if (replaced && inst.is(InlineSuspend)) return true;
   }
+
+  return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -404,7 +437,8 @@ bool canConvertToStack(IRInstruction& inst) {
 }
 
 bool canRewriteToParent(const IRInstruction& inst) {
-  return inst.is(LdClsRef, StClsRef, KillClsRef);
+  return inst.is(LdClsRefCls, LdClsRefTS, StClsRefCls, StClsRefTS,
+                 KillClsRefCls, KillClsRefTS);
 }
 
 /*
@@ -420,15 +454,15 @@ bool canAdjustFrame(IRInstruction& inst) {
    * caller frame (e.g. for the value of m_thisOrClass). If these functions
    * are called we cannot elide the inlined frame.
    *
-   * TODO(#9876778): we should be able to support CallArray here as well.
+   * TODO(#9876778): we should be able to support CallUnpack here as well.
    */
   case CallBuiltin: {
     auto data = inst.extra<CallBuiltin>();
-    return !data->writeLocals && !data->needsCallerFrame;
+    return !data->needsCallerFrame;
   }
   case Call: {
     auto data = inst.extra<Call>();
-    return !data->writeLocals && !data->needsCallerFrame;
+    return !data->needsCallerFrame;
   }
   default: break;
   }
@@ -464,20 +498,20 @@ void adjustFrame(IRUnit& unit,
                  SSATmp* newFp) {
   assertx(canAdjustFrame(inst));
 
-  replace(inst, oldFp, newFp);
+  replaceFP(inst, oldFp, newFp);
   if (!inst.is(Call)) return;
   /*
    * At various points we may walk the rbp chain to do such things as generate
-   * backtraces. Occasionally we look at m_soff and expect it to refer to
+   * backtraces. Occasionally we look at m_callOff and expect it to refer to
    * an offset in m_sfp->m_func, which won't be the case if we've dropped frames
-   * for inlining. To avoid this problem we update the return BC offset to refer
+   * for inlining. To avoid this problem we update the call BC offset to refer
    * to the outer frame and fix it up in the catch trace when we restore the
    * rbp chain.
    */
   auto extra = inst.extra<Call>();
-  auto const after = extra->after;
+  auto const callOffset = extra->callOffset;
   auto const sk = findCallSK(*oldFp->inst());
-  extra->after = sk.advanced().offset() - sk.func()->base();
+  extra->callOffset = sk.offset() - sk.func()->base();
 
   auto catchBlock = inst.taken();
   assertx(catchBlock && catchBlock->isCatch());
@@ -504,7 +538,7 @@ void adjustFrame(IRUnit& unit,
   auto syncInst = unit.gen(
     SyncReturnBC,
     it->bcctx(),
-    SyncReturnBCData{after, extra->spOffset + extra->numParams},
+    SyncReturnBCData{callOffset, extra->spOffset + extra->numParams},
     inst.src(0),
     def->dst()
   );
@@ -523,7 +557,7 @@ bool isCallCatch(Block* block) {
     }
   }
   for (auto& pred : block->preds()) {
-    if (pred.inst()->is(Call, CallArray)) {
+    if (pred.inst()->is(Call, CallUnpack)) {
       return true;
     }
   }
@@ -603,18 +637,22 @@ void recordNewUse(OptimizeContext& ctx, IRInstruction* inst, SSATmp* use) {
   if (it != ctx.fpUses->end()) it->second.insert(inst);
 }
 
-void insertDefInlineFPs(OptimizeContext& ctx, BlockList& heads) {
-  for (auto block : heads) {
-    assertx(block->numPreds() == 1);
-    auto newDef = ctx.unit->clone(ctx.deadFp->inst());
-    auto newFp  = newDef->dst();
-    block->prepend(newDef);
-    replace(block, ctx.deadFp, newFp, *ctx.fpUses);
-    ctx.fpMap[block] = newFp;
-    recordNewUse(ctx, newDef, newDef->src(1));
-    ITRACE(3, "Initializing exit head (block id = {}): {}\n",
-           block->id(), *newDef);
+bool insertDefInlineFP(OptimizeContext& ctx, Block* block) {
+  assertx(block->numPreds() == 1);
+  auto newDef = ctx.unit->clone(ctx.deadFp->inst());
+  auto newFp  = newDef->dst();
+  if (ctx.initCtx) {
+    auto newInit = ctx.unit->clone(ctx.initCtx);
+    newInit->setSrc(0, newFp);
+    block->prepend(newInit);
   }
+  block->prepend(newDef);
+  auto const inlineExit = replaceFP(block, ctx.deadFp, newFp, *ctx.fpUses);
+  ctx.fpMap[block] = newFp;
+  recordNewUse(ctx, newDef, newDef->src(1));
+  ITRACE(3, "Initializing exit head (block id = {}): {}\n",
+         block->id(), *newDef);
+  return !inlineExit;
 }
 
 /*
@@ -634,8 +672,7 @@ bool process(OptimizeContext& ctx, Block* pred, Block* succ,
   // The map does not contain succ, we have not processed it before
   if (!ctx.fpMap.count(succ)) {
     ctx.fpMap[succ] = predCurFp;
-    replace(succ, ctx.deadFp, predCurFp, *ctx.fpUses);
-    return true;
+    return !replaceFP(succ, ctx.deadFp, predCurFp, *ctx.fpUses);
   }
 
   // We processed this succ and its fp is already the same as pred
@@ -650,8 +687,7 @@ bool process(OptimizeContext& ctx, Block* pred, Block* succ,
   // update all instances of predOldFp with predCurFp
   if (curFp == predOldFp) {
     ctx.fpMap[succ] = predCurFp;
-    replace(succ, curFp, predCurFp, *ctx.fpUses);
-    return true;
+    return !replaceFP(succ, curFp, predCurFp, *ctx.fpUses);
   }
 
   // Multiple preds define different FPs which will require a DefLabel to phi
@@ -685,7 +721,8 @@ bool process(OptimizeContext& ctx, Block* pred, Block* succ,
   ITRACE(3, "pred fp: {}, succ old fp: {}, succ new fp: {}\n",
          *predCurFp, *curFp, *newFp);
 
-  replace(succ, curFp, newFp, *ctx.fpUses);
+  auto const cont =
+    curFp != newFp && !replaceFP(succ, curFp, newFp, *ctx.fpUses);
 
   ITRACE(3, "Updating pred jmps\n");
   {
@@ -711,7 +748,7 @@ bool process(OptimizeContext& ctx, Block* pred, Block* succ,
   // If we didn't change the fp for this block we don't need to re-process it's
   // successors.
   ITRACE(3, "succ fp was {}\n", curFp != newFp ? "changed" : "unchanged");
-  return curFp != newFp;
+  return cont;
 }
 
 void transformUses(OptimizeContext& ctx, InstructionSet& uses) {
@@ -753,6 +790,10 @@ void transformUses(OptimizeContext& ctx, InstructionSet& uses) {
     } else if (isDangerousActRecInst(*inst)) {
       // It's okay to have these in side exits
       always_assert(ctx.mainBlocks.count(block) == 0);
+    } else if (inst->is(InitCtx)) {
+      always_assert(inst->src(1)->type().hasConstVal());
+      always_assert(ctx.initCtx == inst);
+      inst->convertToNop();
     } else {
       /*
        * All uses that weren't dealt with in side exiting traces need to be
@@ -835,7 +876,7 @@ void syncCatchTraces(OptimizeContext& ctx, BlockSet& exitBlocks) {
      * fixup the call frame to contain the inlined frame.
      *
      * Note: when unwinding from an exception the callee may not be the first
-     * AR on the stack, however, with the exception of Call, and CallArray, the
+     * AR on the stack, however, with the exception of Call, and CallUnpack, the
      * next frame will always be native. This means that the callee will always
      * be the first frame in its nested VM. The unwinder will unwind through
      * VMs nested under this one first, making it safe to assume that we can
@@ -869,34 +910,49 @@ bool optimize(InlineAnalysis& env, IRInstruction* inlineReturn) {
   auto def = fp->inst();
   assertx(def->is(DefInlineFP));
 
+  auto const parentResumed =
+    def->src(1)->inst()->marker().resumeMode() != ResumeMode::None;
+
   OptimizeContext ctx {env.unit, fp, inlineReturn, &env.fpUses};
   ctx.mainBlocks = findMainBlocks(def->block(), inlineReturn->block());
+
+  auto canMoveInitCtx = [&] (const IRInstruction& inst) {
+    if (ctx.initCtx) return false;
+    if (inst.is(InitCtx) && inst.src(1)->type().hasConstVal()) {
+      ctx.initCtx = &inst;
+      return true;
+    }
+    return false;
+  };
 
   // Check if this callee is a candidate for DefInlineFP sinking
   auto& uses = env.fpUses[fp];
   auto hasMainUse = std::any_of(
     uses.begin(),
     uses.end(),
-    [&] (IRInstruction* inst) { return ctx.mainBlocks.count(inst->block()) &&
-                                       !canConvertToStack(*inst) &&
-                                       !canRewriteToParent(*inst) &&
-                                       !canAdjustFrame(*inst); }
+    [&] (IRInstruction* inst) {
+      return
+        ctx.mainBlocks.count(inst->block()) &&
+        !canConvertToStack(*inst) &&
+        (parentResumed || !canRewriteToParent(*inst)) &&
+        !canAdjustFrame(*inst) &&
+        !canMoveInitCtx(*inst);
+      }
   );
   if (hasMainUse) {
     ITRACE(2, "skipping unsuitable InlineReturn (uses = {})\n", uses.size());
     return false;
   }
 
-  auto heads = findExitHeads(ctx, env.exitBlocks[fp]);
-
-  // We won't need to create more DefInlineFP's after this, and if they're
-  // completely unused in any of these traces DCE will clean it up.
-  insertDefInlineFPs(ctx, heads);
-
   // Update FP's in all blocks reachable from the exit heads
+  auto heads = findExitHeads(ctx, env.exitBlocks[fp]);
   std::deque<std::pair<Block*,SSATmp*>> workQ;
   for (auto h : heads) {
-    workQ.push_back(std::make_pair(h, ctx.deadFp));
+    // We won't need to create more DefInlineFP's after this, and if they're
+    // completely unused in any of these traces DCE will clean it up.
+    if (insertDefInlineFP(ctx, h)) {
+      workQ.push_back(std::make_pair(h, ctx.deadFp));
+    }
   }
 
   while (!workQ.empty()) {

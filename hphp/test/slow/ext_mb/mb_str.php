@@ -1,12 +1,15 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_mb_str() {
 var_dump(mb_parse_str("first=value&arr[]=foo+bar&arr[]=baz"));
-mb_parse_str("first=value&arr[]=foo+bar&arr[]=baz", $output);
+mb_parse_str("first=value&arr[]=foo+bar&arr[]=baz", &$output);
 var_dump($output['first']);
 var_dump($output['arr[]']); // bug in mb_parse_str not following PHP's
-mb_parse_str('', $output);
+mb_parse_str('', &$output);
 var_dump($output); // should be empty array, not null
-mb_parse_str('[]', $output);
+mb_parse_str('[]', &$output);
 var_dump($output);
 
 $date = "04/30/1973";
@@ -123,3 +126,4 @@ var_dump(mb_substr("\xC3\x9C"."bcdef", -1, 1));
 $a = html_entity_decode('&#xD55C;&#xAD6D;&#xC5B4;', ENT_COMPAT, 'UTF-8');
 $b = html_entity_decode('&#xAD6D;', ENT_COMPAT, 'UTF-8');
 var_dump(mb_strrpos($a, $b, 0, '8bit'));
+}

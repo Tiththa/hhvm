@@ -2,11 +2,11 @@
 /*
 Prototype: string filetype ( string $filename );
 Description: Returns the type of the file. Possible values are fifo, char,
-             dir, block, link, file, and unknown. 
+             dir, block, link, file, and unknown.
 */
 
 echo "*** Testing filetype() with various types ***\n";
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $file1 = $file_path."/filetype1_variation.tmp";
 $file2 = $file_path."/filetype2_variation.tmp";
 $file3 = $file_path."/filetype3_variation.tmp";
@@ -48,4 +48,3 @@ unlink($file3);
 /* To test this PEAR package should be installed */
 
 echo "\n*** Done ***\n";
-?>

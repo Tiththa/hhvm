@@ -10,8 +10,11 @@ function VERIFY($x) { VS($x != false, true); }
 // Php doesn't support \u escapes.
 function u($x) { return json_decode("\"" . $x . "\""); }
 
+
 //////////////////////////////////////////////////////////////////////
 
+<<__EntryPoint>>
+function main_utf8ize_replace() {
 $input =
   u('\u00a1')."\xc2\x41".
   u('\u0561')."\xd5\xe0".
@@ -24,7 +27,7 @@ $input =
   "\xc2";
 
 $tmp = $input;
-fb_utf8ize($tmp);
+fb_utf8ize(&$tmp);
 $sanitized = $tmp;
 
 VS(fb_htmlspecialchars($input, ENT_QUOTES, "", array()), $sanitized);
@@ -36,8 +39,9 @@ VS(fb_htmlspecialchars($input, ENT_FB_UTF8, "", null),
    "&#x218a3;A".
    "helloworld");
 
-VS(fb_htmlspecialchars($sanitized, ENT_QUOTES, "", Array()),
+VS(fb_htmlspecialchars($sanitized, ENT_QUOTES, "", array()),
    $sanitized);
 
 $zfoo = "\0foo";
 VS(fb_htmlspecialchars($zfoo, ENT_COMPAT, "UTF-8"), "foo");
+}

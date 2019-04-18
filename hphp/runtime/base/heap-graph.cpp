@@ -16,13 +16,13 @@
 #include "hphp/runtime/base/heap-graph.h"
 #include "hphp/runtime/base/heap-algorithms.h"
 #include "hphp/runtime/base/types.h"
-#include "hphp/runtime/base/req-containers.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/heap-scan.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
+#include "hphp/runtime/ext/weakref/weakref-data-handle.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/ptr-map.h"
 
@@ -44,10 +44,6 @@ conservativeScan(const void* start, size_t len, Fn fn) {
 }
 
 namespace {
-
-// When we don't know the offset. 0 is safe since offset 0 in real
-// objects is the header word, which never contains pointers.
-const ptrdiff_t UnknownOffset = 0;
 
 size_t addPtr(HeapGraph& g, int from, int to, HeapGraph::PtrKind kind,
             ptrdiff_t offset) {
@@ -72,13 +68,6 @@ void addRootNode(HeapGraph& g, const PtrMap<const HeapObject*>& blocks,
   g.root_nodes.push_back(from);
   scanner.scanByIndex(ty, h, size);
   scanner.finish(
-    [&](const void* p) {
-      if (auto r = blocks.region(p)) {
-        auto e = addPtr(g, from, blocks.index(r), HeapGraph::Implicit,
-               UnknownOffset);
-        g.root_ptrs.push_back(e);
-      }
-    },
     [&](const void* p, std::size_t size) {
       conservativeScan(p, size, [&](const void** addr, const void* ptr) {
         if (auto r = blocks.region(ptr)) {
@@ -95,6 +84,17 @@ void addRootNode(HeapGraph& g, const PtrMap<const HeapObject*>& blocks,
         auto offset = uintptr_t(addr) - uintptr_t(h);
         auto e = addPtr(g, from, to, HeapGraph::Counted, offset);
         g.root_ptrs.push_back(e);
+      }
+    },
+    [&](const void* p) {
+      auto weak = static_cast<const WeakRefDataHandle*>(p);
+      auto addr = &(weak->wr_data->pointee.m_data.pobj);
+      if (auto r = blocks.region(*addr)) {
+        auto to = blocks.index(r);
+        // Note that offset is going to be meaningless because weak->wr_data is
+        // a shared_ptr, so &pointee.m_data.pobj will be inside the shared_ptr's
+        // internal node, allocated separately.
+        addPtr(g, from, to, HeapGraph::Weak, 0);
       }
     }
   );
@@ -124,7 +124,7 @@ HeapGraph makeHeapGraph(bool include_free) {
   // parse the heap once to create a PtrMap for pointer filtering. Create
   // one node for every parsed block, including NativeData and AsyncFuncFrame
   // blocks. Only include free blocks if requested.
-  MM().forEachHeapObject([&](HeapObject* h, size_t alloc_size) {
+  tl_heap->forEachHeapObject([&](HeapObject* h, size_t alloc_size) {
     if (h->kind() != HeaderKind::Free || include_free) {
       blocks.insert(h, alloc_size); // adds interval [h, h+alloc_size[
     }
@@ -171,14 +171,8 @@ HeapGraph makeHeapGraph(bool include_free) {
     auto h = g.nodes[i].h;
     scanHeapObject(h, scanner);
     auto from = blocks.index(h);
-    assert(from == i);
+    assertx(from == i);
     scanner.finish(
-      [&](const void* p) {
-        // definitely a ptr, but maybe interior, and maybe not counted
-        if (auto r = blocks.region(p)) {
-          addPtr(g, from, blocks.index(r), HeapGraph::Implicit, UnknownOffset);
-        }
-      },
       [&](const void* p, std::size_t size) {
         conservativeScan(p, size, [&](const void** addr, const void* ptr) {
           if (auto r = blocks.region(ptr)) {
@@ -193,6 +187,14 @@ HeapGraph makeHeapGraph(bool include_free) {
           auto to = blocks.index(r);
           auto offset = uintptr_t(addr) - uintptr_t(h);
           addPtr(g, from, to, HeapGraph::Counted, offset);
+        }
+      },
+      [&](const void* p) {
+        auto weak = static_cast<const WeakRefDataHandle*>(p);
+        auto addr = &(weak->wr_data->pointee.m_data.pobj);
+        if (auto r = blocks.region(*addr)) {
+          auto to = blocks.index(r);
+          addPtr(g, from, to, HeapGraph::Weak, 0);
         }
       }
     );

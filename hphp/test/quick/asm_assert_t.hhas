@@ -3,31 +3,48 @@
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
-  FPushCtorD 0 "Foo"
-  FCall 0
-  PopR
+  NewObjD "Foo"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $x
   PopC
 
-  FPushCtorD 0 "Bar"
-  FCall 0
-  PopR
+  NewObjD "Bar"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $y
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $x
+  CGetL $y
   FPushFuncD 2 "obj_type"
-  FPassL 0 $x
-  FPassL 1 $y
-  FCall 2
-  PopR
+  FCall <> 2 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "obj_type2"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   Int 1
   RetC
@@ -62,23 +79,29 @@
 }
 
 .function make_bar() {
-  FPushCtorD 0 "Bar"
-  FCall 0
+  NewObjD "Bar"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
   AssertRATStk 0 InitNull
   AssertRATStk 1 Obj
   AssertRATStk 1 Obj=Bar
-  PopR
+  PopC
   AssertRATStk 0 Obj=Bar
   RetC
 }
 
 .function obj_type2() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "make_bar"
-  FCall 0
+  FCall <> 0 1 "" - "" ""
   AssertRATStk 0 Obj
   AssertRATStk 0 Obj=Bar
   AssertRATL $x Uninit
-  UnboxR
   AssertRATStk 0 Obj
   SetL $x
   PopC
@@ -93,17 +116,22 @@ out:
   RetC
 
 stuff:
-  FPushCtorD 0 "Foo"
-  FCall 0
-  PopR
+  NewObjD "Foo"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $obj
   PopC
 
   CGetL $obj
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "returns_int" NullThrows
-  FCall 0
+  FCall <> 0 1 "" - "" ""
   AssertRATStk 0 Int
-  UnboxR
   Int 0
   Add
   SetL $k

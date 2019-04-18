@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace {
 
@@ -61,8 +61,12 @@ function curl_strerror(int $errno): string;
  *
  * @return mixed - However, if the CURLOPT_RETURNTRANSFER option is set,
  *   it will return the result on success, FALSE on failure.
+ *
+ * FCallBuiltin is not used, as it would optimize away event hooks, resulting
+ * in broken request timeout semantics. It's also desirable to make curl_exec()
+ * frames visible in profiling tools such as Xenon.
  */
-<<__Native>>
+<<__Native("NoFCallBuiltin")>>
 function curl_exec(resource $ch): mixed;
 
 /**
@@ -183,8 +187,10 @@ function curl_multi_close(resource $mh): mixed;
  *   This only returns errors regarding the whole multi stack. There might
  *   still have occurred problems on individual transfers even when this
  *   function returns CURLM_OK.
+ *
+ * See curl_exec() wrt NoFCallBuiltin.
  */
-<<__Native>>
+<<__Native("NoFCallBuiltin")>>
 function curl_multi_exec(resource $mh,
                          mixed &$still_running): ?int;
 
@@ -257,8 +263,10 @@ function curl_multi_remove_handle(resource $mh,
  * @return int - On success, returns the number of descriptors contained
  *   in the descriptor sets. On failure, this function will return -1 on a
  *   select failure or timeout (from the underlying select system call).
+ *
+ * See curl_exec() wrt NoFCallBuiltin.
  */
-<<__Native>>
+<<__Native("NoFCallBuiltin")>>
 function curl_multi_select(resource $mh,
                            float $timeout = 1.0): ?int;
 
@@ -283,8 +291,10 @@ function curl_multi_select(resource $mh,
  *
  * @guide /hack/async/introduction
  * @guide /hack/async/extensions
+ *
+ * See curl_exec() wrt NoFCallBuiltin.
  */
-<<__Native>>
+<<__Native("NoFCallBuiltin")>>
 function curl_multi_await(resource $mh,
                           float $timeout = 1.0): Awaitable<int>;
 
@@ -314,7 +324,7 @@ function curl_multi_setopt(resource $mh, int $option, mixed $value) : bool;
  */
 <<__Native>>
 function curl_setopt_array(resource $ch,
-                           array $options): bool;
+                           darray $options): bool;
 
 /**
  * Set an option for a cURL transfer
@@ -468,7 +478,7 @@ function curl_destroy_pool(string $poolName): bool;
  * @return array
  */
 <<__Native, __HipHopSpecific>>
-function curl_list_pools(): array;
+function curl_list_pools(): darray<string, darray>;
 
 
 } // namespace HH
@@ -497,26 +507,26 @@ namespace HH\Asio {
  */
 async function curl_exec(mixed $urlOrHandle,
                          bool $closeHandleIfHandle = false): Awaitable<string> {
-  if (is_string($urlOrHandle)) {
-    $ch = curl_init($urlOrHandle);
-  } else if (is_resource($urlOrHandle) &&
-             (get_resource_type($urlOrHandle) == "curl")) {
+  if (\is_string($urlOrHandle)) {
+    $ch = \curl_init($urlOrHandle);
+  } else if (\is_resource($urlOrHandle) &&
+             (\get_resource_type($urlOrHandle) == "curl")) {
     $ch = $urlOrHandle;
   } else {
-    throw new Exception(__FUNCTION__." expects string of cURL handle");
+    throw new \Exception(__FUNCTION__." expects string of cURL handle");
   }
-  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+  \curl_setopt($ch, \CURLOPT_RETURNTRANSFER, true);
 
-  $mh = curl_multi_init();
-  curl_multi_add_handle($mh, $ch);
+  $mh = \curl_multi_init();
+  \curl_multi_add_handle($mh, $ch);
   $sleep_ms = 10;
   do {
     $active = 1;
     do {
-      $status = curl_multi_exec($mh, $active);
-    } while ($status == CURLM_CALL_MULTI_PERFORM);
+      $status = \curl_multi_exec($mh, &$active);
+    } while ($status == \CURLM_CALL_MULTI_PERFORM);
     if (!$active) break;
-    $select = await curl_multi_await($mh);
+    $select = await \curl_multi_await($mh);
     /* If cURL is built without ares support, DNS queries don't have a socket
      * to wait on, so curl_multi_await() (and curl_select() in PHP5) will return
      * -1, and polling is required.
@@ -529,16 +539,16 @@ async function curl_exec(mixed $urlOrHandle,
     } else {
       $sleep_ms = 10;
     }
-  } while ($status === CURLM_OK);
-  $content = (string)curl_multi_getcontent($ch);
-  curl_multi_remove_handle($mh, $ch);
+  } while ($status === \CURLM_OK);
+  $content = (string)\curl_multi_getcontent($ch);
+  \curl_multi_remove_handle($mh, $ch);
 
   /* close handle if string was passed or argument */
-  if (is_string($urlOrHandle) || ($closeHandleIfHandle === true)) {
-    curl_close($ch);
+  if (\is_string($urlOrHandle) || ($closeHandleIfHandle === true)) {
+    \curl_close($ch);
   }
 
-  curl_multi_close($mh);
+  \curl_multi_close($mh);
   return $content;
 }
 

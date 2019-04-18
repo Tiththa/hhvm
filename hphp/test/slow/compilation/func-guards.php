@@ -4,8 +4,6 @@ function test() {
   (new X)->foo();
 }
 
-apc_add('foo', 0);
-
 function setup() {
   $i = apc_inc('foo', 1);
   var_dump($i);
@@ -23,13 +21,14 @@ function setup() {
   file_put_contents($file, "<?php $text");
   include $file;
   unlink($file);
-  class X extends Y {
-    private $priv = 42;
-    function foo() {
-      var_dump($this->priv + self::C);
-    }
-  }
+  include 'func-guards.inc';
 }
+
+
+<<__EntryPoint>>
+function main_func_guards() {
+apc_add('foo', 0);
 
 setup();
 test();
+}

@@ -66,14 +66,14 @@ void cgLdObjMethod(IRLS& env, const IRInstruction* inst) {
   auto& vc = vcold(env);
 
   // Allocate the request-local one-way method cache for this lookup.
-  auto const handle = rds::alloc<Entry, sizeof(Entry)>().handle();
+  auto const handle =
+    rds::alloc<Entry, rds::Mode::Normal, sizeof(Entry)>().handle();
   if (RuntimeOption::EvalPerfDataMap) {
     rds::recordRds(handle, sizeof(TypedValue), "MethodCache",
-                   inst->marker().func()->fullName()->toCppString());
+                   inst->marker().func()->fullName()->slice());
   }
 
-  auto const mc_handler = extra->fatal ? tc::ustubs().handlePrimeCacheInitFatal
-                                       : tc::ustubs().handlePrimeCacheInit;
+  auto const mc_handler = tc::ustubs().handlePrimeCacheInitFatal;
 
   /*
    * The `mcprep' instruction here creates a smashable move, which serves as
@@ -82,7 +82,7 @@ void cgLdObjMethod(IRLS& env, const IRInstruction* inst) {
    * On our first time through this codepath in the TC, we "prime" this cache
    * (which holds across /all/ requests) by smashing the mov immediate to hold
    * a Func* in the upper 32 bits, and a Class* in the lower 32 bits.  This is
-   * not always possible (see handlePrimeCacheInit() for details), in which
+   * not always possible (see handlePrimeCacheInitFatal() for details), in which
    * case we smash an immediate with some low bits set, so that we always miss
    * on the inline cache when comparing against our live Class*.
    *
@@ -196,7 +196,7 @@ void cgLookupClsMethod(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgProfileMethod(IRLS& env, const IRInstruction* inst) {
-  auto const extra = inst->extra<ProfileMethodData>();
+  auto const extra = inst->extra<ProfileCallTargetData>();
   auto const sp = srcLoc(env, inst, 0).reg();
 
   auto const args = argGroup(env, inst)
@@ -283,6 +283,7 @@ void cgLdClsMethodCacheCls(IRLS& env, const IRInstruction* inst) {
     extra->methodName,
     ctxName(inst->marker())
   );
+  assertx(rds::isNormalHandle(ch));
 
   // The StaticMethodCache here is guaranteed to already be initialized in RDS
   // by the pre-conditions of this instruction.
@@ -328,6 +329,7 @@ void cgLdClsMethodFCacheFunc(IRLS& env, const IRInstruction* inst) {
     extra->methodName,
     ctxName(inst->marker())
   );
+  assertx(rds::isNormalHandle(ch));
 
   auto const sf = checkRDSHandleInitialized(v, ch);
   fwdJcc(v, env, CC_NE, sf, inst->taken());
@@ -342,7 +344,11 @@ void cgCheckFuncStatic(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
   auto const sf = v.makeReg();
-  v << testlim{AttrStatic, funcPtrReg[Func::attrsOff()], sf};
+  v << testlim{
+    static_cast<int32_t>(AttrStatic),
+    funcPtrReg[Func::attrsOff()],
+    sf
+  };
   v << jcc{CC_NZ, sf, {label(env, inst->next()), label(env, inst->taken())}};
 }
 

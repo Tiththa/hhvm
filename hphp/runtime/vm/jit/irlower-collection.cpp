@@ -74,9 +74,8 @@ void cgIsCol(IRLS& env, const IRInstruction* inst) {
   auto const src = srcLoc(env, inst, 0).reg();
   auto& v = vmain(env);
 
-  auto const sf = v.makeReg();
-  v << testwim{ObjectData::IsCollection, src[ObjectData::attributeOff()], sf};
-  v << setcc{CC_NE, sf, dst};
+  auto const sf = emitIsCollection(v, src);
+  v << setcc{CC_BE, sf, dst};
 }
 
 void cgColIsEmpty(IRLS& env, const IRInstruction* inst) {
@@ -194,26 +193,6 @@ void cgLdVectorBase(IRLS& env, const IRInstruction* inst) {
   auto const arr = v.makeReg();
   v << load{src[BaseVector::arrOffset()], arr};
   v << lea{arr[PackedArray::entriesOffset()], dst};
-}
-
-void cgVectorHasImmCopy(IRLS& env, const IRInstruction* inst) {
-  assertHasVectorSrc(inst, false);
-
-  auto const src = srcLoc(env, inst, 0).reg();
-  auto& v = vmain(env);
-
-  auto const arr = v.makeReg();
-  auto const sf = v.makeReg();
-  v << load{src[BaseVector::arrOffset()], arr};
-  v << cmplim{1, arr[FAST_REFCOUNT_OFFSET], sf};
-  v << jcc{CC_NE, sf, {label(env, inst->next()), label(env, inst->taken())}};
-}
-
-void cgVectorDoCow(IRLS& env, const IRInstruction* inst) {
-  assertHasVectorSrc(inst, false);
-
-  cgCallHelper(vmain(env), env, CallSpec::direct(triggerCow),
-               kVoidDest, SyncOptions::Sync, argGroup(env, inst).ssa(0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

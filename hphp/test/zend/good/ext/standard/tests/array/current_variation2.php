@@ -64,13 +64,13 @@ $inputs = array(
        TRUE,
        FALSE,
        ),
-       
+
        // empty data
 /*5*/ 'empty string' => array(
        "",
        '',
        ),
-       
+
 /*6*/ 'empty array' => array(
        ),
 
@@ -80,7 +80,7 @@ $inputs = array(
        'string',
        $heredoc,
        ),
-       
+
        // object data
 /*8*/ 'object' => array(
        new classA(),
@@ -106,10 +106,9 @@ $inputs = array(
 $iterator = 1;
 foreach($inputs as $key => $input) {
   echo "\n-- Iteration $iterator : $key data --\n";
-  var_dump( current($input) );
+  var_dump( current(&$input) );
   $iterator++;
 };
 
 fclose($fp);
-?>
-===DONE===
+echo "===DONE===\n";

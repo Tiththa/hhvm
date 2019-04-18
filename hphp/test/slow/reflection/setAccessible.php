@@ -12,6 +12,7 @@ class E {
 }
 
 function getProps($class, $obj) {
+  $ret = array();
   foreach ((new ReflectionClass($class))->getProperties() as $key => $prop) {
     $values = array();
 
@@ -28,6 +29,10 @@ function getProps($class, $obj) {
   return $ret;
 }
 
+
+<<__EntryPoint>>
+function main_set_accessible() {
 $ret = array_merge(getProps('A', new A), getProps('E', 'E'));
-ksort($ret);
+ksort(&$ret);
 var_dump($ret);
+}

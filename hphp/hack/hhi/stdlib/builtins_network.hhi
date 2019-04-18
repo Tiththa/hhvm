@@ -1,11 +1,10 @@
-<?hh // decl /* -*- php -*- */
+<?hh /* -*- php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
 
@@ -58,38 +57,73 @@ const int LOG_USER = 8;
 const int LOG_UUCP = 64;
 const int LOG_WARNING = 4;
 
+<<__PHPStdLib>>
 function gethostname();
-function gethostbyaddr($ip_address);
-function gethostbyname($hostname);
-function gethostbynamel($hostname);
-function getprotobyname($name);
-function getprotobynumber($number);
-function getservbyname($service, $protocol);
-function getservbyport($port, $protocol);
-function inet_ntop($in_addr);
-function inet_pton($address);
-function ip2long($ip_address);
-function long2ip($proper_address);
+<<__PHPStdLib>>
+function gethostbyaddr(string $ip_address);
+<<__PHPStdLib>>
+function gethostbyname(string $hostname);
+<<__PHPStdLib>>
+function gethostbynamel(string $hostname);
+<<__PHPStdLib>>
+function getprotobyname(string $name);
+<<__PHPStdLib>>
+function getprotobynumber(int $number);
+<<__PHPStdLib>>
+function getservbyname(string $service, string $protocol);
+<<__PHPStdLib>>
+function getservbyport(int $port, string $protocol);
+<<__PHPStdLib, __Rx>>
+function inet_ntop(string $in_addr);
+<<__PHPStdLib, __Rx>>
+function inet_pton(string $address);
+<<__PHPStdLib, __Rx>>
+function ip2long(string $ip_address);
+<<__PHPStdLib, __Rx>>
+function long2ip(string $proper_address);
+<<__PHPStdLib>>
 function dns_check_record($host, $type = null);
-function checkdnsrr($host, $type = null);
-function dns_get_record($hostname, $type = -1, &$authns = null, &$addtl = null);
+<<__PHPStdLib>>
+function checkdnsrr(string $host, string $type = "MX");
+<<__PHPStdLib>>
+function dns_get_record(string $hostname, int $type = -1, &$authns = null, &$addtl = null);
+<<__PHPStdLib>>
 function dns_get_mx($hostname, &$mxhosts, &$weights = null);
-function getmxrr($hostname, &$mxhosts, &$weight = null);
-function fsockopen($hostname, $port = -1, &$errnum = null, &$errstr = null, $timeout = 0.0);
-function pfsockopen($hostname, $port = -1, &$errnum = null, &$errstr = null, $timeout = 0.0);
+<<__PHPStdLib>>
+function getmxrr(string $hostname, &$mxhosts, &$weight = null);
+<<__PHPStdLib>>
+function fsockopen(string $hostname, int $port = -1, &$errnum = null, &$errstr = null, float $timeout = 0.0);
+<<__PHPStdLib>>
+function pfsockopen(string $hostname, int $port = -1, &$errnum = null, &$errstr = null, float $timeout = 0.0);
+<<__PHPStdLib>>
 function socket_get_status($stream);
+<<__PHPStdLib>>
 function socket_set_blocking($stream, $mode);
+<<__PHPStdLib>>
 function socket_set_timeout($stream, $seconds, $microseconds = 0);
-function header($str, $replace = true, $http_response_code = 0);
-function http_response_code($response_code = 0);
+<<__PHPStdLib>>
+function header(string $str, bool $replace = true, int $http_response_code = 0);
+<<__PHPStdLib>>
+function http_response_code(int $response_code = 0);
+<<__PHPStdLib>>
 function headers_list();
+<<__PHPStdLib>>
 function get_http_request_size();
+<<__PHPStdLib>>
 function headers_sent(&$file = null, &$line = null);
+<<__PHPStdLib>>
 function header_register_callback($callback);
+<<__PHPStdLib>>
 function header_remove($name = null);
-function setcookie($name, $value = null, $expire = 0, $path = null, $domain = null, $secure = false, $httponly = false);
-function setrawcookie($name, $value = null, $expire = 0, $path = null, $domain = null, $secure = false, $httponly = false);
+<<__PHPStdLib>>
+function setcookie(string $name, string $value = "", int $expire = 0, string $path = "", string $domain = "", bool $secure = false, bool $httponly = false);
+<<__PHPStdLib>>
+function setrawcookie(string $name, string $value = "", int $expire = 0, string $path = "", string $domain = "", bool $secure = false, bool $httponly = false);
+<<__PHPStdLib>>
 function define_syslog_variables();
-function openlog($ident, $option, $facility);
+<<__PHPStdLib>>
+function openlog(string $ident, int $option, int $facility);
+<<__PHPStdLib>>
 function closelog();
+<<__PHPStdLib>>
 function syslog(int $priority, string $message): bool;

@@ -2,10 +2,9 @@
 
 class X {
   function bar() {
-    var_dump(get_called_class());
+    var_dump(static::class);
   }
 }
-;
 class Y extends X {
   function foo() {
     call_user_func(array('SELF', 'bar'));
@@ -16,4 +15,9 @@ class Y extends X {
     call_user_func('STATIC::bar');
   }
 }
+
+<<__EntryPoint>>
+function main_1886() {
+;
 Y::foo();
+}

@@ -23,8 +23,8 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/plain-file.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
-#include "hphp/runtime/base/request-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/zend-printf.h"
@@ -123,7 +123,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     int n = 1000;
     if (m_mallocSize) imDump(ptrs, n);
 #endif
-    assert(m_mallocSize == 0);
+    assertx(m_mallocSize == 0);
     m_mallocSize = 0;
   }
   void requestShutdown() override {
@@ -131,7 +131,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     void *ptrs[1000];
     int n = 1000;
     if (m_mallocSize) imDump(ptrs, n);
-    assert(m_mallocSize == 0);
+    assertx(m_mallocSize == 0);
 #endif
     m_mallocSize = 0;
   }
@@ -140,7 +140,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 , int ln
 #endif
   ) {
-    assert(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
+    assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
     if (m_mallocSize + size < (size_t)RuntimeOption::ImageMemoryMaxBytes) {
 #ifdef IM_MEMORY_CHECK
       void *ptr = malloc(sizeof(ln) + sizeof(size) + size);
@@ -165,7 +165,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 , int ln
 #endif
   ) {
-    assert(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
+    assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
     size_t bytes = nmemb * size;
     if (m_mallocSize + bytes < (size_t)RuntimeOption::ImageMemoryMaxBytes) {
 #ifdef IM_MEMORY_CHECK
@@ -200,11 +200,11 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 #ifdef IM_MEMORY_CHECK
     void *lnPtr = (char *)sizePtr - sizeof(ln);
     int count = m_alloced.erase((char*)sizePtr - sizeof(ln));
-    assert(count == 1); // double free on failure
-    assert(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
+    assertx(count == 1); // double free on failure
+    assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
     free(lnPtr);
 #else
-    assert(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
+    assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
     free(sizePtr);
 #endif
   }
@@ -215,7 +215,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 , int ln
 #endif
   ) {
-    assert(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
+    assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
 
 #ifdef IM_MEMORY_CHECK
     if (!ptr) return imMalloc(size, ln);
@@ -241,7 +241,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     if (m_mallocSize + diff > (size_t)RuntimeOption::ImageMemoryMaxBytes ||
         !(tmp = realloc(lnPtr, sizeof(ln) + sizeof(size) + size))) {
       int count = m_alloced.erase(ptr);
-      assert(count == 1); // double free on failure
+      assertx(count == 1); // double free on failure
       free(lnPtr);
       return nullptr;
     }
@@ -250,7 +250,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     m_mallocSize += diff;
     if (tmp != lnPtr) {
       int count = m_alloced.erase(lnPtr);
-      assert(count == 1);
+      assertx(count == 1);
       m_alloced.insert(tmp);
     }
     return ((char *)tmp + sizeof(ln) + sizeof(size));
@@ -272,7 +272,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     for (std::set<void*>::iterator iter = m_alloced.begin();
          iter != m_alloced.end(); ++i, ++iter) {
       void *p = *iter;
-      assert(p);
+      assertx(p);
       if (i < n) ptrs[i] = p;
       int ln;
       size_t size;
@@ -1139,12 +1139,12 @@ static signed short php_ifd_get16s(void *Short, int motorola_intel) {
 /* Convert a 32 bit signed value from file's native byte order */
 static int php_ifd_get32s(void *Long, int motorola_intel) {
   if (motorola_intel) {
-    return ((( char *)Long)[0] << 24) |
+    return (((unsigned char *)Long)[0] << 24) |
            (((unsigned char *)Long)[1] << 16) |
            (((unsigned char *)Long)[2] << 8) |
            (((unsigned char *)Long)[3] << 0);
   } else {
-    return ((( char *)Long)[3] << 24) |
+    return (((unsigned char *)Long)[3] << 24) |
            (((unsigned char *)Long)[2] << 16) |
            (((unsigned char *)Long)[1] << 8) |
            (((unsigned char *)Long)[0] << 0);
@@ -2336,7 +2336,7 @@ static gdImagePtr _php_image_create_from(const String& filename,
   }
   else {
     /* TODO: try and force the stream to be FILE* */
-    assert(false);
+    assertx(false);
   }
 
   if (!im && fp) {
@@ -3364,7 +3364,7 @@ Variant HHVM_FUNCTION(imageaffinematrixget,
 
     default:
       raise_warning("imageaffinematrixget():Invalid type for "
-                    "element %li", type);
+                    "element %" PRId64, type);
       return false;
   }
 
@@ -3447,13 +3447,12 @@ bool HHVM_FUNCTION(imagecopyresampled,
   return true;
 }
 
-Variant HHVM_FUNCTION(imagerotate, const Resource& source_image,
-    double angle, int64_t bgd_color,
-    int64_t ignore_transparent /* = 0 */) {
+Variant
+HHVM_FUNCTION(imagerotate, const Resource& source_image, double angle,
+              int64_t bgd_color, int64_t /*ignore_transparent*/ /* = 0 */) {
   gdImagePtr im_src = get_valid_image_resource(source_image);
   if (!im_src) return false;
-  gdImagePtr im_dst = gdImageRotate(im_src, angle, bgd_color,
-                                    ignore_transparent);
+  gdImagePtr im_dst = gdImageRotateInterpolated(im_src, angle, bgd_color);
   if (!im_dst) return false;
   return Variant(req::make<Image>(im_dst));
 }
@@ -4397,6 +4396,7 @@ Variant HHVM_FUNCTION(imagescale, const Resource& image, int64_t newwidth,
   gdImagePtr im = get_valid_image_resource(image);
   if (!im) return false;
   gdImagePtr imscaled = nullptr;
+  gdInterpolationMethod old_method;
   if (method == -1) method = GD_BILINEAR_FIXED;
 
   if (newheight < 0) {
@@ -4408,12 +4408,16 @@ Variant HHVM_FUNCTION(imagescale, const Resource& image, int64_t newwidth,
       newheight = newwidth * src_y / src_x;
     }
   }
-  if (newheight <= 0 || newwidth <= 0) {
+  if (newheight <= 0 || newheight > INT_MAX || newwidth <= 0 || newwidth > INT_MAX) {
     return false;
   }
+
+  old_method = im->interpolation_id;
   if (gdImageSetInterpolationMethod(im, (gdInterpolationMethod) method)) {
     imscaled = gdImageScale(im, newwidth, newheight);
   }
+  gdImageSetInterpolationMethod(im, old_method);
+
   if (imscaled == nullptr) {
     return false;
   }
@@ -4694,7 +4698,10 @@ Variant HHVM_FUNCTION(iptcparse, const String& iptcblock) {
     }
 
     String skey((const char *)key, CopyString);
-    auto& lval = ret.lvalAt(skey);
+    if (!ret.exists(skey)) {
+      ret.set(skey, Array::CreateVArray());
+    }
+    auto const lval = ret.lvalAt(skey);
     forceToArray(lval).append(
       String((const char *)(buffer+inx), len, CopyString));
     inx += len;
@@ -5365,7 +5372,7 @@ typedef struct {
 
 static const maker_note_type maker_note_array[] = {
   { tag_table_VND_CANON, "Canon", nullptr, nullptr,
-    0, 0, MN_ORDER_INTEL, MN_OFFSET_GUESS},
+    0, 0, MN_ORDER_INTEL, MN_OFFSET_NORMAL},
 /*  { tag_table_VND_CANON, "Canon", nullptr, nullptr,
       0,  0,  MN_ORDER_NORMAL,   MN_OFFSET_NORMAL},*/
   { tag_table_VND_CASIO, "CASIO", nullptr, nullptr,

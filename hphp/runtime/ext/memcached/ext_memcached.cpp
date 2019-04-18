@@ -17,6 +17,7 @@
 */
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/ext/memcached/libmemcached_portability.h"
@@ -84,8 +85,9 @@ const StaticString
 struct MEMCACHEDGlobals final {
   std::string sess_prefix;
 };
-static __thread MEMCACHEDGlobals* s_memcached_globals;
-#define MEMCACHEDG(name) s_memcached_globals->name
+
+static RDS_LOCAL_NO_CHECK(MEMCACHEDGlobals*, s_memcached_globals){nullptr};
+#define MEMCACHEDG(name) (*s_memcached_globals)->name
 
 namespace {
 struct MemcachedResultWrapper {
@@ -275,7 +277,10 @@ struct MemcachedData {
       value = Variant::attach(HHVM_FN(json_decode)(decompPayload));
       break;
     case MEMC_VAL_IS_SERIALIZED:
-      value = unserialize_from_string(decompPayload);
+      value = unserialize_from_string(
+        decompPayload,
+        VariableUnserializer::Type::Serialize
+      );
       break;
     case MEMC_VAL_IS_IGBINARY:
       raise_warning("could not unserialize value, no igbinary support");
@@ -285,20 +290,6 @@ struct MemcachedData {
       return false;
     }
     return true;
-  }
-  memcached_return doCacheCallback(const Variant& callback, ObjectData* this_,
-                                   const String& key, Variant& value) {
-    Array params(PackedArrayInit(3).append(Variant(this_))
-                                   .append(key)
-                                   .appendRef(value).toArray());
-    if (!vm_call_user_func(callback, params).toBoolean()) {
-      return MEMCACHED_NOTFOUND;
-    }
-
-    std::vector<char> payload; uint32_t flags;
-    toPayload(value, payload, flags);
-    return memcached_set(&m_impl->memcached, key.c_str(), key.length(),
-                         payload.data(), payload.size(), 0, flags);
   }
   bool getMultiImpl(const String& server_key, const Array& keys, bool enableCas,
                     Array *returnValue) {
@@ -454,7 +445,7 @@ struct MemcachedData {
   }
 
   typedef std::map<std::string, ImplPtr> ImplMap;
-  static DECLARE_THREAD_LOCAL(ImplMap, s_persistentMap);
+  static RDS_LOCAL(ImplMap, s_persistentMap);
 };
 
 void HHVM_METHOD(Memcached, __construct,
@@ -531,10 +522,7 @@ Variant HHVM_METHOD(Memcached, getbykey, const String& server_key,
                               &result.value, &status)) {
     if (status == MEMCACHED_END) status = MEMCACHED_NOTFOUND;
     if (status == MEMCACHED_NOTFOUND && !cache_cb.isNull()) {
-      status = data->doCacheCallback(cache_cb, this_, key, returnValue);
-      if (!data->handleError(status)) return false;
-      cas_token.assignIfRef(0.0);
-      return returnValue;
+      raise_warning("Memcached::getbykey() no longer supports callbacks");
     }
     data->handleError(status);
     return false;
@@ -602,7 +590,7 @@ bool HHVM_METHOD(Memcached, getdelayedbykey, const String& server_key,
 
   MemcachedResultWrapper result(&data->m_impl->memcached); Array item;
   while (data->fetchImpl(result.value, item)) {
-    vm_call_user_func(value_cb, make_packed_array(Variant(this_), item));
+    vm_call_user_func(value_cb, make_vec_array(Variant(this_), item));
   }
 
   if (data->m_impl->rescode != MEMCACHED_END) return false;
@@ -1188,24 +1176,23 @@ bool HHVM_METHOD(Memcached, touchbykey,
 
 ///////////////////////////////////////////////////////////////////////////////
 
-IMPLEMENT_THREAD_LOCAL(MemcachedData::ImplMap, MemcachedData::s_persistentMap);
+RDS_LOCAL(MemcachedData::ImplMap, MemcachedData::s_persistentMap);
 
 const StaticString s_Memcached("Memcached");
 
 struct MemcachedExtension final : Extension {
   MemcachedExtension() : Extension("memcached", "2.2.0b1") {}
   void threadInit() override {
-    if (s_memcached_globals) {
-      return;
-    }
-    s_memcached_globals = new MEMCACHEDGlobals;
+    *s_memcached_globals = new MEMCACHEDGlobals;
+    assertx(*s_memcached_globals);
+
     IniSetting::Bind(this, IniSetting::PHP_INI_ALL,
                      "memcached.sess_prefix", &MEMCACHEDG(sess_prefix));
   }
 
   void threadShutdown() override {
-    delete s_memcached_globals;
-    s_memcached_globals = nullptr;
+    delete *s_memcached_globals;
+    *s_memcached_globals = nullptr;
   }
 
   void moduleInit() override {

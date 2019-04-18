@@ -1,6 +1,6 @@
 <?php
 /* Prototype  : string readdir([resource $dir_handle])
- * Description: Read directory entry from dir_handle 
+ * Description: Read directory entry from dir_handle
  * Source code: ext/standard/dir.c
  */
 
@@ -25,14 +25,11 @@ while(FALSE !== ($file = readdir($dir_handle))){
 
 closedir($dir_handle);
 
-usort($entries, "mysort");
+usort(&$entries, "mysort");
 foreach($entries as $entry) {
 	var_dump($entry);
 }
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $path = dirname(__FILE__) . '/readdir_variation2';
 rmdir($path);
-?>

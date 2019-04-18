@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function handle_error() {
   throw new Exception("die rebel scum");
@@ -6,9 +6,7 @@ function handle_error() {
 
 function main() {
   set_error_handler('handle_error');
-  apc_store('foo', 'bar');
-  $success = null;
-  $x = call_user_func_array('apc_fetch', array('quux', $success));
+  date_default_timezone_set(...array('America/Gotham_City'));
 }
 
 main();

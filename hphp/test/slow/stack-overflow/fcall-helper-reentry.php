@@ -10,7 +10,11 @@ function bar($x) {
 
 function main() {
   $arr = array(1, 'foo', array('bar', 3), false);
-  array_walk_recursive($arr, 'hello_my_name_is_mwang');
+  array_map('hello_my_name_is_mwang', $arr);
 }
 
+
+<<__EntryPoint>>
+function main_fcall_helper_reentry() {
 main();
+}

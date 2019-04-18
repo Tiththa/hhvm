@@ -18,7 +18,7 @@
 
 #include "hphp/runtime/base/array-common.h"
 #include "hphp/runtime/base/array-data.h"
-#include "hphp/runtime/base/member-val.h"
+#include "hphp/runtime/base/tv-val.h"
 #include "hphp/runtime/vm/name-value-table.h"
 
 namespace HPHP {
@@ -53,7 +53,8 @@ namespace HPHP {
  * to outlast the lifetime of the GlobalsArray.  (The wrapper is
  * refcounted, as required by ArrayData, but the table pointed to is not.)
  */
-struct GlobalsArray final : ArrayData, type_scan::MarkCountable<GlobalsArray> {
+struct GlobalsArray final : ArrayData,
+                            type_scan::MarkCollectable<GlobalsArray> {
   explicit GlobalsArray(NameValueTable* tab);
   ~GlobalsArray() = delete;
 
@@ -70,40 +71,44 @@ public:
   }
   static size_t Vsize(const ArrayData*);
   static Cell NvGetKey(const ArrayData* ad, ssize_t pos);
-  static member_rval::ptr_u GetValueRef(const ArrayData*, ssize_t pos);
+  static tv_rval GetValueRef(const ArrayData*, ssize_t pos);
 
   static bool ExistsInt(const ArrayData* ad, int64_t k);
   static bool ExistsStr(const ArrayData* ad, const StringData* k);
 
-  static member_rval::ptr_u NvGetInt(const ArrayData*, int64_t k);
+  static tv_rval NvGetInt(const ArrayData*, int64_t k);
   static constexpr auto NvTryGetInt = &NvGetInt;
-  static member_rval::ptr_u NvGetStr(const ArrayData*, const StringData* k);
+  static tv_rval NvGetStr(const ArrayData*, const StringData* k);
   static constexpr auto NvTryGetStr = &NvGetStr;
 
-  static member_lval LvalInt(ArrayData*, int64_t k, bool copy);
+  static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
   static constexpr auto LvalIntRef = &LvalInt;
-  static member_lval LvalStr(ArrayData*, StringData* k, bool copy);
+  static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
   static constexpr auto LvalStrRef = &LvalStr;
-  static member_lval LvalNew(ArrayData*, bool copy);
+  static arr_lval LvalNew(ArrayData*, bool copy);
   static constexpr auto LvalNewRef = &LvalNew;
 
-  static ArrayData* SetInt(ArrayData*, int64_t k, Cell v, bool copy);
-  static ArrayData* SetStr(ArrayData*, StringData* k, Cell v, bool copy);
-  static ArrayData* SetRefInt(ArrayData*, int64_t k, Variant& v, bool copy);
-  static ArrayData* SetRefStr(ArrayData*, StringData* k, Variant& v,
-                              bool copy);
-  static constexpr auto AddInt = &SetInt;
-  static constexpr auto AddStr = &SetStr;
-  static ArrayData* RemoveInt(ArrayData*, int64_t k, bool copy);
-  static ArrayData* RemoveStr(ArrayData*, const StringData* k, bool copy);
+  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, Cell v);
+  static constexpr auto SetInt = &SetIntInPlace;
+  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, Cell v);
+  static constexpr auto SetStr = &SetStrInPlace;
+  static ArrayData* SetWithRefIntInPlace(ArrayData*, int64_t k, TypedValue v);
+  static constexpr auto SetWithRefInt = &SetWithRefIntInPlace;
+  static ArrayData* SetWithRefStrInPlace(ArrayData*, StringData*, TypedValue);
+  static constexpr auto SetWithRefStr = &SetWithRefStrInPlace;
+  static ArrayData* RemoveIntInPlace(ArrayData*, int64_t k);
+  static constexpr auto RemoveInt = &RemoveIntInPlace;
+  static ArrayData* RemoveStrInPlace(ArrayData*, const StringData* k);
+  static constexpr auto RemoveStr = &RemoveStrInPlace;
 
-  static ArrayData* Append(ArrayData*, Cell v, bool copy);
-  static ArrayData* AppendRef(ArrayData*, Variant& v, bool copy);
-  static ArrayData* AppendWithRef(ArrayData*, TypedValue v, bool copy);
+  static ArrayData* AppendInPlace(ArrayData*, Cell v);
+  static constexpr auto Append = &AppendInPlace;
+  static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue v);
+  static constexpr auto AppendWithRef = &AppendWithRefInPlace;
 
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
-  static ArrayData* Prepend(ArrayData*, Cell v, bool copy);
+  static ArrayData* Prepend(ArrayData*, Cell v);
 
   static ssize_t IterBegin(const ArrayData*);
   static ssize_t IterLast(const ArrayData*);
@@ -111,8 +116,6 @@ public:
   static ssize_t IterAdvance(const ArrayData*, ssize_t prev);
   static ssize_t IterRewind(const ArrayData*, ssize_t prev);
 
-  static bool ValidMArrayIter(const ArrayData*, const MArrayIter & fp);
-  static bool AdvanceMArrayIter(ArrayData*, MArrayIter&);
   static bool IsVectorData(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
   static constexpr auto Pop = &ArrayCommon::Pop;
@@ -135,10 +138,13 @@ public:
   static ArrayData* ToPHPArray(ArrayData* ad, bool) {
     return ad;
   }
+  static constexpr auto ToPHPArrayIntishCast = &ToPHPArray;
   static constexpr auto ToVec = &ArrayCommon::ToVec;
   static constexpr auto ToDict = &ArrayCommon::ToDict;
   static constexpr auto ToKeyset = &ArrayCommon::ToKeyset;
   static constexpr auto ToVArray = &ArrayCommon::ToVArray;
+  static constexpr auto ToDArray = &ArrayCommon::ToDArray;
+  static constexpr auto ToShape = &ArrayCommon::ToShape;
 
 private:
   static GlobalsArray* asGlobals(ArrayData* ad);

@@ -8,17 +8,17 @@
 
 	$driver    = new mysqli_driver;
 
-	$host      = getenv("MYSQL_TEST_HOST")     ? getenv("MYSQL_TEST_HOST") : "localhost";
-	$port      = getenv("MYSQL_TEST_PORT")     ? getenv("MYSQL_TEST_PORT") : 3306;
-	$user      = getenv("MYSQL_TEST_USER")     ? getenv("MYSQL_TEST_USER") : "root";
-	$passwd    = getenv("MYSQL_TEST_PASSWD")   ? getenv("MYSQL_TEST_PASSWD") : "";
-	$db        = getenv("MYSQL_TEST_DB")       ? getenv("MYSQL_TEST_DB") : "test";
-	$engine    = getenv("MYSQL_TEST_ENGINE")   ? getenv("MYSQL_TEST_ENGINE") : "MyISAM";
-	$socket    = getenv("MYSQL_TEST_SOCKET")   ? getenv("MYSQL_TEST_SOCKET") : null;
-	$skip_on_connect_failure  = getenv("MYSQL_TEST_SKIP_CONNECT_FAILURE") ? getenv("MYSQL_TEST_SKIP_CONNECT_FAILURE") : true;
-	$connect_flags = getenv("MYSQL_TEST_CONNECT_FLAGS") ? (int)getenv("MYSQL_TEST_CONNECT_FLAGS") : 0;
-	if ($socket) {
-		ini_set('mysqli.default_socket', $socket);
+  ZendGoodExtMysqliTestsConnectInc::$host      = getenv("MYSQL_TEST_HOST")     ? getenv("MYSQL_TEST_HOST") : "localhost";
+  ZendGoodExtMysqliTestsConnectInc::$port      = getenv("MYSQL_TEST_PORT")     ? getenv("MYSQL_TEST_PORT") : 3306;
+  ZendGoodExtMysqliTestsConnectInc::$user      = getenv("MYSQL_TEST_USER")     ? getenv("MYSQL_TEST_USER") : "root";
+  ZendGoodExtMysqliTestsConnectInc::$passwd    = getenv("MYSQL_TEST_PASSWD")   ? getenv("MYSQL_TEST_PASSWD") : "";
+  ZendGoodExtMysqliTestsConnectInc::$db        = getenv("MYSQL_TEST_DB")       ? getenv("MYSQL_TEST_DB") : "test";
+  ZendGoodExtMysqliTestsConnectInc::$engine    = getenv("MYSQL_TEST_ENGINE")   ? getenv("MYSQL_TEST_ENGINE") : "MyISAM";
+  ZendGoodExtMysqliTestsConnectInc::$socket    = getenv("MYSQL_TEST_SOCKET")   ? getenv("MYSQL_TEST_SOCKET") : null;
+  ZendGoodExtMysqliTestsConnectInc::$skip_on_connect_failure  = getenv("MYSQL_TEST_SKIP_CONNECT_FAILURE") ? getenv("MYSQL_TEST_SKIP_CONNECT_FAILURE") : true;
+	ZendGoodExtMysqliTestsConnectInc::$connect_flags = getenv("MYSQL_TEST_CONNECT_FLAGS") ? (int)getenv("MYSQL_TEST_CONNECT_FLAGS") : 0;
+	if (ZendGoodExtMysqliTestsConnectInc::$socket) {
+		ini_set('mysqli.default_socket', ZendGoodExtMysqliTestsConnectInc::$socket);
 	}
 
 	/* Development setting: test experimal features and/or feature requests that never worked before? */
@@ -57,124 +57,107 @@
 
 	}
 
-	if (!function_exists('sys_get_temp_dir')) {
-		function sys_get_temp_dir() {
+  /**
+   * Whenever possible, please use this wrapper to make testing ot MYSQLI_CLIENT_COMPRESS (and potentially SSL) possible
+   *
+   * @param enable_env_flags Enable setting of connection flags through 	env(MYSQL_TEST_CONNECT_FLAGS)?
+   */
+  function my_mysqli_connect($host, $user, $passwd, $db, $port, $socket, $enable_env_flags = true) {
 
-			if (!empty($_ENV['TMP']))
-				return realpath( $_ENV['TMP'] );
-			if (!empty($_ENV['TMPDIR']))
-				return realpath( $_ENV['TMPDIR'] );
-			if (!empty($_ENV['TEMP']))
-				return realpath( $_ENV['TEMP'] );
 
-			$temp_file = tempnam(md5(uniqid(rand(), TRUE)), '');
-			if ($temp_file) {
-				$temp_dir = realpath(dirname($temp_file));
-				unlink($temp_file);
-				return $temp_dir;
-			}
-			return FALSE;
-		}
-	}
+    $flags = ($enable_env_flags) ? ZendGoodExtMysqliTestsConnectInc::$connect_flags : false;
 
-	if (!function_exists('my_mysqli_connect')) {
+    if ($flags !== false) {
+      $link = mysqli_init();
+      if (!mysqli_real_connect($link, $host, $user, $passwd, $db, $port, $socket, $flags))
+        $link = false;
+    } else {
+      $link = mysqli_connect($host, $user, $passwd, $db, $port, $socket);
+    }
 
-		/**
-		* Whenever possible, please use this wrapper to make testing ot MYSQLI_CLIENT_COMPRESS (and potentially SSL) possible
-		*
-		* @param enable_env_flags Enable setting of connection flags through 	env(MYSQL_TEST_CONNECT_FLAGS)?
-		*/
-		function my_mysqli_connect($host, $user, $passwd, $db, $port, $socket, $enable_env_flags = true) {
-			global $connect_flags;
+    return $link;
+  }
 
-			$flags = ($enable_env_flags) ? $connect_flags : false;
+  /**
+   * Whenever possible, please use this wrapper to make testing ot MYSQLI_CLIENT_COMPRESS (and potentially SSL) possible
+   *
+   * @param enable_env_flags Enable setting of connection flags through env(MYSQL_TEST_CONNECT_FLAGS)
+   */
+  function my_mysqli_real_connect($link, $host, $user, $passwd, $db, $port, $socket, $flags = 0, $enable_env_flags = true) {
 
-			if ($flags !== false) {
-				$link = mysqli_init();
-				if (!mysqli_real_connect($link, $host, $user, $passwd, $db, $port, $socket, $flags))
-					$link = false;
-			} else {
-				$link = mysqli_connect($host, $user, $passwd, $db, $port, $socket);
-			}
 
-			return $link;
-		}
+    if ($enable_env_flags)
+      $flags & ZendGoodExtMysqliTestsConnectInc::$connect_flags;
 
-		/**
-		* Whenever possible, please use this wrapper to make testing ot MYSQLI_CLIENT_COMPRESS (and potentially SSL) possible
-		*
-		* @param enable_env_flags Enable setting of connection flags through env(MYSQL_TEST_CONNECT_FLAGS)
-		*/
-		function my_mysqli_real_connect($link, $host, $user, $passwd, $db, $port, $socket, $flags = 0, $enable_env_flags = true) {
-			global $connect_flags;
+    return mysqli_real_connect($link, $host, $user, $passwd, $db, $port, $socket, $flags);
+  }
 
-			if ($enable_env_flags)
-				$flags & $connect_flags;
+  class my_mysqli extends mysqli {
+    public function __construct($host, $user, $passwd, $db, $port, $socket, $enable_env_flags = true) {
 
-			return mysqli_real_connect($link, $host, $user, $passwd, $db, $port, $socket, $flags);
-		}
 
-		class my_mysqli extends mysqli {
-			public function __construct($host, $user, $passwd, $db, $port, $socket, $enable_env_flags = true) {
-				global $connect_flags;
+      $flags = ($enable_env_flags) ? ZendGoodExtMysqliTestsConnectInc::$connect_flags : false;
 
-				$flags = ($enable_env_flags) ? $connect_flags : false;
+      if ($flags !== false) {
+        parent::init();
+        $this->real_connect($host, $user, $passwd, $db, $port, $socket, $flags);
+      } else {
+        parent::__construct($host, $user, $passwd, $db, $port, $socket);
+      }
+    }
+  }
 
-				if ($flags !== false) {
-					parent::init();
-					$this->real_connect($host, $user, $passwd, $db, $port, $socket, $flags);
-				} else {
-					parent::__construct($host, $user, $passwd, $db, $port, $socket);
-				}
-			}
-		}
+  function have_innodb($link) {
+    if (($res = $link->query("SHOW VARIABLES LIKE 'have_innodb'")) &&
+      ($row = $res->fetch_row()) &&
+      !empty($row)) {
+      if ($row[1] == "DISABLED" || $row[1] == "NO") {
+        return false;
+      }
+      return true;
+    } else {
+      /* MySQL 5.6.1+ */
+      if ($res = $link->query("SHOW ENGINES")) {
+        while ($row = $res->fetch_assoc()) {
+          if (!isset($row['Engine']) || !isset($row['Support']))
+            return false;
 
-		function have_innodb($link) {
-		  if (($res = $link->query("SHOW VARIABLES LIKE 'have_innodb'")) &&
-				($row = $res->fetch_row()) &&
-				!empty($row)) {
-				if ($row[1] == "DISABLED" || $row[1] == "NO") {
-					return false;
-				}
-				return true;
-		  } else {
-				/* MySQL 5.6.1+ */
-				if ($res = $link->query("SHOW ENGINES")) {
-					while ($row = $res->fetch_assoc()) {
-						if (!isset($row['Engine']) || !isset($row['Support']))
-							return false;
-
-						if (('InnoDB' == $row['Engine']) &&
-							(('YES' == $row['Support']) || ('DEFAULT' == $row['Support']))
-							) {
-							return true;
-						}
-					}
-					return false;
-				} else {
-					return false;
-				}
-		  }
-		  return false;
-		}
-
-	} else {
-		printf("skip Eeeek/BUG/FIXME - connect.inc included twice! skipif bug?\n");
-	}
+          if (('InnoDB' == $row['Engine']) &&
+            (('YES' == $row['Support']) || ('DEFAULT' == $row['Support']))
+          ) {
+            return true;
+          }
+        }
+        return false;
+      } else {
+        return false;
+      }
+    }
+    return false;
+  }
 
 	function handle_catchable_fatal($errno, $error, $file, $line) {
-		static $errcodes = array();
-		if (empty($errcodes)) {
+		$errcodes = array();
 			$constants = get_defined_constants();
 			foreach ($constants as $name => $value) {
 				if (substr($name, 0, 2) == "E_")
 					$errcodes[$value] = $name;
 			}
-		}
 		printf("[%s] %s in %s on line %s\n",
 			(isset($errcodes[$errno])) ? $errcodes[$errno] : $errno,
 			 $error, $file, $line);
 
 		return true;
 	}
-?>
+
+abstract final class ZendGoodExtMysqliTestsConnectInc {
+  public static $host;
+  public static $user;
+  public static $passwd;
+  public static $db;
+  public static $port;
+  public static $socket;
+  public static $connect_flags;
+  public static $engine;
+  public static $skip_on_connect_failure;
+}

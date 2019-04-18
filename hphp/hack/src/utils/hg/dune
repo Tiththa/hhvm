@@ -1,0 +1,10 @@
+(library
+  (name hg)
+  (wrapped false)
+  (modules
+    hg
+    hg_sig)
+  (libraries
+    process
+    process_types
+    future))

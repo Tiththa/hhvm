@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -14,61 +13,53 @@
  *  new nodes without having to back them with a source text.
  *)
 
-module SyntaxTree = Full_fidelity_syntax_tree
-module EditableToken = Full_fidelity_editable_token
-module MinimalSyntax = Full_fidelity_minimal_syntax
-module SyntaxWithEditableToken = Full_fidelity_syntax.WithToken(EditableToken)
+module Token = Full_fidelity_editable_token
+module Trivia = Full_fidelity_editable_trivia
+module SyntaxKind = Full_fidelity_syntax_kind
+module TokenKind = Full_fidelity_token_kind
+module SyntaxWithToken = Full_fidelity_syntax.WithToken(Token)
 
 (**
  * Ironically, an editable syntax tree needs even less per-node information
- * than the "minimal" syntax tree, which needs to know the width of the node.
+ * than the "positioned" syntax tree, which needs to know the width of the node.
  **)
 
-module EditableSyntaxValue = struct
-  type t = NoValue
+module Value = struct
+  type t = NoValue [@@deriving show]
+  let to_json _value =
+    let open Hh_json in
+    JSON_Object [ ]
 end
 
 module EditableSyntax =
-  SyntaxWithEditableToken.WithSyntaxValue(EditableSyntaxValue)
+  SyntaxWithToken.WithSyntaxValue(Value)
 
 module EditableValueBuilder = struct
-  let value_from_children _ _ =
-    EditableSyntaxValue.NoValue
+  let value_from_children _ _ _ _ =
+    Value.NoValue
 
   let value_from_token _ =
-    EditableSyntaxValue.NoValue
+    Value.NoValue
+
+  let value_from_syntax _ =
+    Value.NoValue
 end
 
 include EditableSyntax
 include EditableSyntax.WithValueBuilder(EditableValueBuilder)
 
-let rec from_minimal text minimal_node offset =
-  match MinimalSyntax.syntax minimal_node with
-  | MinimalSyntax.Token token ->
-    let editable_token = EditableToken.from_minimal text token offset in
-    let syntax = Token editable_token in
-    make syntax EditableSyntaxValue.NoValue
-  | _ ->
-    let folder (acc, offset) child =
-      let new_child = from_minimal text child offset in
-      let w = MinimalSyntax.full_width child in
-      (new_child :: acc, offset + w) in
-    let kind = MinimalSyntax.kind minimal_node in
-    let minimals = MinimalSyntax.children minimal_node in
-    let (editables, _) = List.fold_left folder ([], offset) minimals in
-    let editables = List.rev editables in
-    let syntax = syntax_from_children kind editables in
-    make syntax EditableSyntaxValue.NoValue
-
-let from_tree tree =
-  from_minimal (SyntaxTree.text tree) (SyntaxTree.root tree) 0
-
 let text node =
   let buffer = Buffer.create 100 in
   let aux token =
-    Buffer.add_string buffer (EditableToken.full_text token) in
+    Buffer.add_string buffer (Token.full_text token) in
   List.iter aux (all_tokens node);
   Buffer.contents buffer
+
+let extract_text node =
+  Some (text node)
+
+let width node =
+  String.length (text node)
 
 (* Takes a node and an offset; produces the descent through the parse tree
    to that position. *)
@@ -88,10 +79,86 @@ let leading_trivia node =
   let token = leading_token node in
   match token with
   | None -> []
-  | Some t -> EditableToken.leading t
+  | Some t -> Token.leading t
+
+let leading_width node =
+  leading_trivia node
+  |> List.fold_left (fun sum t -> sum + (Trivia.width t)) 0
 
 let trailing_trivia node =
   let token = trailing_token node in
   match token with
   | None -> []
-  | Some t -> EditableToken.trailing t
+  | Some t -> Token.trailing t
+
+let trailing_width node =
+  trailing_trivia node
+  |> List.fold_left (fun sum t -> sum + (Trivia.width t)) 0
+
+let full_width node =
+  leading_width node + width node + trailing_width node
+
+let is_in_body node position =
+  let rec aux = function
+    | [] -> false
+    | h1 :: t1 when not (is_compound_statement h1) -> aux t1
+    | _h1 :: [] -> false
+    | _h1 :: (h2 :: _ as t1) ->
+      is_methodish_declaration h2 || is_function_declaration h2 || aux t1
+  in
+  aux (parentage node position)
+
+(* This function takes a parse tree and renders it in the GraphViz DOT
+language; this is a small domain-specific language for visualizing graphs.
+You can use www.webgraphviz.com to render it in a browser, or the "dot"
+command line tool to turn DOT text into image files.
+
+Edge labels can make the graph hard to read, so they can be enabled or
+disabled as you like.
+
+Use hh_parse --full-fidelity-dot or --full-fidelity-dot-edges to parse
+a Hack file and display it in DOT form.
+
+TODO: There's nothing here that's unique to editable trees; this could
+be auto-generated as part of full_fidelity_syntax.ml.
+*)
+let to_dot node with_labels =
+  (* returns new current_id, accumulator *)
+  let rec aux node current_id parent_id edge_label acc =
+    let kind = (SyntaxKind.to_string (kind node)) in
+    let new_id = current_id + 1 in
+    let label =
+      if with_labels then Printf.sprintf " [label=\"%s\"]" edge_label else "" in
+    let new_edge = Printf.sprintf "  %d -> %d%s" parent_id current_id label in
+    match node.syntax with
+    | Token t -> (* TODO: Trivia *)
+      let kind = (TokenKind.to_string (Token.kind t)) in
+      let new_node = Printf.sprintf "  %d [label=\"%s\"];" current_id kind in
+      let new_acc = new_edge :: new_node :: acc in
+      (new_id, new_acc)
+    | SyntaxList x ->
+      let new_node = Printf.sprintf "  %d [label=\"%s\"];" current_id kind in
+      let new_acc = new_edge :: new_node :: acc in
+      let folder (c, a) n = aux n c current_id "" a in
+      List.fold_left folder (new_id, new_acc) x
+    | _ ->
+      let folder (c, a) n l = aux n c current_id l a in
+      let new_node = Printf.sprintf "  %d [label=\"%s\"];" current_id kind in
+      let new_acc = new_edge :: new_node :: acc in
+      List.fold_left2
+        folder (new_id, new_acc) (children node) (children_names node) in
+  let (_, acc) =
+    aux node 1001 1000 "" ["  1000 [label=\"root\"]"; "digraph {"] in
+  let acc = "}" :: acc in
+  String.concat "\n" (List.rev acc)
+
+let offset _ = None
+let position _ _ = None
+
+let to_json ?with_value:_ node =
+  let version = Full_fidelity_schema.full_fidelity_schema_version_number in
+  let tree = EditableSyntax.to_json node in
+  Hh_json.JSON_Object [
+    "parse_tree", tree;
+    "version", Hh_json.JSON_String version
+  ]

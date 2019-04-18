@@ -21,6 +21,8 @@
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/class-meth-data-ref.h"
 
 #include "hphp/util/assertions.h"
 
@@ -29,10 +31,10 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 bool cellIsPlausible(const Cell cell) {
-  assert(cell.m_type != KindOfRef);
+  assertx(!isRefType(cell.m_type));
 
-  auto assertPtr = [](void* ptr) {
-    assert(ptr && (uintptr_t(ptr) % sizeof(ptr) == 0));
+  auto assertPtr = [](const void* ptr) {
+    assertx(ptr && (uintptr_t(ptr) % sizeof(ptr) == 0));
   };
 
   [&] {
@@ -41,75 +43,124 @@ bool cellIsPlausible(const Cell cell) {
       case KindOfNull:
         return;
       case KindOfBoolean:
-        assert(cell.m_data.num == 0 || cell.m_data.num == 1);
+        assertx(cell.m_data.num == 0 || cell.m_data.num == 1);
         return;
       case KindOfInt64:
       case KindOfDouble:
         return;
       case KindOfPersistentString:
         assertPtr(cell.m_data.pstr);
-        assert(cell.m_data.pstr->kindIsValid());
-        assert(!cell.m_data.pstr->isRefCounted());
+        assertx(cell.m_data.pstr->kindIsValid());
+        assertx(!cell.m_data.pstr->isRefCounted());
         return;
       case KindOfString:
         assertPtr(cell.m_data.pstr);
-        assert(cell.m_data.pstr->kindIsValid());
-        assert(cell.m_data.pstr->checkCount());
+        assertx(cell.m_data.pstr->kindIsValid());
+        assertx(cell.m_data.pstr->checkCountZ());
         return;
       case KindOfPersistentVec:
         assertPtr(cell.m_data.parr);
-        assert(!cell.m_data.parr->isRefCounted());
-        assert(cell.m_data.parr->isVecArray());
+        assertx(!cell.m_data.parr->isRefCounted());
+        assertx(cell.m_data.parr->isVecArray());
+        assertx(cell.m_data.parr->isNotDVArray());
         return;
       case KindOfVec:
         assertPtr(cell.m_data.parr);
-        assert(cell.m_data.parr->checkCount());
-        assert(cell.m_data.parr->isVecArray());
+        assertx(cell.m_data.parr->checkCountZ());
+        assertx(cell.m_data.parr->isVecArray());
+        assertx(cell.m_data.parr->isNotDVArray());
         return;
       case KindOfPersistentDict:
         assertPtr(cell.m_data.parr);
-        assert(!cell.m_data.parr->isRefCounted());
-        assert(cell.m_data.parr->isDict());
+        assertx(!cell.m_data.parr->isRefCounted());
+        assertx(cell.m_data.parr->isDict());
+        assertx(cell.m_data.parr->isNotDVArray());
         return;
       case KindOfDict:
         assertPtr(cell.m_data.parr);
-        assert(cell.m_data.parr->checkCount());
-        assert(cell.m_data.parr->isDict());
+        assertx(cell.m_data.parr->checkCountZ());
+        assertx(cell.m_data.parr->isDict());
+        assertx(cell.m_data.parr->isNotDVArray());
         return;
       case KindOfPersistentKeyset:
         assertPtr(cell.m_data.parr);
-        assert(!cell.m_data.parr->isRefCounted());
-        assert(cell.m_data.parr->isKeyset());
+        assertx(!cell.m_data.parr->isRefCounted());
+        assertx(cell.m_data.parr->isKeyset());
+        assertx(cell.m_data.parr->isNotDVArray());
         return;
       case KindOfKeyset:
         assertPtr(cell.m_data.parr);
-        assert(cell.m_data.parr->checkCount());
-        assert(cell.m_data.parr->isKeyset());
+        assertx(cell.m_data.parr->checkCountZ());
+        assertx(cell.m_data.parr->isKeyset());
+        assertx(cell.m_data.parr->isNotDVArray());
+        return;
+      case KindOfPersistentShape:
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          assertPtr(cell.m_data.parr);
+          assertx(!cell.m_data.parr->isRefCounted());
+          assertx(cell.m_data.parr->isShape());
+          assertx(cell.m_data.parr->isNotDVArray());
+          return;
+        }
+        assertPtr(cell.m_data.parr);
+        assertx(cell.m_data.parr->kindIsValid());
+        assertx(!cell.m_data.parr->isRefCounted());
+        assertx(cell.m_data.parr->isShape());
+        assertx(cell.m_data.parr->dvArraySanityCheck());
+        return;
+      case KindOfShape:
+        assertPtr(cell.m_data.parr);
+        assertx(cell.m_data.parr->checkCountZ());
+        assertx(cell.m_data.parr->isShape());
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          assertx(cell.m_data.parr->isNotDVArray());
+          return;
+        }
+        assertx(cell.m_data.parr->kindIsValid());
+        assertx(cell.m_data.parr->dvArraySanityCheck());
         return;
       case KindOfPersistentArray:
         assertPtr(cell.m_data.parr);
-        assert(cell.m_data.parr->kindIsValid());
-        assert(!cell.m_data.parr->isRefCounted());
-        assert(cell.m_data.parr->isPHPArray());
+        assertx(cell.m_data.parr->kindIsValid());
+        assertx(!cell.m_data.parr->isRefCounted());
+        assertx(cell.m_data.parr->isPHPArray());
+        assertx(cell.m_data.parr->dvArraySanityCheck());
         return;
       case KindOfArray:
         assertPtr(cell.m_data.parr);
-        assert(cell.m_data.parr->kindIsValid());
-        assert(cell.m_data.parr->checkCount());
-        assert(cell.m_data.parr->isPHPArray());
+        assertx(cell.m_data.parr->kindIsValid());
+        assertx(cell.m_data.parr->checkCountZ());
+        assertx(cell.m_data.parr->isPHPArray());
+        assertx(cell.m_data.parr->dvArraySanityCheck());
         return;
       case KindOfObject:
         assertPtr(cell.m_data.pobj);
-        assert(cell.m_data.pobj->kindIsValid());
-        assert(cell.m_data.pobj->checkCount());
+        assertx(cell.m_data.pobj->kindIsValid());
+        assertx(cell.m_data.pobj->checkCountZ());
+        return;
+      case KindOfRecord:
+        assertPtr(cell.m_data.prec);
+        assertx(cell.m_data.prec->kindIsValid());
+        assertx(cell.m_data.prec->checkCount());
         return;
       case KindOfResource:
         assertPtr(cell.m_data.pres);
-        assert(cell.m_data.pres->kindIsValid());
-        assert(cell.m_data.pres->checkCount());
+        assertx(cell.m_data.pres->kindIsValid());
+        assertx(cell.m_data.pres->checkCountZ());
+        return;
+      case KindOfFunc:
+        assertPtr(cell.m_data.pfunc);
+        assertx(cell.m_data.pfunc->validate());
+        return;
+      case KindOfClass:
+        assertPtr(cell.m_data.pclass);
+        assertx(cell.m_data.pclass->validate());
+        return;
+      case KindOfClsMeth:
+        assertx(cell.m_data.pclsmeth->validate());
         return;
       case KindOfRef:
-        assert(!"KindOfRef found in a Cell");
+        assertx(!"KindOfRef found in a Cell");
         break;
     }
     not_reached();
@@ -119,18 +170,18 @@ bool cellIsPlausible(const Cell cell) {
 }
 
 bool tvIsPlausible(TypedValue tv) {
-  if (tv.m_type == KindOfRef) {
-    assert(tv.m_data.pref);
-    assert(uintptr_t(tv.m_data.pref) % sizeof(void*) == 0);
-    assert(tv.m_data.pref->kindIsValid());
-    assert(tv.m_data.pref->checkCount());
-    tv = *tv.m_data.pref->tv();
+  if (isRefType(tv.m_type)) {
+    assertx(tv.m_data.pref);
+    assertx(uintptr_t(tv.m_data.pref) % sizeof(void*) == 0);
+    assertx(tv.m_data.pref->kindIsValid());
+    assertx(tv.m_data.pref->checkCountZ());
+    tv = *tv.m_data.pref->cell();
   }
   return cellIsPlausible(tv);
 }
 
 bool refIsPlausible(const Ref ref) {
-  assert(ref.m_type == KindOfRef);
+  assertx(isRefType(ref.m_type));
   return tvIsPlausible(ref);
 }
 

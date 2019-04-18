@@ -27,7 +27,7 @@
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/string-buffer.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
 #include "hphp/util/logger.h"
@@ -38,6 +38,8 @@ namespace HPHP {
 const int64_t k_DEBUG_BACKTRACE_PROVIDE_OBJECT = (1 << 0);
 const int64_t k_DEBUG_BACKTRACE_IGNORE_ARGS = (1 << 1);
 const int64_t k_DEBUG_BACKTRACE_PROVIDE_METADATA = (1 << 16);
+
+const int64_t k_DEBUG_BACKTRACE_HASH_CONSIDER_METADATA = (1 << 0);
 
 
 Array HHVM_FUNCTION(debug_backtrace, int64_t options /* = 1 */,
@@ -75,8 +77,10 @@ Array HHVM_FUNCTION(hphp_debug_caller_info) {
   return g_context->getCallerInfo();
 }
 
-int64_t HHVM_FUNCTION(hphp_debug_backtrace_hash) {
-  return createBacktraceHash();
+int64_t HHVM_FUNCTION(hphp_debug_backtrace_hash, int64_t options /* = 0 */) {
+  return createBacktraceHash(
+    options & k_DEBUG_BACKTRACE_HASH_CONSIDER_METADATA
+  );
 }
 
 void HHVM_FUNCTION(debug_print_backtrace, int64_t options /* = 0 */,
@@ -110,14 +114,14 @@ String debug_string_backtrace(bool skip, bool ignore_args /* = false */,
     if (i < 10) buf.append(' ');
     buf.append(' ');
     if (frame.exists(s_class)) {
-      buf.append(frame->get(s_class).toString());
-      buf.append(frame->get(s_type).toString());
+      buf.append(tvCastToString(frame->get(s_class).tv()));
+      buf.append(tvCastToString(frame->get(s_type).tv()));
     }
-    buf.append(frame->get(s_function).toString());
+    buf.append(tvCastToString(frame->get(s_function).tv()));
     buf.append("(");
     if (!ignore_args) {
       bool first = true;
-      for (ArrayIter argsIt(frame->get(s_args).toArray());
+      for (ArrayIter argsIt(tvCastToArrayLike(frame->get(s_args).tv()));
           !argsIt.end();
           argsIt.next()) {
         if (!first) {
@@ -135,9 +139,9 @@ String debug_string_backtrace(bool skip, bool ignore_args /* = false */,
     buf.append(")");
     if (frame.exists(s_file)) {
       buf.append(" called at [");
-      buf.append(frame->get(s_file).toString());
+      buf.append(tvCastToString(frame->get(s_file).tv()));
       buf.append(':');
-      buf.append(frame->get(s_line).toString());
+      buf.append(tvCastToString(frame->get(s_line).tv()));
       buf.append(']');
     }
     buf.append('\n');
@@ -191,7 +195,7 @@ bool HHVM_FUNCTION(error_log, const String& message, int message_type /* = 0 */,
 }
 
 int64_t HHVM_FUNCTION(error_reporting, const Variant& level /* = null */) {
-  auto& id = ThreadInfo::s_threadInfo.getNoCheck()->m_reqInjectionData;
+  auto& id = RequestInfo::s_requestInfo.getNoCheck()->m_reqInjectionData;
   int oldErrorReportingLevel = id.getErrorReportingLevel();
   if (!level.isNull()) {
     id.setErrorReportingLevel(level.toInt32());
@@ -211,7 +215,7 @@ bool HHVM_FUNCTION(restore_exception_handler) {
 
 Variant HHVM_FUNCTION(set_error_handler, const Variant& error_handler,
                       int error_types /* = ErrorMode::PHP_ALL | STRICT */) {
-  if (!is_null(error_handler)) {
+  if (!is_null(error_handler.asTypedValue())) {
     return g_context->pushUserErrorHandler(error_handler, error_types);
   } else {
     g_context->clearUserErrorHandlers();
@@ -277,7 +281,8 @@ bool HHVM_FUNCTION(trigger_error, const String& error_msg,
 
   ActRec* fp = g_context->getStackFrame();
 
-  if (fp->m_func->nativeFuncPtr() == (BuiltinFunction)HHVM_FN(trigger_error)) {
+  if (fp->m_func->nativeFuncPtr() ==
+      reinterpret_cast<NativeFunction>(HHVM_FN(trigger_error))) {
     fp = g_context->getOuterVMFrame(fp);
   }
   if (fp && fp->m_func->isBuiltin()) {
@@ -326,6 +331,10 @@ Array HHVM_FUNCTION(HH_deferred_errors) {
   return g_context->releaseDeferredErrors();
 }
 
+void HHVM_FUNCTION(HH_set_soft_late_init_default, const Variant& v) {
+  return g_context->setSoftLateInitDefault(v);
+}
+
 Array HHVM_FUNCTION(SL_extract_trace, const Resource& handle) {
   auto bt = dyn_cast<CompactTrace>(handle);
   if (!bt) {
@@ -357,11 +366,14 @@ void StandardExtension::initErrorFunc() {
   HHVM_FE(trigger_sampled_error);
   HHVM_FE(user_error);
   HHVM_FALIAS(HH\\deferred_errors, HH_deferred_errors);
+  HHVM_FALIAS(HH\\set_soft_late_init_default, HH_set_soft_late_init_default);
   HHVM_FALIAS(__SystemLib\\extract_trace, SL_extract_trace);
   HHVM_RC_INT(DEBUG_BACKTRACE_PROVIDE_OBJECT, k_DEBUG_BACKTRACE_PROVIDE_OBJECT);
   HHVM_RC_INT(DEBUG_BACKTRACE_IGNORE_ARGS, k_DEBUG_BACKTRACE_IGNORE_ARGS);
   HHVM_RC_INT(DEBUG_BACKTRACE_PROVIDE_METADATA,
               k_DEBUG_BACKTRACE_PROVIDE_METADATA);
+  HHVM_RC_INT(DEBUG_BACKTRACE_HASH_CONSIDER_METADATA,
+              k_DEBUG_BACKTRACE_HASH_CONSIDER_METADATA);
   HHVM_RC_INT(E_ERROR, (int)ErrorMode::ERROR);
   HHVM_RC_INT(E_WARNING, (int)ErrorMode::WARNING);
   HHVM_RC_INT(E_PARSE, (int)ErrorMode::PARSE);

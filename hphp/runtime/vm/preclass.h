@@ -24,6 +24,7 @@
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/user-attributes.h"
 #include "hphp/runtime/base/atomic-countable.h"
+#include "hphp/runtime/vm/containers.h"
 #include "hphp/runtime/vm/indexed-string-map.h"
 #include "hphp/runtime/vm/type-constraint.h"
 
@@ -116,29 +117,36 @@ struct PreClass : AtomicCountable {
     Prop(PreClass* preClass,
          const StringData* name,
          Attr attrs,
-         const StringData* typeConstraint,
+         const StringData* userType,
+         const TypeConstraint& typeConstraint,
          const StringData* docComment,
          const TypedValue& val,
-         RepoAuthType repoAuthType);
+         RepoAuthType repoAuthType,
+         UserAttributeMap userAttributes);
 
     void prettyPrint(std::ostream&, const PreClass*) const;
 
     const StringData* name()           const { return m_name; }
     const StringData* mangledName()    const { return m_mangledName; }
     Attr              attrs()          const { return m_attrs; }
-    const StringData* typeConstraint() const { return m_typeConstraint; }
+    const StringData* userType()       const { return m_userType; }
+    const TypeConstraint& typeConstraint() const { return m_typeConstraint; }
     const StringData* docComment()     const { return m_docComment; }
     const TypedValue& val()            const { return m_val; }
     RepoAuthType      repoAuthType()   const { return m_repoAuthType; }
+    const UserAttributeMap&
+                      userAttributes() const { return m_userAttributes; }
 
   private:
     LowStringPtr m_name;
     LowStringPtr m_mangledName;
     Attr m_attrs;
-    LowStringPtr m_typeConstraint;
+    LowStringPtr m_userType;
     LowStringPtr m_docComment;
     TypedValue m_val;
     RepoAuthType m_repoAuthType;
+    TypeConstraint m_typeConstraint;
+    UserAttributeMap m_userAttributes;
   };
 
   /*
@@ -204,12 +212,20 @@ struct PreClass : AtomicCountable {
     TraitAliasRule(const StringData* traitName,
                    const StringData* origMethodName,
                    const StringData* newMethodName,
-                   Attr modifiers);
+                   Attr modifiers,
+                   bool strict,
+                   bool async);
 
     const StringData* traitName()      const { return m_traitName; }
     const StringData* origMethodName() const { return m_origMethodName; }
     const StringData* newMethodName()  const { return m_newMethodName; }
     Attr              modifiers()      const { return m_modifiers; }
+    bool strict() const {
+      return (m_modifiers & AttrStrict) != AttrNone;
+    }
+    bool async() const {
+      return (m_modifiers & AttrAsync) != AttrNone;
+    }
 
     template<class SerDe> void serde(SerDe& sd) {
       sd(m_traitName)(m_origMethodName)(m_newMethodName)(m_modifiers);
@@ -247,6 +263,7 @@ struct PreClass : AtomicCountable {
     bool is_extends() const;
     bool is_implements() const;
     bool is_same(const ClassRequirement* other) const;
+    size_t hash() const;
 
     template<class SerDe>
     typename std::enable_if<SerDe::deserializing>::type serde(SerDe& sd);
@@ -266,11 +283,11 @@ private:
   typedef IndexedStringMap<Const,true,Slot> ConstMap;
 
 public:
-  typedef FixedVector<LowStringPtr> InterfaceVec;
-  typedef FixedVector<LowStringPtr> UsedTraitVec;
-  typedef FixedVector<ClassRequirement> ClassRequirementsVec;
-  typedef FixedVector<TraitPrecRule> TraitPrecRuleVec;
-  typedef FixedVector<TraitAliasRule> TraitAliasRuleVec;
+  typedef VMFixedVector<LowStringPtr> InterfaceVec;
+  typedef VMFixedVector<LowStringPtr> UsedTraitVec;
+  typedef VMFixedVector<ClassRequirement> ClassRequirementsVec;
+  typedef VMFixedVector<TraitPrecRule> TraitPrecRuleVec;
+  typedef VMFixedVector<TraitAliasRule> TraitAliasRuleVec;
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -323,12 +340,6 @@ public:
   const TypeConstraint& enumBaseTy() const { return m_enumBaseTy; }
 
   /*
-   * Extension builtin classes have custom creation and destruction routines.
-   */
-  BuiltinCtorFunction instanceCtor() const { return m_instanceCtor; }
-  BuiltinDtorFunction instanceDtor() const { return m_instanceDtor; }
-
-  /*
    * Accessors for vectory data.
    */
   const InterfaceVec& interfaces()           const { return m_interfaces; }
@@ -337,6 +348,14 @@ public:
   const TraitPrecRuleVec& traitPrecRules()   const { return m_traitPrecRules; }
   const TraitAliasRuleVec& traitAliasRules() const { return m_traitAliasRules; }
   const UserAttributeMap& userAttributes()   const { return m_userAttributes; }
+
+  /*
+   * If the parent is sealed, enforce that we are in the whitelist.
+   * Note that parent may be derived through a using, extending, or
+   * implementing relationship.
+   */
+  void
+  enforceInMaybeSealedParentWhitelist(const PreClass* parentPreClass) const;
 
   /*
    * Funcs, Consts, and Props all behave similarly.  Define raw accessors
@@ -402,7 +421,6 @@ public:
    */
   const Const* lookupConstant(const StringData* cnsName) const;
   Func* lookupMethod(const StringData* methName) const;
-  const Prop* lookupProp(const StringData* propName) const;
 
   /*
    * Static offset accessors, used by the JIT.
@@ -442,8 +460,6 @@ private:
   int32_t m_numDeclMethods;
   Slot m_ifaceVtableSlot{kInvalidSlot};
   TypeConstraint m_enumBaseTy;
-  BuiltinCtorFunction m_instanceCtor{nullptr};
-  BuiltinDtorFunction m_instanceDtor{nullptr};
   InterfaceVec m_interfaces;
   UsedTraitVec m_usedTraits;
   ClassRequirementsVec m_requirements;

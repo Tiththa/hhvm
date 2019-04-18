@@ -27,6 +27,7 @@
 #include "hphp/runtime/vm/repo-helpers.h"
 #include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/runtime/vm/unit.h"
+#include "hphp/runtime/vm/unit-emitter.h"
 
 #include <utility>
 #include <vector>
@@ -40,20 +41,9 @@ struct StringData;
 struct PreClassEmitter;
 struct UnitEmitter;
 
-///////////////////////////////////////////////////////////////////////////////
-
-struct EHEntEmitter {
-  EHEnt::Type m_type;
-  bool m_itRef;
-  Offset m_base;
-  Offset m_past;
-  int m_iterId;
-  int m_parentIndex;
-  Offset m_handler;
-  Offset m_end;
-
-  template<class SerDe> void serde(SerDe& sd);
-};
+namespace Native {
+struct NativeFunctionInfo;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -84,7 +74,7 @@ struct FuncEmitter {
 
   typedef std::vector<ParamInfo> ParamInfoVec;
   typedef std::vector<Func::SVInfo> SVInfoVec;
-  typedef std::vector<EHEntEmitter> EHEntVec;
+  typedef std::vector<EHEnt> EHEntVec;
   typedef std::vector<FPIEnt> FPIEntVec;
 
 
@@ -136,7 +126,7 @@ struct FuncEmitter {
    */
   void setIds(int sn, Id id);
 
-
+  bool useGlobalIds() const;
   /////////////////////////////////////////////////////////////////////////////
   // Locals, iterators, and parameters.
 
@@ -144,6 +134,7 @@ struct FuncEmitter {
    * Count things.
    */
   Id numLocals() const;
+  Id numNamedLocals() const;
   Id numIterators() const;
   Id numLiveIterators() const;
   Id numClsRefSlots() const;
@@ -163,7 +154,9 @@ struct FuncEmitter {
   void allocVarId(const StringData* name);
 
   /*
-   * Allocate and free unnamed locals.
+   * Allocate and free unnamed locals. Unnamed locals must be freed in reverse
+   * allocation order (i.e., it is only ever legal to free the most recently
+   * allocated unnamed local that has not yet been freed).
    */
   Id allocUnnamedLocal();
   void freeUnnamedLocal(Id id);
@@ -191,7 +184,7 @@ struct FuncEmitter {
   /*
    * Add entries to the EH and FPI tables, and return them by reference.
    */
-  EHEntEmitter& addEHEnt();
+  EHEnt& addEHEnt();
   FPIEnt& addFPIEnt();
 
 private:
@@ -225,6 +218,8 @@ public:
    */
   std::pair<int,int> getLocation() const;
 
+  Native::NativeFunctionInfo getNativeInfo() const;
+  String nativeFullname() const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Complex setters.
@@ -244,10 +239,10 @@ public:
   int parseNativeAttributes(Attr& attrs_) const;
 
   /*
-   * Set some fields for builtin functions.
+   * Fix some attributes based on the current runtime options that may
+   * have been stored incorrectly in the repo.
    */
-  void setBuiltinFunc(Attr attrs_, Offset base_);
-
+  Attr fix_attrs(Attr a) const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Data members.
@@ -275,7 +270,6 @@ public:
   Attr attrs;
 
   ParamInfoVec params;
-  SVInfoVec staticVars;
   int maxStackCells;
 
   MaybeDataType hniReturnType;
@@ -285,15 +279,20 @@ public:
   EHEntVec ehtab;
   FPIEntVec fpitab;
 
-  bool isClosureBody{false};
-  bool isAsync{false};
-  bool isGenerator{false};
-  bool isPairGenerator{false};
-  bool isMemoizeImpl{false};
-  bool isMemoizeWrapper{false};
-  bool hasMemoizeSharedProp{false};
-  bool containsCalls{false};
-  bool isNative{false};
+  union {
+    uint16_t m_repoBoolBitset{0};
+    struct {
+      bool isMemoizeWrapper    : 1;
+      bool isMemoizeWrapperLSB : 1;
+      bool isClosureBody       : 1;
+      bool isAsync             : 1;
+      bool containsCalls       : 1;
+      bool isNative            : 1;
+      bool isGenerator         : 1;
+      bool isPairGenerator     : 1;
+      bool isRxDisabled        : 1;
+    };
+  };
 
   LowStringPtr docComment;
   LowStringPtr originalFilename;
@@ -305,8 +304,6 @@ public:
   int memoizeSharedPropIndex;
   RepoAuthType repoReturnType;
   RepoAuthType repoAwaitedReturnType;
-
-  Id dynCallWrapperId{kInvalidId};
 
 private:
   /*

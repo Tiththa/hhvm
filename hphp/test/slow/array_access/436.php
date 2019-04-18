@@ -13,12 +13,15 @@ class ArrayAccessImpl implements ArrayAccess {
     if(isset($data[$index])) {
         unset($data[$index]);
     }
-    $u = &$this->data[$index];
-    if(is_array($value)) {
-        $u = new ArrayAccessImpl();
-        foreach($value as $idx=>$e)            $u[$idx]=$e;
+    if (is_array($value)) {
+      $u = new ArrayAccessImpl();
+      $this->data[$index] = $u;
+      foreach($value as $idx => $e) {
+        $u[$idx] = $e;
+      }
+    } else {
+      $this->data[$index] = $value;
     }
- else        $u=$value;
   }
   public function offsetGet($index) {
     echo ("GET: $index\n");
@@ -46,12 +49,15 @@ class ArrayAccessImpl2 extends ArrayAccessImpl {
     if(isset($data[$index])) {
         unset($data[$index]);
     }
-    $u = &$this->data[$index];
-    if(is_array($value)) {
-        $u = new ArrayAccessImpl();
-        foreach($value as $idx=>$e)            $u[$idx]=$e;
+    if (is_array($value)) {
+      $u = new ArrayAccessImpl();
+      $this->data[$index] = $u;
+      foreach($value as $idx => $e) {
+        $u[$idx]=$e;
+      }
+    } else {
+      $this->data[$index] = $value;
     }
- else        $u=$value;
   }
   public function offsetGet($index) {
     echo ("GET2: $index\n");
@@ -70,6 +76,9 @@ class ArrayAccessImpl2 extends ArrayAccessImpl {
  else        return false;
   }
 }
+
+<<__EntryPoint>>
+function main_436() {
 offsetGet('foo');
 $data = new ArrayAccessImpl();
 $data['string']="Just a simple string";
@@ -99,3 +108,4 @@ print_r($data2['blank_array']);
 print_r(isset($data2['blank_array']));
 unset($data2['blank_array']);
 print_r($data2);
+}

@@ -1,12 +1,12 @@
-<?hh
+<?hh // partial
 
-enum Foo : int {
+enum Foo: int {
   FOO = 1;
   BAR = 2;
   BAZ = 3;
 }
 
-enum Bar : Foo as Foo {
+enum Bar: Foo as Foo {
   FOO = Foo::FOO;
 }
 

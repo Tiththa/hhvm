@@ -7,7 +7,6 @@ function err($code, $msg) {
   echo "Handled ${code}: $msg", "\n";
   return true;
 }
-set_error_handler('err');
 
 class CExplicit implements Stringish {
   public function __toString() {
@@ -33,7 +32,7 @@ class CThruTrait {
   use TStringish;
 }
 
-function f1(?Stringish $x): void {
+function f1(@?Stringish $x): void {
   $s = Stringish::class;
   echo ($x instanceof Stringish) ? "true" : "false", ", ";
   echo ($x instanceof $s) ? "true" : "false", ", ";
@@ -41,7 +40,7 @@ function f1(?Stringish $x): void {
   echo "\n";
 }
 
-function f2(Stringish $x): void {
+function f2(@Stringish $x): void {
   $s = Stringish::class;
   echo ($x instanceof Stringish) ? "true" : "false", ", ";
   echo ($x instanceof $s) ? "true" : "false", ", ";
@@ -131,5 +130,10 @@ function test_reflection() {
 
 }
 
+<<__EntryPoint>>
+function main_stringish() {
+set_error_handler('err');
+
 test_functionality();
 test_reflection();
+}

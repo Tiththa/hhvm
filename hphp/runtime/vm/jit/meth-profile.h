@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -31,10 +31,13 @@ namespace jit {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+struct ProfDataSerializer;
+struct ProfDataDeserializer;
+
 struct MethProfile {
   using RawType = LowPtr<Class>::storage_type;
 
-  enum class Tag {
+  enum class Tag : uint8_t {
     UniqueClass = 0,
     UniqueMeth = 1,
     BaseMeth = 2,
@@ -88,6 +91,9 @@ struct MethProfile {
    * Aggregate two MethProfiles.
    */
   static void reduce(MethProfile& a, const MethProfile& b);
+
+  void serialize(ProfDataSerializer&) const;
+  void deserialize(ProfDataDeserializer&);
 
   /////////////////////////////////////////////////////////////////////////////
 

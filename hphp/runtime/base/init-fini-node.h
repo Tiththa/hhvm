@@ -51,7 +51,6 @@ struct InitFiniNode {
       ServerInit,
       WarmupConcurrent,      // concurrent with OS file cache warmup, optional
       ServerExit,
-      GlobalsInit,
 
       Sentinel
   };
@@ -84,7 +83,6 @@ struct InitFiniNode {
   static void WarmupConcurrentStart(uint32_t maxWorkers);
   static void WarmupConcurrentWaitForEnd(); // No-op if not started.
   static void ServerFini()     { iterate(When::ServerExit);     }
-  static void GlobalsInit()    { iterate(When::GlobalsInit);    }
 
   struct IFWorker {
     void onThreadEnter() {}
@@ -96,12 +94,12 @@ struct InitFiniNode {
 
   static InitFiniNode*& node(When when) {
     auto idx = static_cast<unsigned>(when);
-    assert(idx < NumNodes);
+    assertx(idx < NumNodes);
     return s_nodes[idx];
   }
   static IFDispatcher*& dispatcher(When when) {
     auto idx = static_cast<unsigned>(when);
-    assert(idx < NumNodes);
+    assertx(idx < NumNodes);
     return s_dispatcher[idx];
   }
   void (*func)();

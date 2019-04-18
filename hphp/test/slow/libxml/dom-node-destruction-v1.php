@@ -12,10 +12,6 @@ class MyElement extends DOMElement {
     return $this;
   }
 
-  function __destruct() {
-    echo "Destructing DOMElement #" . $this->id . ": "  . $this->tagName . "\n";
-  }
-
   function info() {
     echo "Querying DOMElement #" . $this->id . ": "  . $this->tagName . "\n";
   }
@@ -45,6 +41,10 @@ function bar() {
   echo "Leave bar()\n";
 }
 
+
+<<__EntryPoint>>
+function main_dom_node_destruction_v1() {
 echo "Enter main()\n";
 bar();
 echo "Leave main()\n";
+}

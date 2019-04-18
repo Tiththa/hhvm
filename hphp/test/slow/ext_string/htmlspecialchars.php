@@ -58,7 +58,7 @@ function test_htmlspecialchars() {
     "\xe0\x80\xbc".
     "\xc2";
   $tmp = $input;
-  fb_utf8ize($tmp);
+  fb_utf8ize(&$tmp);
   $sanitized = $tmp;
 
   VS(fb_htmlspecialchars($input, ENT_QUOTES, "UtF-8", array()),
@@ -80,5 +80,9 @@ function test_htmlspecialchars() {
   VS(fb_htmlspecialchars($zfoo, ENT_COMPAT, "UTF-8"), u('\ufffd')."foo");
 }
 
+
+<<__EntryPoint>>
+function main_htmlspecialchars() {
 test_htmlspecialchars_decode();
 test_htmlspecialchars();
+}

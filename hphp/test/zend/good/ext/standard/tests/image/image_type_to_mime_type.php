@@ -9,10 +9,9 @@
 		}
 	}
 	closedir($dir);
-	sort($files);
+	sort(&$files);
 	foreach($files as $file) {
 		$result[$file] = getimagesize(dirname(__FILE__)."/$file");
 		$result[$file] = image_type_to_mime_type($result[$file][2]);
 	}
 	var_dump($result);
-?>

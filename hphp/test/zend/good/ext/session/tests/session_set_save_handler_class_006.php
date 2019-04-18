@@ -2,19 +2,16 @@
 
 ob_start();
 
-/* 
+/*
  * Prototype : bool session_set_save_handler(SessionHandler $handler [, bool $register_shutdown_function = true])
  * Description : Sets user-level session storage functions
- * Source code : ext/session/session.c 
+ * Source code : ext/session/session.c
  */
 
 echo "*** Testing session_set_save_handler() : using objects in close ***\n";
 
 class MySession7_Foo {
 	public $state = 'ok';
-	function __destruct() {
-		$this->state = 'destroyed';
-	}
 }
 
 class MySession7 extends SessionHandler {
@@ -33,4 +30,3 @@ session_set_save_handler($handler);
 session_start();
 
 ob_end_flush();
-?>

@@ -1,16 +1,17 @@
 <?php
 /* Prototype  : int file_put_contents(string file, mixed data [, int flags [, resource context]])
- * Description: Write/Create a file with contents data and return the number of bytes written 
+ * Description: Write/Create a file with contents data and return the number of bytes written
  * Source code: ext/standard/file.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
 echo "*** Testing file_put_contents() : usage variation ***\n";
 
-$filename = dirname(__FILE__).'/filePutContentsVar9.tmp';
-$softlink = dirname(__FILE__).'/filePutContentsVar9.SoftLink';
-$hardlink = dirname(__FILE__).'/filePutContentsVar9.HardLink';
-$chainlink = dirname(__FILE__).'/filePutContentsVar9.ChainLink';
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+$filename = $file_path.'/filePutContentsVar9.tmp';
+$softlink = $file_path.'/filePutContentsVar9.SoftLink';
+$hardlink = $file_path.'/filePutContentsVar9.HardLink';
+$chainlink = $file_path.'/filePutContentsVar9.ChainLink';
 
 
 // link files even though it original file doesn't exist yet
@@ -24,7 +25,7 @@ run_test($softlink);
 
 //can only create a hardlink if the file exists.
 file_put_contents($filename,"");
-link($filename, $hardlink); 
+link($filename, $hardlink);
 run_test($hardlink);
 
 unlink($chainlink);
@@ -44,4 +45,3 @@ function run_test($file) {
 
 
 echo "\n*** Done ***\n";
-?>

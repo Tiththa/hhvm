@@ -19,6 +19,7 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/variable-unserializer.h"
 
+#include "hphp/util/assertions.h"
 #include "hphp/util/logger.h"
 
 #include <vector>
@@ -80,7 +81,8 @@ void ThriftBuffer::flush() {
 ///////////////////////////////////////////////////////////////////////////////
 
 void ThriftBuffer::read(char *data, int len) {
-  int avail = m_pEnd - m_p;
+  auto const avail = m_pEnd - m_p;
+  if (avail < 0) not_reached();
 
   // still enough
   if (avail >= len) {
@@ -200,9 +202,9 @@ static Variant unserialize_with_no_notice(const String& str) {
   Variant v;
   try {
     v = vu.unserialize();
-  } catch (ResourceExceededException &) {
+  } catch (ResourceExceededException&) {
     throw;
-  } catch (Exception &e) {
+  } catch (Exception& e) {
     Logger::Error("unserialize(): %s", e.getMessage().c_str());
   }
   return v;

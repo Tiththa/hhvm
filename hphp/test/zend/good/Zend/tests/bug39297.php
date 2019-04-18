@@ -1,6 +1,6 @@
 <?php
-function compareByRef(&$first, &$second) {
-    return $first === $second;
+function compareByRef(&$first, $id, &$second) {
+    return $first[$id] === $second;
 }
 
 class MyTree implements ArrayAccess {
@@ -18,8 +18,8 @@ class MyTree implements ArrayAccess {
         $cannonicalName = strtolower($offset);
         $this->children[$cannonicalName] = $value;
         $value->parent = $this;
-    }    
-    
+    }
+
     public function offsetGet($offset) {
     	echo "offsetGet()\n";
         $cannonicalName = strtolower($offset);
@@ -34,5 +34,4 @@ $root = new MyTree();
 $child = new MyTree();
 $root[$id] = $child;
 
-var_dump(compareByRef($root[$id], $child));
-?>
+var_dump(compareByRef(&$root,$id, &$child));

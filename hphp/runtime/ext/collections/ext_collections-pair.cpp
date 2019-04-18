@@ -59,8 +59,23 @@ int64_t c_Pair::linearSearch(const Variant& value) const {
   return -1;
 }
 
-Array c_Pair::toArrayImpl() const {
+Array c_Pair::toPHPArrayImpl() const {
   return make_packed_array(tvAsCVarRef(&elm0), tvAsCVarRef(&elm1));
+}
+
+Array c_Pair::toPHPArray() const {
+  if (RuntimeOption::EvalHackArrCompatArrayProducingFuncNotices) {
+    raise_hack_arr_compat_array_producing_func_notice("Pair::toArray");
+  }
+  return toPHPArrayImpl();
+}
+
+Array c_Pair::toVArrayImpl() const {
+  return make_varray(tvAsCVarRef(&elm0), tvAsCVarRef(&elm1));
+}
+
+Array c_Pair::toDArrayImpl() const {
+  return make_darray(0, tvAsCVarRef(&elm0), 1, tvAsCVarRef(&elm1));
 }
 
 c_Pair* c_Pair::Clone(ObjectData* obj) {
@@ -74,14 +89,8 @@ void c_Pair::throwBadKeyType() {
     "Only integer keys may be used with Pairs");
 }
 
-Array c_Pair::ToArray(const ObjectData* obj) {
-  auto pair = static_cast<const c_Pair*>(obj);
-  check_collection_cast_to_array();
-  return pair->toArrayImpl();
-}
-
 bool c_Pair::OffsetIsset(ObjectData* obj, const TypedValue* key) {
-  assertx(key->m_type != KindOfRef);
+  assertx(!isRefType(key->m_type));
   auto pair = static_cast<c_Pair*>(obj);
   TypedValue* result;
   if (key->m_type == KindOfInt64) {
@@ -94,7 +103,7 @@ bool c_Pair::OffsetIsset(ObjectData* obj, const TypedValue* key) {
 }
 
 bool c_Pair::OffsetEmpty(ObjectData* obj, const TypedValue* key) {
-  assertx(key->m_type != KindOfRef);
+  assertx(!isRefType(key->m_type));
   auto pair = static_cast<c_Pair*>(obj);
   TypedValue* result;
   if (key->m_type == KindOfInt64) {
@@ -107,7 +116,7 @@ bool c_Pair::OffsetEmpty(ObjectData* obj, const TypedValue* key) {
 }
 
 bool c_Pair::OffsetContains(ObjectData* obj, const TypedValue* key) {
-  assertx(key->m_type != KindOfRef);
+  assertx(!isRefType(key->m_type));
   auto pair = static_cast<c_Pair*>(obj);
   if (key->m_type == KindOfInt64) {
     return pair->contains(key->m_data.num);
@@ -149,8 +158,10 @@ void CollectionsExtension::initPair() {
   HHVM_NAMED_ME(HH\\Pair, at,             &c_Pair::php_at);
   HHVM_NAMED_ME(HH\\Pair, get,            &c_Pair::php_get);
   HHVM_NAMED_ME(HH\\Pair, linearSearch,   &c_Pair::linearSearch);
-  HHVM_NAMED_ME(HH\\Pair, toArray,        &c_Pair::toArrayImpl);
-  HHVM_NAMED_ME(HH\\Pair, toValuesArray,  &c_Pair::toArrayImpl);
+  HHVM_NAMED_ME(HH\\Pair, toArray,        &c_Pair::toPHPArray);
+  HHVM_NAMED_ME(HH\\Pair, toVArray,       &c_Pair::toVArrayImpl);
+  HHVM_NAMED_ME(HH\\Pair, toDArray,       &c_Pair::toDArrayImpl);
+  HHVM_NAMED_ME(HH\\Pair, toValuesArray,  &c_Pair::toVArrayImpl);
   HHVM_NAMED_ME(HH\\Pair, getIterator,    &c_Pair::getIterator);
 
   HHVM_NAMED_ME(HH\\Pair, toVector,       materialize<c_Vector>);

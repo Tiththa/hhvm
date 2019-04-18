@@ -18,6 +18,7 @@
 #define incl_HPHP_SYSTEMLIB_H_
 
 #include "hphp/runtime/base/types.h"
+#include "hphp/runtime/base/tv-variant.h"
 #include "hphp/util/portability.h"
 
 namespace HPHP {
@@ -36,6 +37,7 @@ namespace HPHP { namespace SystemLib {
   x(Exception)                                  \
   x(BadMethodCallException)                     \
   x(InvalidArgumentException)                   \
+  x(TypeAssertionException)                     \
   x(RuntimeException)                           \
   x(OutOfBoundsException)                       \
   x(InvalidOperationException)                  \
@@ -60,19 +62,18 @@ namespace HPHP { namespace SystemLib {
   x(LazyKVZipIterable)                          \
   x(LazyIterableView)                           \
   x(LazyKeyedIterableView)                      \
-  x(Phar)                                       \
   x(CURLFile)                                   \
   x(__PHP_Incomplete_Class)                     \
-  x(APCIterator)
+  x(APCIterator)                                \
+  x(DivisionByZeroException)
 
 extern bool s_inited;
 extern bool s_anyNonPersistentBuiltins;
 extern std::string s_source;
 extern Unit* s_unit;
 extern Unit* s_hhas_unit;
-extern Unit* s_nativeFuncUnit;
-extern Unit* s_nativeClassUnit;
 extern Func* s_nullFunc;
+extern Func* s_nullCtor;
 
 #define DECLARE_SYSTEMLIB_CLASS(cls)       \
 extern Class* s_ ## cls ## Class;
@@ -83,6 +84,7 @@ extern Class* s_ThrowableClass;
 extern Class* s_BaseExceptionClass;
 extern Class* s_ErrorClass;
 extern Class* s_ArithmeticErrorClass;
+extern Class* s_ArgumentCountErrorClass;
 extern Class* s_AssertionErrorClass;
 extern Class* s_DivisionByZeroErrorClass;
 extern Class* s_ParseErrorClass;
@@ -93,15 +95,18 @@ Object AllocPinitSentinel();
 Object AllocExceptionObject(const Variant& message);
 Object AllocErrorObject(const Variant& message);
 Object AllocArithmeticErrorObject(const Variant& message);
+Object AllocArgumentCountErrorObject(const Variant& message);
 Object AllocDivisionByZeroErrorObject(const Variant& message);
 Object AllocParseErrorObject(const Variant& message);
 Object AllocTypeErrorObject(const Variant& message);
 Object AllocBadMethodCallExceptionObject(const Variant& message);
 Object AllocInvalidArgumentExceptionObject(const Variant& message);
+Object AllocTypeAssertionExceptionObject(const Variant& message);
 Object AllocRuntimeExceptionObject(const Variant& message);
 Object AllocOutOfBoundsExceptionObject(const Variant& message);
 Object AllocInvalidOperationExceptionObject(const Variant& message);
 Object AllocDOMExceptionObject(const Variant& message);
+Object AllocDivisionByZeroExceptionObject();
 Object AllocDirectoryObject();
 Object AllocPDOExceptionObject();
 Object AllocSoapFaultObject(const Variant& code,
@@ -118,6 +123,7 @@ Object AllocLazyKeyedIterableViewObject(const Variant& iterable);
 [[noreturn]] void throwExceptionObject(const Variant& message);
 [[noreturn]] void throwErrorObject(const Variant& message);
 [[noreturn]] void throwArithmeticErrorObject(const Variant& message);
+[[noreturn]] void throwArgumentCountErrorObject(const Variant& message);
 [[noreturn]] void throwDivisionByZeroErrorObject(const Variant& message);
 [[noreturn]] void throwParseErrorObject(const Variant& message);
 [[noreturn]] void throwTypeErrorObject(const Variant& message);
@@ -125,12 +131,14 @@ Object AllocLazyKeyedIterableViewObject(const Variant& iterable);
 void throwBadMethodCallExceptionObject(const Variant& message);
 [[noreturn]]
 void throwInvalidArgumentExceptionObject(const Variant& message);
+[[noreturn]] void throwTypeAssertionExceptionObject(const Variant& message);
 [[noreturn]] void throwRuntimeExceptionObject(const Variant& message);
 [[noreturn]] void throwOutOfBoundsExceptionObject(const Variant& message);
 [[noreturn]]
 void throwInvalidOperationExceptionObject(const Variant& message);
 [[noreturn]]
 void throwDOMExceptionObject(const Variant& message);
+[[noreturn]] void throwDivisionByZeroExceptionObject();
 [[noreturn]]
 void throwSoapFaultObject(const Variant& code,
                           const Variant& message,
@@ -149,6 +157,16 @@ void addPersistentUnit(Unit* unit);
  * Re-merge all persistent units
  */
 void mergePersistentUnits();
+
+/*
+ * Setup the shared null constructor.
+ */
+void setupNullCtor(Class* cls);
+
+/*
+ * Return a fresh 86reifiedinit method.
+ */
+Func* getNull86reifiedinit(Class* cls);
 
 ///////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::SystemLib

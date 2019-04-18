@@ -20,7 +20,7 @@ namespace Fiz\Biz\Buz {
         function foo,
         function bar as buz,
         const FOO,
-        const BAR AS BOZ
+        const BAR as BOZ
     };
 
     class C { function __construct() {echo __METHOD__,"\n";}}
@@ -35,8 +35,7 @@ namespace Fiz\Biz\Buz {
     foo();
     buz();
     bar();
-    var_dump(FOO);
-    var_dump(BOZ);
-    var_dump(BAR);
+    \var_dump(FOO);
+    \var_dump(BOZ);
+    \var_dump(BAR);
 }
-

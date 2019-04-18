@@ -1,4 +1,8 @@
-<?
+<?php
+
+abstract final class Switchref {
+  public static $randBits;
+}
 
 /*
  * Check that the translator correctly adapts to callsites with variable
@@ -6,10 +10,10 @@
  */
 
 // 100 pseudo-random bits generated offline.
-$randBits = array(
-0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 
-1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 
-1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 
+Switchref::$randBits = array(
+0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0,
+1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1,
+1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1,
 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1);
 
 function byVal($a1, $a2) {
@@ -27,9 +31,23 @@ function main() {
   $funcs = array("byVal", "byRef");
   $b = 2;
   $c = 3;
-  global $randBits;
-  foreach($randBits as $idx => $bit) {
-    $funcs[$bit]($b, $c);
+  foreach(Switchref::$randBits as $idx => $bit) {
+    try {
+      $funcs[$bit]($b, $c);
+    } catch (InvalidArgumentException $e) {
+      echo "byRef ";
+      $c *= $b;
+    }
+    echo "$idx: $b, $c\n";
+  }
+  $b = 2;
+  $c = 3;
+  foreach(Switchref::$randBits as $idx => $bit) {
+    try {
+      $funcs[$bit]($b, &$c);
+    } catch (InvalidArgumentException $e) {
+      echo "byVal ";
+    }
     echo "$idx: $b, $c\n";
   }
 }

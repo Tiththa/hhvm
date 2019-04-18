@@ -2,37 +2,36 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
+ *
  *
  *)
 
-open Core
+open Core_kernel
 
-module Tempfile = struct
 
-  let mkdtemp () =
-    let tmp_dir = Sys_utils.temp_dir_name in
-    let tmp_dir = Path.make tmp_dir in
-    let name = Random_id.(short_string_with_alphabet alphanumeric_alphabet) in
-    let tmp_dir = Path.concat tmp_dir name in
-    let () = Unix.mkdir (Path.to_string tmp_dir) 0o740 in
-    tmp_dir
+exception Expected_throw_missing
+exception Thrown_exception_mismatched of (exn * exn)
 
-  let with_tempdir g =
-    let dir = mkdtemp () in
-    let f = (fun () -> g dir) in
-    Utils.try_finally ~f ~finally:(fun () ->
-      Sys_utils.rm_dir_tree (Path.to_string dir))
-
-end;;
+let expect_throws e f x =
+  try
+    let _ = f x in
+    Printf.eprintf "Error. Did not throw expected: %s\n" (Exn.to_string e);
+    false
+  with | err ->
+    if e <> err then
+      let () = Printf.eprintf "Error. Expected exn: %s. But got : %s\n"
+      (Exn.to_string e) (Exn.to_string err) in
+      false
+    else
+      true
 
 let run (name, f) =
   Printf.printf "Running %s ... %!" name;
   let result = try f () with
     | e ->
-      let () = Printf.printf "Exception %s\n" (Printexc.to_string e) in
+      let () = Printf.printf "Exception %s\n" (Exn.to_string e) in
       let () = Printf.printf "Backtrace %s\n" (Printexc.get_backtrace ()) in
       false
   in
@@ -41,5 +40,10 @@ let run (name, f) =
   else Printf.printf "fail\n%!");
   result
 
+(** List.for_all but without shortcircuiting "&&", so runs all failures too. *)
+let for_all_non_shortcircuit tests f =
+  List.fold_left tests ~init:true ~f:(fun acc test -> (f test) && acc)
+
 let run_all (tests: (string * (unit -> bool)) list ) =
-  exit (if List.for_all tests run then 0 else 1)
+  Printexc.record_backtrace true;
+  exit (if for_all_non_shortcircuit tests run then 0 else 1)

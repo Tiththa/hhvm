@@ -17,13 +17,13 @@ ALWAYS_INLINE MixedArray* staticEmptyDictArrayAsMixed() {
 // Common base class for BaseMap/BaseSet collections
 struct HashCollection : ObjectData {
   explicit HashCollection(Class* cls, HeaderKind kind)
-    : ObjectData(cls, collections::objectFlags, kind)
-    , m_versionAndSize(0)
+    : ObjectData(cls, NoInit{}, collections::objectFlags, kind)
+    , m_unusedAndSize(0)
     , m_arr(staticEmptyDictArrayAsMixed())
   {}
   explicit HashCollection(Class* cls, HeaderKind kind, ArrayData* arr)
-    : ObjectData(cls, collections::objectFlags, kind)
-    , m_versionAndSize(arr->m_size)
+    : ObjectData(cls, NoInit{}, collections::objectFlags, kind)
+    , m_unusedAndSize(arr->m_size)
     , m_arr(MixedArray::asMixed(arr))
   {}
   explicit HashCollection(Class* cls, HeaderKind kind, uint32_t cap);
@@ -42,14 +42,36 @@ struct HashCollection : ObjectData {
   // reserve() to make room for up to MaxSize / 2 elements.
   static const uint32_t MaxReserveSize = MaxSize / 2;
 
-  int getVersion() const {
-    return m_version;
-  }
   int64_t size() const {
     return m_size;
   }
 
-  Array toArray();
+  Array toArray() = delete;
+
+  template <IntishCast intishCast = IntishCast::None>
+  Array toPHPArrayImpl() {
+    if (!m_size) {
+      return empty_array();
+    }
+
+    ArrayData* ad;
+    if (intishCast == IntishCast::None) {
+      ad = arrayData()->toPHPArray(true);
+    } else if (intishCast == IntishCast::Cast) {
+      ad = arrayData()->toPHPArrayIntishCast(true);
+    } else {
+      always_assert(false);
+    }
+
+    if (UNLIKELY(ad->size() < m_size)) warnOnStrIntDup();
+    assertx(m_size);
+    assertx(ad->m_pos == 0);
+    return Array::attach(ad);
+  }
+
+  Array toVArray();
+  Array toDArray();
+
   Array toKeysArray();
   Array toValuesArray();
 
@@ -68,18 +90,13 @@ struct HashCollection : ObjectData {
     compactOrShrinkIfDensityTooLow();
   }
 
-  void asort(int sort_flags, bool ascending);
-  void ksort(int sort_flags, bool ascending);
-  bool uasort(const Variant& cmp_function);
-  bool uksort(const Variant& cmp_function);
-
   bool isFull() { return posLimit() == cap(); }
   bool isDensityTooLow() const {
     bool b = (m_size < posLimit() / 2);
-    assert(IMPLIES(
+    assertx(IMPLIES(
       arrayData() == staticEmptyDictArrayAsMixed(),
       !b));
-    assert(IMPLIES(cap() == 0, !b));
+    assertx(IMPLIES(cap() == 0, !b));
     return b;
   }
 
@@ -88,10 +105,10 @@ struct HashCollection : ObjectData {
     // if current capacity is at least 8x greater than the minimum capacity
     bool b = ((uint64_t(cap()) >= uint64_t(m_size) * 8) &&
               (cap() >= HashCollection::SmallSize * 8));
-    assert(IMPLIES(
+    assertx(IMPLIES(
       arrayData() == staticEmptyDictArrayAsMixed(),
       !b));
-    assert(IMPLIES(cap() == 0, !b));
+    assertx(IMPLIES(cap() == 0, !b));
     return b;
   }
 
@@ -141,8 +158,8 @@ struct HashCollection : ObjectData {
   }
 
   HashCollection::Elm& allocElm(MixedArray::Inserter ei) {
-    assert(canMutateBuffer());
-    assert(MixedArray::isValidIns(ei) && !MixedArray::isValidPos(*ei)
+    assertx(canMutateBuffer());
+    assertx(MixedArray::isValidIns(ei) && !MixedArray::isValidPos(*ei)
            && m_size <= posLimit() && posLimit() < cap());
     size_t i = posLimit();
     *ei = i;
@@ -167,12 +184,12 @@ struct HashCollection : ObjectData {
   }
 
   bool iter_valid(ssize_t pos, ssize_t limit) const {
-    assert(limit == (ssize_t)posLimit());
+    assertx(limit == (ssize_t)posLimit());
     return pos < limit;
   }
 
   const Elm* iter_elm(ssize_t pos) const {
-    assert(iter_valid(pos));
+    assertx(iter_valid(pos));
     return &(data()[pos]);
   }
 
@@ -206,7 +223,7 @@ struct HashCollection : ObjectData {
   }
 
   Variant iter_key(ssize_t pos) const {
-    assert(iter_valid(pos));
+    assertx(iter_valid(pos));
     auto* e = iter_elm(pos);
     if (e->hasStrKey()) {
       return Variant{e->skey};
@@ -215,7 +232,7 @@ struct HashCollection : ObjectData {
   }
 
   const TypedValue* iter_value(ssize_t pos) const {
-    assert(iter_valid(pos));
+    assertx(iter_valid(pos));
     return &iter_elm(pos)->data;
   }
 
@@ -235,12 +252,12 @@ struct HashCollection : ObjectData {
     uint32_t pos = 0;
     for (;;) {
       while (isTombstone(pos)) {
-        assert(pos + 1 < posLimit());
+        assertx(pos + 1 < posLimit());
         ++pos;
       }
       if (n <= 0) break;
       --n;
-      assert(pos + 1 < posLimit());
+      assertx(pos + 1 < posLimit());
       ++pos;
     }
     return pos;
@@ -254,21 +271,19 @@ struct HashCollection : ObjectData {
    * if needed.
    */
   void mutate() {
-    assert(IMPLIES(!m_immCopy.isNull(), arrayData()->hasMultipleRefs()));
+    assertx(IMPLIES(!m_immCopy.isNull(), arrayData()->hasMultipleRefs()));
     if (arrayData()->cowCheck()) {
-      // mutateImpl() does two things for us. First it drops the the
+      // mutateImpl() does two things for us. First it drops the
       // immutable collection held by m_immCopy (if m_immCopy is not
       // null). Second, it takes care of copying the buffer if needed.
       mutateImpl();
     }
-    assert(canMutateBuffer());
-    assert(m_immCopy.isNull());
+    assertx(canMutateBuffer());
+    assertx(m_immCopy.isNull());
   }
 
-  void mutateAndBump() { mutate(); ++m_version; }
-
   void dropImmCopy() {
-    assert(m_immCopy.isNull() ||
+    assertx(m_immCopy.isNull() ||
            (arrayData() == ((HashCollection*)m_immCopy.get())->arrayData() &&
             arrayData()->hasMultipleRefs()));
     m_immCopy.reset();
@@ -383,7 +398,7 @@ struct HashCollection : ObjectData {
    * modify this HashCollection's buffer.
    */
   bool canMutateBuffer() const {
-    assert(IMPLIES(!arrayData()->cowCheck(), m_immCopy.isNull()));
+    assertx(IMPLIES(!arrayData()->cowCheck(), m_immCopy.isNull()));
     return !arrayData()->cowCheck();
   }
 
@@ -404,12 +419,12 @@ struct HashCollection : ObjectData {
   }
 
   ssize_t findForRemove(int64_t k, inthash_t h) {
-    assert(canMutateBuffer());
+    assertx(canMutateBuffer());
     return m_arr->findForRemove(k, h, false);
   }
 
   ssize_t findForRemove(const StringData* s, strhash_t h) {
-    assert(canMutateBuffer());
+    assertx(canMutateBuffer());
     return m_arr->findForRemove(s, h);
   }
 
@@ -433,10 +448,10 @@ struct HashCollection : ObjectData {
   }
 
   static void dupElm(const Elm& frE, Elm& toE) {
-    assert(!isTombstoneType(frE.data.m_type));
+    assertx(!isTombstoneType(frE.data.m_type));
     memcpy(&toE, &frE, sizeof(Elm));
     if (toE.hasStrKey()) toE.skey->incRefCount();
-    tvIncRefGen(&toE.data);
+    tvIncRefGen(toE.data);
   }
 
   MixedArray* arrayData() { return m_arr; }
@@ -452,24 +467,24 @@ struct HashCollection : ObjectData {
   int32_t* hashTab() const { return m_arr->hashTab(); }
 
   void setSize(uint32_t sz) {
-    assert(sz <= cap());
+    assertx(sz <= cap());
     if (m_arr == staticEmptyDictArrayAsMixed()) {
-      assert(sz == 0);
+      assertx(sz == 0);
       return;
     }
-    assert(!arrayData()->hasMultipleRefs());
+    assertx(!arrayData()->hasMultipleRefs());
     m_size = sz;
     arrayData()->m_size = sz;
   }
   void incSize() {
-    assert(m_size + 1 <= cap());
-    assert(!arrayData()->hasMultipleRefs());
+    assertx(m_size + 1 <= cap());
+    assertx(!arrayData()->hasMultipleRefs());
     ++m_size;
     arrayData()->m_size = m_size;
   }
   void decSize() {
-    assert(m_size > 0);
-    assert(!arrayData()->hasMultipleRefs());
+    assertx(m_size > 0);
+    assertx(!arrayData()->hasMultipleRefs());
     --m_size;
     arrayData()->m_size = m_size;
   }
@@ -486,32 +501,32 @@ struct HashCollection : ObjectData {
     return arrayData()->m_used;
   }
   void incPosLimit() {
-    assert(!arrayData()->hasMultipleRefs());
-    assert(posLimit() + 1 <= cap());
+    assertx(!arrayData()->hasMultipleRefs());
+    assertx(posLimit() + 1 <= cap());
     arrayData()->m_used++;
   }
   void setPosLimit(uint32_t limit) {
     auto* a = arrayData();
     if (a == staticEmptyDictArrayAsMixed()) {
-      assert(limit == 0);
+      assertx(limit == 0);
       return;
     }
-    assert(!a->hasMultipleRefs());
-    assert(limit <= cap());
+    assertx(!a->hasMultipleRefs());
+    assertx(limit <= cap());
     a->m_used = limit;
   }
   int64_t nextKI() {
     return arrayData()->m_nextKI;
   }
   void setNextKI(int64_t ki) {
-    assert(!arrayData()->hasMultipleRefs());
+    assertx(!arrayData()->hasMultipleRefs());
     arrayData()->m_nextKI = ki;
   }
   void updateNextKI(int64_t ki) {
-    assert(!arrayData()->hasMultipleRefs());
+    assertx(!arrayData()->hasMultipleRefs());
     auto* a = arrayData();
     if (ki >= a->m_nextKI && a->m_nextKI >= 0) {
-      a->m_nextKI = ki + 1;
+      a->m_nextKI = static_cast<uint64_t>(ki) + 1;
     }
   }
 
@@ -521,10 +536,10 @@ struct HashCollection : ObjectData {
 
   static int32_t
   skipTombstonesNoBoundsCheck(int32_t pos, int32_t posLimit, const Elm* data) {
-    assert(pos < posLimit);
+    assertx(pos < posLimit);
     while (isTombstone(pos, data)) {
       ++pos;
-      assert(pos < posLimit);
+      assertx(pos < posLimit);
     }
     return pos;
   }
@@ -554,7 +569,7 @@ struct HashCollection : ObjectData {
   }
 
   static Elm* nextElm(Elm* e, Elm* eLimit) {
-    assert(e != eLimit);
+    assertx(e != eLimit);
     for (++e; e != eLimit && isTombstone(e); ++e) {}
     return e;
   }
@@ -563,9 +578,7 @@ struct HashCollection : ObjectData {
   }
 
   static bool isTombstoneType(DataType t) {
-    assert(isRealType(t) || t == kInvalidDataType);
-    return t < KindOfUninit;
-    static_assert(KindOfUninit == 0 && kInvalidDataType < 0, "");
+    return t == kInvalidDataType;
   }
 
   static bool isTombstone(const Elm* e) {
@@ -577,7 +590,7 @@ struct HashCollection : ObjectData {
   }
 
   bool isTombstone(ssize_t pos) const {
-    assert(size_t(pos) <= posLimit());
+    assertx(size_t(pos) <= posLimit());
     return isTombstone(pos, data());
   }
 
@@ -602,6 +615,28 @@ struct HashCollection : ObjectData {
     scanner.scan(m_immCopy);
   }
 
+  struct SortTmp {
+    SortTmp(HashCollection* h, SortFunction sf) : m_h(h) {
+      if (hasUserDefinedCmp(sf)) {
+        m_ad = MixedArray::Copy(m_h->m_arr);
+      } else {
+        m_h->mutate();
+        m_ad = m_h->m_arr;
+      }
+    }
+    ~SortTmp() {
+      if (m_h->m_arr != m_ad) {
+        Array tmp = Array::attach(m_h->m_arr);
+        assertx(m_ad->isDict());
+        m_h->m_arr = static_cast<MixedArray*>(m_ad);
+      }
+    }
+    ArrayData* operator->() { return m_ad; }
+   private:
+    HashCollection* m_h;
+    ArrayData* m_ad;
+  };
+
  protected:
 
   // Replace the m_arr field with a new MixedArray. The array must be known to
@@ -613,15 +648,14 @@ struct HashCollection : ObjectData {
     adata->incRefCount();
     m_size = adata->size();
     decRefArr(oldAd);
-    ++m_version;
   }
 
   union {
     struct {
-      uint32_t m_size;    // Number of values
-      int32_t m_version;  // Version number
+      uint32_t m_size;
+      int32_t m_unused;
     };
-    int64_t m_versionAndSize;
+    int64_t m_unusedAndSize;
   };
 
   MixedArray* m_arr;      // Elm store.
@@ -629,13 +663,6 @@ struct HashCollection : ObjectData {
   // A pointer to an immutable collection that shares its buffer with
   // this collection.
   Object m_immCopy;
-
- private:
-  template <typename AccessorT>
-  SortFlavor preSort(const AccessorT& acc, bool checkTypes);
-  void postSort();
-
-
 };
 
 /////////////////////////////////////////////////////////////////////////////

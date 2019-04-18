@@ -14,7 +14,7 @@ namespace Test {
 
   function foo() {
     $custom_set = new ImmSet();
-    var_dump($custom_set instanceof \HH\ImmSet); // False
+    \var_dump($custom_set instanceof \HH\ImmSet); // False
   }
 
 }
@@ -23,10 +23,9 @@ namespace {
 
   function bar() {
     $builtin_set = new ImmSet();
-    var_dump($builtin_set instanceof HH\ImmSet); // True
+    \var_dump($builtin_set instanceof HH\ImmSet); // True
   }
 
   Test\foo();
   bar();
 }
-

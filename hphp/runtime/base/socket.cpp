@@ -19,31 +19,31 @@
 #include <folly/portability/Sockets.h>
 
 #include "hphp/runtime/base/request-event-handler.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/server/server-stats.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/util/logger.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-__thread int Socket::s_lastErrno;
+RDS_LOCAL(int, Socket::s_lastErrno);
 
 ///////////////////////////////////////////////////////////////////////////////
 // constructors and destructor
 
-SocketData::SocketData(
-  int port,
-  int type
-) : FileData(true), m_port(port), m_type(type) {
-}
+SocketData::SocketData(int port, int type, bool nonblocking)
+  : FileData(nonblocking)
+  , m_port(port)
+  , m_type(type)
+{}
 
 bool SocketData::closeImpl() {
-  s_pcloseRet = 0;
+  *s_pcloseRet = 0;
   if (valid() && !isClosed()) {
-    s_pcloseRet = ::close(getFd());
+    *s_pcloseRet = ::close(getFd());
     setIsClosed(true);
     setFd(-1);
   }
@@ -54,8 +54,8 @@ SocketData::~SocketData() {
   SocketData::closeImpl();
 }
 
-Socket::Socket()
-: File(std::make_shared<SocketData>(0, -1)),
+Socket::Socket(bool nonblocking /* = true*/)
+: File(std::make_shared<SocketData>(0, -1, nonblocking)),
   m_data(static_cast<SocketData*>(getFileData()))
 {
 }
@@ -64,7 +64,7 @@ Socket::Socket(std::shared_ptr<SocketData> data)
 : File(data),
   m_data(static_cast<SocketData*>(getFileData()))
 {
-  assert(data);
+  assertx(data);
   inferStreamType();
 }
 
@@ -78,7 +78,7 @@ Socket::Socket(std::shared_ptr<SocketData> data, int sockfd, int type,
 
   struct timeval tv;
   if (timeout <= 0) {
-    tv.tv_sec = ThreadInfo::s_threadInfo.getNoCheck()->
+    tv.tv_sec = RequestInfo::s_requestInfo.getNoCheck()->
       m_reqInjectionData.getSocketDefaultTimeout();
     tv.tv_usec = 0;
   } else {
@@ -86,9 +86,9 @@ Socket::Socket(std::shared_ptr<SocketData> data, int sockfd, int type,
     tv.tv_usec = (timeout - tv.tv_sec) * 1e6;
   }
   setsockopt(getFd(), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  s_lastErrno = errno;
+  *s_lastErrno = errno;
   setsockopt(getFd(), SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-  s_lastErrno = errno;
+  *s_lastErrno = errno;
   internalSetTimeout(tv);
   setIsLocal(type == AF_UNIX);
 
@@ -98,9 +98,10 @@ Socket::Socket(std::shared_ptr<SocketData> data, int sockfd, int type,
 
 Socket::Socket(int sockfd, int type, const char *address /* = NULL */,
                int port /* = 0 */, double timeout /* = 0 */,
-               const StaticString& streamType /* = empty_string_ref */)
+               const StaticString& streamType /* = empty_string_ref */,
+               bool nonblocking /* = true */)
 : Socket(
-    std::make_shared<SocketData>(port, type),
+    std::make_shared<SocketData>(port, type, nonblocking),
     sockfd, type, address, port, timeout, streamType)
 { }
 
@@ -115,7 +116,7 @@ void Socket::sweep() {
 ///////////////////////////////////////////////////////////////////////////////
 
 void Socket::setError(int err) {
-  s_lastErrno = m_data->m_error = err;
+  *s_lastErrno = m_data->m_error = err;
 }
 
 bool Socket::open(const String& /*filename*/, const String& /*mode*/) {
@@ -123,7 +124,6 @@ bool Socket::open(const String& /*filename*/, const String& /*mode*/) {
 }
 
 bool Socket::close() {
-  invokeFiltersOnClose();
   return closeImpl();
 }
 
@@ -176,8 +176,8 @@ bool Socket::waitForData() {
 }
 
 int64_t Socket::readImpl(char *buffer, int64_t length) {
-  assert(getFd());
-  assert(length > 0);
+  assertx(getFd());
+  assertx(length > 0);
 
   IOStatusHelper io("socket::recv", m_data->m_address.c_str(), m_data->m_port);
 
@@ -201,8 +201,8 @@ int64_t Socket::readImpl(char *buffer, int64_t length) {
 }
 
 int64_t Socket::writeImpl(const char *buffer, int64_t length) {
-  assert(getFd());
-  assert(length > 0);
+  assertx(getFd());
+  assertx(length > 0);
   setEof(false);
   IOStatusHelper io("socket::send", m_data->m_address.c_str(), m_data->m_port);
   int64_t ret = send(getFd(), buffer, length, 0);

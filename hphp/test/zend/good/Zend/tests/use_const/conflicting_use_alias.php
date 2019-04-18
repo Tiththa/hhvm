@@ -7,7 +7,6 @@ namespace {
 namespace x {
     use foo as bar;
     use const foo as bar;
-    var_dump(bar);
+    \var_dump(bar);
 }
 
-?>

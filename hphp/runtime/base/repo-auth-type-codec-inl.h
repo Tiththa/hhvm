@@ -24,14 +24,25 @@ namespace HPHP {
  * We set the high bit in the tag if there's going to be a specialized
  * array id.  This should only be found when the tag is an array type.
  */
-constexpr uint8_t kRATArrayDataBit = 0x80;
+constexpr uint16_t kRATArrayDataBit = 0x8000;
 
 //////////////////////////////////////////////////////////////////////
 
 ALWAYS_INLINE
 size_t encodedRATSize(const unsigned char* pc) {
   using T = RepoAuthType::Tag;
-  auto const rawTag = *pc;
+  uint16_t permutatedTag = static_cast<uint8_t>(*pc);
+  auto nextPcVal = *(pc + 1);
+  if (permutatedTag == 0xff) {
+    uint8_t tmp = static_cast<uint8_t>(nextPcVal);
+    assertx(tmp != 0xff);
+    permutatedTag = tmp + 0xff;
+    nextPcVal = *(pc + 2);
+  }
+  size_t tagSize = permutatedTag < 0xff ? 1 : 2;
+
+  // Move the kRATPtrBit(0x4000) and kRATArrayDataBit(0x8000) bit back
+  uint16_t rawTag = (permutatedTag >> 2) | (permutatedTag << 14);
   bool const highBitSet = rawTag & kRATArrayDataBit;
   auto const tag = static_cast<T>(rawTag & ~kRATArrayDataBit);
   switch (tag) {
@@ -50,6 +61,43 @@ size_t encodedRATSize(const unsigned char* pc) {
   case T::OptSStr:
   case T::Str:
   case T::OptStr:
+  case T::Obj:
+  case T::OptObj:
+  case T::Func:
+  case T::OptFunc:
+  case T::ClsMeth:
+  case T::OptClsMeth:
+  case T::Cls:
+  case T::OptCls:
+  case T::UncArrKey:
+  case T::ArrKey:
+  case T::OptUncArrKey:
+  case T::OptArrKey:
+  case T::UncStrLike:
+  case T::StrLike:
+  case T::OptUncStrLike:
+  case T::OptStrLike:
+  case T::InitUnc:
+  case T::Unc:
+  case T::InitCell:
+  case T::Cell:
+  case T::Ref:
+  case T::InitGen:
+  case T::Gen:
+    assertx(!highBitSet);
+    return tagSize;
+  case T::SArr:
+  case T::OptSArr:
+  case T::Arr:
+  case T::OptArr:
+  case T::SVArr:
+  case T::OptSVArr:
+  case T::VArr:
+  case T::OptVArr:
+  case T::SDArr:
+  case T::OptSDArr:
+  case T::DArr:
+  case T::OptDArr:
   case T::SVec:
   case T::OptSVec:
   case T::Vec:
@@ -62,32 +110,16 @@ size_t encodedRATSize(const unsigned char* pc) {
   case T::OptSKeyset:
   case T::Keyset:
   case T::OptKeyset:
-  case T::Obj:
-  case T::OptObj:
-  case T::UncArrKey:
-  case T::ArrKey:
-  case T::OptUncArrKey:
-  case T::OptArrKey:
-  case T::InitUnc:
-  case T::Unc:
-  case T::InitCell:
-  case T::Cell:
-  case T::Ref:
-  case T::InitGen:
-  case T::Gen:
-    assert(!highBitSet);
-    return 1;
-  case T::SArr:
-  case T::OptSArr:
-  case T::Arr:
-  case T::OptArr:
-    return highBitSet ? 5 : 1;
+    if (highBitSet) {
+      return ((int8_t(nextPcVal) < 0) ? 4 : 1) + tagSize;
+    }
+    return tagSize;
   case T::ExactObj:
   case T::SubObj:
   case T::OptExactObj:
   case T::OptSubObj:
-    assert(!highBitSet);
-    return 5;
+    assertx(!highBitSet);
+    return ((int8_t(nextPcVal) < 0) ? 4 : 1) + tagSize;
   }
   not_reached();
 }

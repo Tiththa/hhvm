@@ -14,13 +14,15 @@ final class Constants {
   }
 }
 
+<<__EntryPoint>>
 function main() {
   $g = Constants::gen1();
+  $g->next();
   var_dump($g->current());
   $g = Constants::gen2();
+  $g->next();
   var_dump($g->current());
   $g = Constants::gen3("baz");
+  $g->next();
   var_dump($g->current());
 }
-
-main();

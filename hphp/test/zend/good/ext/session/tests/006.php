@@ -7,14 +7,14 @@ session_start();
 class a {
     public $test = "hallo";
 }
- 
+
 class b {
     public $a;
-    function b(&$a) {
-        $this->a = &$a;
+    function b($a) {
+        $this->a = $a;
     }
 }
- 
+
 $a = new a();
 $b = new b($a);
 
@@ -31,4 +31,3 @@ session_start();
 
 echo "values after session:\n";
 var_dump($a,$b);
-?>

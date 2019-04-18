@@ -32,11 +32,6 @@ class A {
 		// Uncomment this line to work without crash
 //		$drv->obj = null;
 	}
-
-	function __destruct() {
-		echo "A::__destruct()\n";
-		$this->close();
-	}
 }
 
 class myserv {
@@ -55,4 +50,3 @@ $obj1->func1();
 $obj2 = new A(2);
 unset($obj1);
 $obj2->func1();
-?>

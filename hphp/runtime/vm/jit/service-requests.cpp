@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/abi.h"
+#include "hphp/runtime/vm/jit/align.h"
 #include "hphp/runtime/vm/jit/stack-offsets.h"
 #include "hphp/runtime/vm/jit/stub-alloc.h"
 #include "hphp/runtime/vm/jit/tc.h"
@@ -26,6 +27,7 @@
 #include "hphp/runtime/vm/jit/vasm-gen.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-unit.h"
+#include "hphp/runtime/vm/resumable.h"
 
 #include "hphp/util/arch.h"
 #include "hphp/util/data-block.h"
@@ -57,6 +59,7 @@ namespace detail {
  */
 void emit_svcreq(CodeBlock& cb,
                  DataBlock& data,
+                 CGMeta& meta,
                  TCA start,
                  bool persist,
                  folly::Optional<FPInvOffset> spOff,
@@ -73,10 +76,7 @@ void emit_svcreq(CodeBlock& cb,
   stub.init(start, realAddr, stub_size(), "svcreq_stub");
 
   {
-    CGMeta fixups;
-    SCOPE_EXIT { assert(fixups.empty()); };
-
-    Vauto vasm{stub, stub, data, fixups};
+    Vauto vasm{stub, stub, data, meta};
     auto& v = vasm.main();
 
     // If we have an spOff, materialize rvmsp() so that handleSRHelper() can do
@@ -89,7 +89,7 @@ void emit_svcreq(CodeBlock& cb,
 
     auto live_out = leave_trace_regs();
 
-    assert(argv.size() <= kMaxArgs);
+    assertx(argv.size() <= kMaxArgs);
 
     // Pick up CondCode arguments first---vasm may optimize immediate loads
     // into operations which clobber status flags.
@@ -155,8 +155,10 @@ TCA emit_bindjmp_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
   return emit_ephemeral(
     cb,
     data,
+    fixups,
     allocTCStub(cb, &fixups),
-    target.resumed() ? folly::none : folly::make_optional(spOff),
+    target.resumeMode() != ResumeMode::None
+      ? folly::none : folly::make_optional(spOff),
     REQ_BIND_JMP,
     jmp,
     target.toAtomicInt(),
@@ -176,8 +178,10 @@ TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
     return emit_ephemeral(
       cb,
       data,
+      fixups,
       allocTCStub(cb, &fixups),
-      target.resumed() ? folly::none : folly::make_optional(spOff),
+      target.resumeMode() != ResumeMode::None
+        ? folly::none : folly::make_optional(spOff),
       REQ_BIND_ADDR,
       (TCA)addr, // needs to be RIP relative so that we can relocate it
       target.toAtomicInt(),
@@ -188,8 +192,10 @@ TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
   return emit_ephemeral(
     cb,
     data,
+    fixups,
     allocTCStub(cb, &fixups),
-    target.resumed() ? folly::none : folly::make_optional(spOff),
+    target.resumeMode() != ResumeMode::None
+      ? folly::none : folly::make_optional(spOff),
     REQ_BIND_ADDR,
     addr,
     target.toAtomicInt(),
@@ -197,76 +203,33 @@ TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
   );
 }
 
-TCA emit_retranslate_stub(CodeBlock& cb, DataBlock& data, FPInvOffset spOff,
+TCA emit_retranslate_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
+                          FPInvOffset spOff,
                           SrcKey target, TransFlags trflags) {
   return emit_persistent(
     cb,
     data,
-    target.resumed() ? folly::none : folly::make_optional(spOff),
+    fixups,
+    target.resumeMode() != ResumeMode::None
+      ? folly::none : folly::make_optional(spOff),
     REQ_RETRANSLATE,
     target.offset(),
     trflags.packed
   );
 }
 
-TCA emit_retranslate_opt_stub(CodeBlock& cb, DataBlock& data, FPInvOffset spOff,
+TCA emit_retranslate_opt_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
+                              FPInvOffset spOff,
                               SrcKey sk) {
   return emit_persistent(
     cb,
     data,
-    sk.resumed() ? folly::none : folly::make_optional(spOff),
+    fixups,
+    sk.resumeMode() != ResumeMode::None
+      ? folly::none : folly::make_optional(spOff),
     REQ_RETRANSLATE_OPT,
     sk.toAtomicInt()
   );
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-namespace x64 {
-  static constexpr int kMovLen = 10;
-  static constexpr int kLeaVmSpLen = 7;
-}
-
-namespace arm {
-  // vasm lea is emitted in 4 bytes.
-  //   ADD imm
-  static constexpr int kLeaVmSpLen = 4;
-  // The largest of vasm setcc, copy, or leap is emitted in 16 bytes.
-  //   AND imm, MOV, LDR + B + dc64, or ADRP + ADD imm
-  static constexpr int kMovLen = 16;
-  // The largest of vasm copy or leap is emitted in 16 bytes.
-  //   MOV, LDR + B + dc64, or ADRP + ADD imm
-  static constexpr int kPersist = 16;
-  // vasm copy and jmpi is emitted in 20 bytes.
-  //   MOV and 16
-  static constexpr int kSvcReqExit = 20;
-}
-
-namespace ppc64 {
-  // Standard ppc64 instructions are 4 bytes long
-  static constexpr int kStdIns = 4;
-  // Leap for ppc64, in worst case, have 5 standard ppc64 instructions.
-  static constexpr int kLeaVMSpLen = kStdIns * 5;
-}
-
-size_t stub_size() {
-  // The extra args are the request type and the stub address.
-  constexpr auto kTotalArgs = kMaxArgs + 2;
-
-  switch (arch()) {
-    case Arch::X64:
-      return kTotalArgs * x64::kMovLen + x64::kLeaVmSpLen;
-    case Arch::ARM:
-      return arm::kLeaVmSpLen +
-        kTotalArgs * arm::kMovLen +
-        arm::kPersist + arm::kSvcReqExit;
-    case Arch::PPC64:
-      // This calculus was based on the amount of emitted instructions in
-      // emit_svcreq.
-      return (ppc64::kStdIns + ppc64::kLeaVMSpLen) * kTotalArgs +
-          ppc64::kLeaVMSpLen + 3 * ppc64::kStdIns;
-  }
-  not_reached();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

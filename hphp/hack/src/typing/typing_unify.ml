@@ -2,39 +2,34 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-open Core
+open Core_kernel
+open Common
 open Typing_defs
 open String_utils
 
 module Env = Typing_env
 module TUtils = Typing_utils
 module TURecursive = Typing_unify_recursive
-
-(* Most code -- notably the cases in unify_ -- do *not* need to thread through
- * unwrappedToptionX, since for example just because we know an array<foo, bar>
- * can't itself be null, that doesn't mean that foo and bar can't be null.
- *
- * If follow_bounds=false, only match generic parameters with themselves.
- * If follow_bounds=true, look in lower and upper bounds of generic parameters,
- * for example, to unify T and t if there are bounds T as t and T super t.
- *)
-let rec unify ?follow_bounds:(follow_bounds=true) env ty1 ty2 =
-  unify_unwrapped ~follow_bounds env
-    ~unwrappedToption1:false ty1 ~unwrappedToption2:false ty2
+module MakeType = Typing_make_type
 
 (* If result is (env', ty) then env' extends env,
  * and ty1 <: ty and ty2 <: ty under env'
- *
- * If unwrappedToptionX = true then elide Toption before recursing.
  *)
-and unify_unwrapped ?follow_bounds:(follow_bounds=true) env
-    ~unwrappedToption1 ty1 ~unwrappedToption2 ty2 =
-  if ty1 == ty2 then env, ty1 else
+let rec unify ?(opts=TUtils.default_unify_opt) env ty1 ty2 =
+  if phys_equal ty1 ty2 then env, ty1 else
+  if TypecheckerOptions.new_inference (Env.get_tcopt env)
+  then env, ty1
+  else begin
+    Typing_log.(
+      log_with_level env "unify" 1 (fun () ->
+      log_types (Reason.to_pos (fst ty2)) env
+        [Log_head ("Typing_unify.unify",
+          [Log_type ("ty1", ty1);
+           Log_type ("ty2", ty2)])]));
   match ty1, ty2 with
   | (_, (Tany | Terr)), ty | ty, (_, (Tany | Terr)) -> env, ty
   | (r1, Tvar n1), (r2, Tvar n2) ->
@@ -47,8 +42,7 @@ and unify_unwrapped ?follow_bounds:(follow_bounds=true) env
     let n' = Env.fresh() in
     let env = Env.rename env n1 n' in
     let env = Env.rename env n2 n' in
-    let env, ty = unify_unwrapped ~follow_bounds env
-        ~unwrappedToption1 ty1 ~unwrappedToption2 ty2 in
+    let env, ty = unify ~opts env ty1 ty2 in
     let env = TURecursive.add env n' ty in
     env, (r, Tvar n')
   | (r, Tvar n), ty2
@@ -56,53 +50,40 @@ and unify_unwrapped ?follow_bounds:(follow_bounds=true) env
     let env, ty1 = Env.get_type env r n in
     let n' = Env.fresh() in
     let env = Env.rename env n n' in
-    let env, ty = unify_unwrapped ~follow_bounds env
-        ~unwrappedToption1 ty1 ~unwrappedToption2 ty2 in
-    let env = TURecursive.add env n ty in
+    let env, ty = unify ~opts env ty1 ty2 in
+    let env = TURecursive.add env n' ty in
     env, (r, Tvar n')
   | (r1, Tunresolved tyl1), (r2, Tunresolved tyl2) ->
       let r = unify_reason r1 r2 in
-      (* TODO this should probably pass through unwrappedToptions? *)
       let env, tyl = TUtils.normalize_inter env tyl1 tyl2 in
       env, (r, Tunresolved tyl)
+  | (Reason.Rnone, Tunresolved []), ty
+  | ty, (Reason.Rnone, Tunresolved []) -> env, ty
   | (r, Tunresolved tyl), (_, ty_ as ty)
   | (_, ty_ as ty), (r, Tunresolved tyl) ->
-      let p1 = TUtils.find_pos (Reason.to_pos r) tyl in
-      let str_ty = Typing_print.error ty_ in
-      let r = Reason.Rcoerced (p1, env.Env.pos, str_ty) in
+      let r1 = TUtils.find_pos r tyl in
+      let str_ty = Typing_print.error env ty in
+      let r = Reason.Rcoerced (r1, env.Env.pos, str_ty) in
       let env = List.fold_left tyl
         ~f:(fun env x -> TUtils.sub_type env x ty) ~init:env in
       env, (r, ty_)
-  | (_, Toption ty1), _ when unwrappedToption1 ->
-      unify_unwrapped env unwrappedToption1 ty1 unwrappedToption2 ty2
-  | _, (_, Toption ty2) when unwrappedToption2 ->
-    unify_unwrapped env unwrappedToption1 ty1 unwrappedToption2 ty2
-  (* We are trying to solve ?ty1 against ?ty2, so recursively solve
-   * ty1 against ty2, but strip any subsequent uses of Toption because
-   * ??t is regarded as equivalent to ?t
-   *)
   | (r1, Toption ty1), (r2, Toption ty2) ->
       let r = unify_reason r1 r2 in
-      let env, ty = unify_unwrapped env ~unwrappedToption1:true ty1
-                                        ~unwrappedToption2:true ty2 in
+      let env, ty = unify env ty1 ty2 in
       env, (r, Toption ty)
-  (* Mixed is nullable and we want it to unify with both ?T and T at
-   * the same time. If we try to unify mixed with an option,
-   * we peel of the ? and unify mixed with the underlying type. *)
-  | (r2, Tmixed), (_, Toption ty1)
-  | (_, Toption ty1), (r2, Tmixed) ->
-    unify env ty1 (r2, Tmixed)
   | (r1, ty1), (r2, ty2) ->
       let r = unify_reason r1 r2 in
-      let env, ty = unify_ ~follow_bounds env r1 ty1 r2 ty2 in
+      let env, ty = unify_ ~opts env r1 ty1 r2 ty2 in
       env, (r, ty)
+  end
 
-and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
+and unify_ ?(opts=TUtils.default_unify_opt) env r1 ty1 r2 ty2 =
   match ty1, ty2 with
+  | Tdynamic, Tdynamic -> env, Tdynamic
   | Tprim x, Tprim y ->
-    if x == y then env, Tprim x
+    if phys_equal x y then env, Tprim x
     else
-      let () = TUtils.uerror r1 ty1 r2 ty2 in
+      let () = TUtils.uerror env r1 ty1 r2 ty2 in
       env, Terr
   | Tarraykind AKempty, (Tarraykind _ as ty)
   | (Tarraykind _ as ty), Tarraykind AKempty
@@ -111,9 +92,9 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
   | Tarraykind AKany, (Tarraykind _ as ty)
   | (Tarraykind _ as ty), Tarraykind AKany ->
       let safe_array =
-        TypecheckerOptions.safe_array (Env.get_options env) in
+        TypecheckerOptions.safe_array (Env.get_tcopt env) in
       if safe_array then
-        (TUtils.uerror r1 ty1 r2 ty2;
+        (TUtils.uerror env r1 ty1 r2 ty2;
         env, Terr)
       else
         env, ty
@@ -133,70 +114,17 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
       let env, ty1 = unify env ty1 ty3 in
       let env, ty2 = unify env ty2 ty4 in
       env, Tarraykind (AKmap (ty1, ty2))
-  | Tarraykind (AKdarray_or_varray ty1) , Tarraykind (AKdarray_or_varray ty2) ->
+  | Tarraykind (AKvarray_or_darray ty1) , Tarraykind (AKvarray_or_darray ty2) ->
       let env, ty = unify env ty1 ty2 in
-      env, Tarraykind (AKdarray_or_varray ty)
-  | Tarraykind (
-      AKvarray _
-      | AKvec _
-      | AKdarray _
-      | AKdarray_or_varray _
-      | AKmap _
-    ),
-    Tarraykind (AKshape _ | AKtuple _)->
-    unify_ ~follow_bounds env r2 ty2 r1 ty1
-  | Tarraykind AKshape fdm1,
-    Tarraykind (
-      AKvarray _
-      | AKvec _
-      | AKdarray _
-      | AKdarray_or_varray _
-      | AKmap _
-    ) ->
-    Typing_arrays.fold_akshape_as_akmap_with_acc begin fun env ty2 (r1, ty1) ->
-      unify_ env r1 ty1 r2 ty2
-    end env ty2 r1 fdm1
-  | Tarraykind AKtuple fields,
-    Tarraykind (
-      AKvarray _
-      | AKvec _
-      | AKdarray _
-      | AKdarray_or_varray _
-      | AKmap _
-    ) ->
-    Typing_arrays.fold_aktuple_as_akvec_with_acc begin fun env ty2 (r1, ty1) ->
-      unify_ env r1 ty1 r2 ty2
-    end env ty2 r1 fields
-  | Tarraykind (AKshape fdm1), Tarraykind (AKshape fdm2) ->
-    let env, fdm = Nast.ShapeMap.fold begin fun k (tk1, tv1) (env, fdm) ->
-      match Nast.ShapeMap.get k fdm2 with
-        | Some (tk2, tv2) ->
-          let env, tk = unify env tk1 tk2 in
-          let env, tv = unify env tv1 tv2 in
-          env, (Nast.ShapeMap.add k (tk, tv) fdm)
-        | None -> env, (Nast.ShapeMap.add k (tk1, tv1) fdm)
-      end fdm1 (env, fdm2) in
-    env, Tarraykind (AKshape fdm)
-  (* We allow tuple-like arrays of different lengths to unify (unify the common
-   * prefix, and append the remaining suffix), because the worst thing that can
-   * happen if we don't do this is array get returning null. But that is true
-   * for any PHP array get operation - if the key is not there, you will get
-   * null even when the value type is not nullable, so we will allow it here
-   * too. *)
-  | Tarraykind (AKtuple fields1), Tarraykind (AKtuple fields2) ->
-    let env, fields = IMap.fold begin fun k ty1 (env, fields) ->
-      match IMap.get k fields2 with
-        | Some ty2 ->
-          let env, ty = unify env ty1 ty2 in
-          env, (IMap.add k ty fields)
-        | None -> env, (IMap.add k ty1 fields)
-      end fields1 (env, fields2) in
-    env, Tarraykind (AKtuple fields)
+      env, Tarraykind (AKvarray_or_darray ty)
   | Tfun ft1, Tfun ft2 ->
       let env, ft = unify_funs env r1 ft1 r2 ft2 in
       env, Tfun ft
-  | Tclass (((p1, x1) as id), argl1),
-      Tclass ((p2, x2), argl2) when String.compare x1 x2 = 0 ->
+  | Tclass (((_, x1) as id), e1, argl1),
+      Tclass ((_, x2), e2, argl2) when String.compare x1 x2 = 0 ->
+      let e = match e1, e2 with
+      | Exact, Exact -> Exact
+      | _, _ -> Nonexact in
         (* We handle the case where a generic A<T> is used as A *)
         let argl1 =
           if argl1 = [] && not (Env.is_strict env)
@@ -210,34 +138,29 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
         in
         if List.length argl1 <> List.length argl2
         then begin
-          let n1 = soi (List.length argl1) in
-          let n2 = soi (List.length argl2) in
-          Errors.type_arity_mismatch p1 n1 p2 n2;
+          (* Error was already raised in naming. *)
           env, Terr
         end
         else
           let env, argl = List.map2_env env argl1 argl2 unify in
-          env, Tclass (id, argl)
+          env, Tclass (id, e, argl)
   | Tabstract (AKnewtype (x1, argl1), tcstr1),
     Tabstract (AKnewtype (x2, argl2), tcstr2) when String.compare x1 x2 = 0 ->
         if List.length argl1 <> List.length argl2
         then begin
-          let n1 = soi (List.length argl1) in
-          let n2 = soi (List.length argl2) in
-          let p1 = Reason.to_pos r1 in
-          let p2 = Reason.to_pos r2 in
-          Errors.type_arity_mismatch p1 n1 p2 n2;
+          (* Error was already raised in naming. *)
           env, Terr
         end
         else
-          let env, tcstr =
-            match tcstr1, tcstr2 with
-            | None, None -> env, None
+          let env, tcstr = match tcstr1, tcstr2 with
             | Some x1, Some x2 ->
-                let env, x = unify env x1 x2 in
-                env, Some x
-            | _ -> assert false
-          in
+              let env, x = unify env x1 x2 in
+              env, Some x
+            (* Internally, newtypes are always equipped with an upper bound.
+             * In the case when no upper bound is specified in source code,
+             * an implicit upper bound mixed = ?nonnull is added.
+             *)
+            | _ -> assert false in
           let env, argl = List.map2_env env argl1 argl2 unify in
           env, Tabstract (AKnewtype (x1, argl), tcstr)
   | Tabstract (AKgeneric x1, tcstr1),
@@ -256,7 +179,7 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
       env, Tabstract (ak1, tcstr)
 
   | Tabstract (AKdependent (expr_dep, _),
-      Some (_, Tclass ((_, x) as id, _) as ty)), _ ->
+      Some (_, Tclass ((_, x) as id, _, _) as ty)), _ ->
     let class_ = Env.get_class env x in
       (* For final class C, there is no difference between abstract<X> and X.
        * Two exceptions are for new types, because they are considered a
@@ -273,11 +196,11 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
              (fun () -> TUtils.simplified_uerror env (r1, ty1) (r2, ty2))
              ~when_: begin fun () ->
                match ty2 with
-               | Tclass ((_, y), _) -> y = x
-               | Tany | Terr | Tmixed | Tarraykind _ | Tprim _
+               | Tclass ((_, y), _, _) -> y = x
+               | Tany | Terr | Tnonnull | Tarraykind _ | Tprim _
                | Toption _ | Tvar _ | Tabstract (_, _) | Ttuple _
                | Tanon (_, _) | Tfun _ | Tunresolved _ | Tobject
-               | Tshape _ -> false
+               | Tshape _ | Tdynamic -> false
              end
              ~do_: begin fun error ->
                if expr_dep = `cls x then
@@ -291,8 +214,8 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
   | _, Tabstract (AKdependent (_, _), Some (_, Tclass _)) ->
       unify_ env r2 ty2 r1 ty1
 
-  | (Ttuple _ as ty), Tarraykind AKany
-  | Tarraykind AKany, (Ttuple _ as ty) ->
+  | Tarraykind AKany, (Ttuple _ as ty)
+    when not (TypecheckerOptions.disallow_array_as_tuple (Env.get_tcopt env)) ->
       env, ty
 
   | Ttuple tyl1, Ttuple tyl2 ->
@@ -309,14 +232,14 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
       else
         let env, tyl = List.map2_env env tyl1 tyl2 unify in
         env, Ttuple tyl
-  | Tmixed, Tmixed -> env, Tmixed
+  | Tnonnull, Tnonnull -> env, Tnonnull
   | Tanon (_, id1), Tanon (_, id2) when id1 = id2 -> env, ty1
   | Tanon _, Tanon _ ->
       (* This could be smarter, but the only place where we currently compare
        * two anonymous functions is when trying to normalize intersection -
        * saying that they never unify will just keep the intersection
        * unchanged, which is always a valid option. *)
-      TUtils.uerror r1 ty1 r2 ty2;
+      TUtils.uerror env r1 ty1 r2 ty2;
       env, Terr
   | Tfun ft, Tanon (anon_arity, id)
   | Tanon (anon_arity, id), Tfun ft ->
@@ -324,12 +247,20 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
       | None ->
         Errors.anonymous_recursive_call (Reason.to_pos r1);
         env, Terr
-      | Some anon ->
+      | Some (reactivity, is_coroutine, ftys, _, anon) ->
         let p1 = Reason.to_pos r1 in
         let p2 = Reason.to_pos r2 in
+        if reactivity <> ft.ft_reactive && not (TypecheckerOptions.unsafe_rx (Env.get_tcopt env))
+        then Errors.fun_reactivity_mismatch
+          p1 (TUtils.reactivity_to_string env reactivity)
+          p2 (TUtils.reactivity_to_string env ft.ft_reactive);
+        if is_coroutine <> ft.ft_is_coroutine
+        then Errors.coroutinness_mismatch is_coroutine p1 p2;
         if not (unify_arities ~ellipsis_is_variadic:true anon_arity ft.ft_arity)
         then Errors.fun_arity_mismatch p1 p2;
-        let env, ret = anon env ft.ft_params in
+        let env, _, ret = anon env ft.ft_params ft.ft_arity in
+        let funty = (r2, Tfun ft) in
+        ftys := TUtils.add_function_type env funty !ftys;
         let env, _ = unify env ft.ft_ret ret in
         env, Tfun ft)
   | Tobject, Tobject
@@ -361,27 +292,53 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
             (Reason.to_pos required)
             (Env.get_shape_field_name name);
           env, acc in
-      let on_missing_optional_field (env, acc) name missing_shape_field_type =
+      let on_missing_omittable_optional_field
+          (env, acc)
+          name
+          missing_shape_field_type =
         env, Nast.ShapeMap.add name missing_shape_field_type acc in
+      let on_missing_non_omittable_optional_field
+          pos_shape_missing
+          (env, acc)
+          name
+          missing_shape_field_type =
+        let r = Reason.Rmissing_optional_field (
+          pos_shape_missing,
+          TUtils.get_printable_shape_field_name name
+        ) in
+        let env, _ = unify env
+          (MakeType.mixed r)
+          missing_shape_field_type.sft_ty in
+        env, acc in
       (* We do it both directions to verify that no field is missing *)
       let res = Nast.ShapeMap.empty in
+      let p1 = Reason.to_pos r1 in
+      let p2 = Reason.to_pos r2 in
       let env, res = TUtils.apply_shape
         ~on_common_field
-        ~on_missing_optional_field
+        ~on_missing_omittable_optional_field
+        ~on_missing_non_omittable_optional_field:(
+          on_missing_non_omittable_optional_field p2
+        )
+        ~on_error:(fun x f -> f (); x)
         (env, res) (r1, fields_known1, fdm1) (r2, fields_known2, fdm2) in
       let env, res = TUtils.apply_shape
         ~on_common_field
-        ~on_missing_optional_field
+        ~on_missing_omittable_optional_field
+        ~on_missing_non_omittable_optional_field:(
+          on_missing_non_omittable_optional_field p1
+        )
+        ~on_error:(fun x f -> f (); x)
         (env, res) (r2, fields_known2, fdm2) (r1, fields_known1, fdm1) in
         (* After doing apply_shape in both directions we can be sure that
          * fields_known1 = fields_known2 *)
       env, Tshape (fields_known1, res)
-  | Tabstract (AKenum enum_name, _), Tclass ((post, class_name), tylist)
+  | Tabstract (AKenum enum_name, _), Tclass ((post, class_name), e, tylist)
     when String.compare enum_name class_name = 0 ->
-      env, Tclass ((post, class_name), tylist)
-  | (Tclass ((post, class_name), tylist), Tabstract (AKenum enum_name, _))
+      env, Tclass ((post, class_name), e, tylist)
+  | (Tclass ((post, class_name), e, tylist), Tabstract (AKenum enum_name, _))
     when String.compare enum_name class_name = 0 ->
-    env, Tclass ((post, class_name), tylist)
+    env, Tclass ((post, class_name), e, tylist)
 
   (* If we are trying to unify a type parameter T with another type t it's
      possible that we can get there through subtyping in both directions.
@@ -392,15 +349,15 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
      Typing_subtype.add_constraint. *)
 
   | Tabstract (AKgeneric x, _), _
-    when generic_param_matches ~follow_bounds env x (r2,ty2) ->
+    when generic_param_matches ~opts env x (r2,ty2) ->
     env, ty2
 
   | _, Tabstract (AKgeneric x, _)
-    when generic_param_matches ~follow_bounds env x (r1,ty1) ->
+    when generic_param_matches ~opts env x (r1,ty1) ->
     env, ty1
 
-  | (Terr | Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
-      | Tvar _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _)
+  | (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Toption _ | Tdynamic
+      | Tvar _ | Tabstract _ | Tclass _ | Ttuple _ | Tanon _
       | Tfun _ | Tunresolved _ | Tobject | Tshape _), _ ->
         (* Make sure to add a dependency on any classes referenced here, even if
          * we're in an error state (i.e., where we are right now). The need for
@@ -441,19 +398,24 @@ and unify_ ?follow_bounds:(follow_bounds=true) env r1 ty1 r2 ty2 =
          * the dep) anyways.
          *)
         let add env = function
-          | Tclass ((_, cid), _) -> Env.add_wclass env cid
+          | Tclass ((_, cid), _, _) -> Env.add_wclass env cid
           | _ -> () in
         add env ty1;
         add env ty2;
-        TUtils.simplified_uerror env (r1, ty1) (r2, ty2);
+        if opts.TUtils.simplify_errors then
+        TUtils.simplified_uerror env (r1, ty1) (r2, ty2)
+        else
+        TUtils.uerror env r1 ty1 r2 ty2;
         env, Terr
 
 (* Use unify to check if two types are the same. We use this in
  * generic_param_matches below, but we set follow_bounds=false so that we
  * don't end up recursing back through generic_param_matches from unify *)
-and is_same_type env ty_sub ty_super =
+and is_same_type ~opts env ty_sub ty_super =
   Errors.try_
-    (fun () -> ignore(unify ~follow_bounds:false env ty_sub ty_super); true)
+    (fun () -> ignore(
+        unify ~opts:{ opts with TUtils.follow_bounds = false }
+          env ty_sub ty_super); true)
     (fun _ -> false)
 
 (* This deals with the situation where we have an implied equality between
@@ -463,22 +425,24 @@ and is_same_type env ty_sub ty_super =
  * any further (e.g. consider a cycle T1 as T2 as T3 as T1) because
  * Typing_subtype.add_constraint already computes transitive closure.
  *)
-and generic_param_matches ~follow_bounds env x ty =
+and generic_param_matches ~opts env x ty =
   let lower = Env.get_lower_bounds env x in
   let upper = Env.get_upper_bounds env x in
-  let mem_bounds = List.exists ~f:(fun ty' -> is_same_type env ty ty') in
-  follow_bounds && mem_bounds lower && mem_bounds upper
+  let mem_bounds = Typing_set.exists (fun ty' -> is_same_type ~opts env ty ty') in
+  opts.TUtils.follow_bounds && mem_bounds lower && mem_bounds upper
 
 and unify_arities ~ellipsis_is_variadic anon_arity func_arity : bool =
   match anon_arity, func_arity with
-    | Fellipsis a_min, Fvariadic (f_min, _) when ellipsis_is_variadic ->
+    | Fellipsis (a_min, _), Fvariadic (f_min, _) when ellipsis_is_variadic ->
       (* we want to allow use the "..." syntax in the declaration of
        * anonymous function types to match named variadic arguments
        * of the "...$args" form as well as unnamed ones *)
       a_min = f_min
+    | Fvariadic (a_min, _), Fstandard (f_min, _)
     | Fvariadic (a_min, _), Fvariadic (f_min, _)
-    | Fellipsis a_min, Fellipsis f_min ->
-      a_min = f_min
+    | Fellipsis (a_min, _), Fstandard (f_min, _)
+    | Fellipsis (a_min, _), Fellipsis (f_min, _) ->
+      a_min <= f_min
     | Fstandard (a_min, a_max), Fstandard (f_min, f_max) ->
       a_min = f_min && a_max = f_max
     | _, _ -> false
@@ -490,21 +454,28 @@ and unify_reason r1 r2 =
       if c <= 0 then r1
       else r2
 
-and iunify env ty1 ty2 =
-  let env, _ = unify env ty1 ty2 in
-  env
-
 (* This function is used to unify two functions *)
 (* r1 is the reason for ft1 to have its type (witness) *)
 and unify_funs env r1 ft1 r2 ft2 =
   let p = Reason.to_pos r2 in
   let p1 = Reason.to_pos r1 in
+  if ft1.ft_is_coroutine <> ft2.ft_is_coroutine
+  then Errors.coroutinness_mismatch ft1.ft_is_coroutine p1 p;
+  if ft1.ft_return_disposable <> ft2.ft_return_disposable
+  then Errors.return_disposable_mismatch ft1.ft_return_disposable p1 p;
+  if ft1.ft_returns_mutable <> ft2.ft_returns_mutable
+  then Errors.mutable_return_result_mismatch ft1.ft_returns_mutable p1 p;
+  if ft1.ft_returns_void_to_rx <> ft2.ft_returns_void_to_rx
+  then begin
+      Errors.return_void_to_rx_mismatch
+        ~pos1_has_attribute:ft1.ft_returns_void_to_rx p1 p
+  end;
   if not (unify_arities ~ellipsis_is_variadic:false ft1.ft_arity ft2.ft_arity)
   then Errors.fun_arity_mismatch p p1;
   let env, var_opt, arity = match ft1.ft_arity, ft2.ft_arity with
-    | Fvariadic (_, (n1, var_ty1)), Fvariadic (min, (_n2, var_ty2)) ->
-      let env, var = unify env var_ty1 var_ty2 in
-      env, Some (n1, var), Fvariadic (min, (n1, var))
+    | Fvariadic (_, fp1), Fvariadic (min, fp2) ->
+      let env, var = unify env fp1.fp_type fp2.fp_type in
+      env, Some (fp1.fp_name, var), Fvariadic (min, { fp1 with fp_type = var })
     | ar1, _ar2 ->
       env, None, ar1
   in
@@ -516,22 +487,54 @@ and unify_funs env r1 ft1 r2 ft2 =
     ft_ret = ret;
   }
 
+and unify_param_modes ?(enforce_ctpbr=true) param1 param2 =
+  (* ctpbr = call-time pass-by-reference i.e. & annotation *)
+  let { fp_pos = pos1; fp_kind = mode1; _ } = param1 in
+  let { fp_pos = pos2; fp_kind = mode2; _ } = param2 in
+  match mode1, mode2 with
+  | FPnormal, FPnormal | FPref, FPref | FPinout, FPinout -> ()
+  | FPnormal, FPref ->
+    if enforce_ctpbr then Errors.reffiness_invariant pos2 pos1 `normal
+  | FPref, FPnormal ->
+    if enforce_ctpbr then Errors.reffiness_invariant pos1 pos2 `normal
+  | FPnormal, FPinout ->
+    Errors.inoutness_mismatch pos2 pos1
+  | FPinout, FPnormal ->
+    Errors.inoutness_mismatch pos1 pos2
+  | FPref, FPinout ->
+    Errors.reffiness_invariant pos1 pos2 `inout
+  | FPinout, FPref ->
+    Errors.reffiness_invariant pos2 pos1 `inout
+
+and unify_accept_disposable param1 param2 =
+  let { fp_pos = pos1; fp_accept_disposable = mode1; _ } = param1 in
+  let { fp_pos = pos2; fp_accept_disposable = mode2; _ } = param2 in
+  match mode1, mode2 with
+  | true, false -> Errors.accept_disposable_invariant pos1 pos2
+  | false, true -> Errors.accept_disposable_invariant pos2 pos1
+  | _, _ -> ()
+
 and unify_params env l1 l2 var1_opt =
   match l1, l2, var1_opt with
   | [], l, None -> env, l
-  | [], (name2, x2) :: rl2, Some (name1, v1) ->
+  | [], x2 :: rl2, Some (name1, v1) ->
+    let { fp_name = name2; fp_type = ty2; _ } = x2 in
     let name = if name1 = name2 then name1 else None in
-    let env = { env with Env.pos = Reason.to_pos (fst x2) } in
-    let env, _ = unify env x2 v1 in
+    let env = { env with Env.pos = Reason.to_pos (fst ty2) } in
+    let env, _ = unify env ty2 v1 in
     let env, rl = unify_params env [] rl2 var1_opt in
-    env, (name, x2) :: rl
+    env, { x2 with fp_name = name } :: rl
   | l, [], _ -> env, l
-  | (name1, x1) :: rl1, (name2, x2) :: rl2, _ ->
+  | x1 :: rl1, x2 :: rl2, _ ->
+    let { fp_name = name1; fp_type = ty1; _ } = x1 in
+    let { fp_name = name2; fp_type = ty2; _ } = x2 in
     let name = if name1 = name2 then name1 else None in
-    let env = { env with Env.pos = Reason.to_pos (fst x1) } in
-    let env, _ = unify env x2 x1 in
+    unify_param_modes x1 x2;
+    unify_accept_disposable x1 x2;
+    let env = { env with Env.pos = Reason.to_pos (fst ty1) } in
+    let env, _ = unify env ty2 ty1 in
     let env, rl = unify_params env rl1 rl2 var1_opt in
-    env, (name, x2) :: rl
+    env, { x2 with fp_name = name } :: rl
 
 (*****************************************************************************)
 (* Exporting *)

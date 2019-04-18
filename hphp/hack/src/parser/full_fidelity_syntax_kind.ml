@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
+ * This source code is licensed under the MIT license found in the
  * LICENSE file in the "hack" directory of this source tree. An additional
- * grant of patent rights can be found in the PATENTS file in the same
  * directory.
  *
  **
@@ -14,25 +13,27 @@
  *
  *   buck run //hphp/hack/src:generate_full_fidelity
  *
- * This module contains the type describing the structure of a syntax tree.
- *
  **
  *
  *)
 
 type t =
-  | Token
+  | Token of Full_fidelity_token_kind.t
   | Missing
   | SyntaxList
   | EndOfFile
   | Script
+  | QualifiedName
   | SimpleTypeSpecifier
   | LiteralExpression
+  | PrefixedStringExpression
   | VariableExpression
-  | QualifiedNameExpression
   | PipeVariableExpression
+  | FileAttributeSpecification
   | EnumDeclaration
   | Enumerator
+  | RecordDeclaration
+  | RecordField
   | AliasDeclaration
   | PropertyDeclaration
   | PropertyDeclarator
@@ -47,6 +48,7 @@ type t =
   | WhereClause
   | WhereConstraint
   | MethodishDeclaration
+  | MethodishTraitResolution
   | ClassishDeclaration
   | ClassishBody
   | TraitUsePrecedenceItem
@@ -61,18 +63,26 @@ type t =
   | ParameterDeclaration
   | VariadicParameter
   | AttributeSpecification
-  | Attribute
   | InclusionExpression
   | InclusionDirective
   | CompoundStatement
+  | AlternateLoopStatement
   | ExpressionStatement
   | MarkupSection
   | MarkupSuffix
   | UnsetStatement
+  | LetStatement
+  | UsingStatementBlockScoped
+  | UsingStatementFunctionScoped
+  | DeclareDirectiveStatement
+  | DeclareBlockStatement
   | WhileStatement
   | IfStatement
   | ElseifClause
   | ElseClause
+  | AlternateIfStatement
+  | AlternateElseifClause
+  | AlternateElseClause
   | TryStatement
   | CatchClause
   | FinallyClause
@@ -80,6 +90,7 @@ type t =
   | ForStatement
   | ForeachStatement
   | SwitchStatement
+  | AlternateSwitchStatement
   | SwitchSection
   | SwitchFallthrough
   | CaseLabel
@@ -90,12 +101,12 @@ type t =
   | ThrowStatement
   | BreakStatement
   | ContinueStatement
-  | FunctionStaticStatement
-  | StaticDeclarator
   | EchoStatement
-  | GlobalStatement
+  | ConcurrentStatement
   | SimpleInitializer
+  | AnonymousClass
   | AnonymousFunction
+  | Php7AnonymousFunction
   | AnonymousFunctionUseClause
   | LambdaExpression
   | LambdaSignature
@@ -110,10 +121,14 @@ type t =
   | PostfixUnaryExpression
   | BinaryExpression
   | InstanceofExpression
+  | IsExpression
+  | AsExpression
+  | NullableAsExpression
   | ConditionalExpression
   | EvalExpression
   | EmptyExpression
   | DefineExpression
+  | HaltCompilerExpression
   | IssetExpression
   | FunctionCallExpression
   | ParenthesizedExpression
@@ -122,6 +137,8 @@ type t =
   | ListExpression
   | CollectionLiteralExpression
   | ObjectCreationExpression
+  | ConstructorCall
+  | RecordCreationExpression
   | ArrayCreationExpression
   | ArrayIntrinsicExpression
   | DarrayIntrinsicExpression
@@ -141,7 +158,8 @@ type t =
   | XHPClassAttributeDeclaration
   | XHPClassAttribute
   | XHPSimpleClassAttribute
-  | XHPAttribute
+  | XHPSimpleAttribute
+  | XHPSpreadAttribute
   | XHPOpen
   | XHPExpression
   | XHPClose
@@ -157,6 +175,7 @@ type t =
   | MapArrayTypeSpecifier
   | DictionaryTypeSpecifier
   | ClosureTypeSpecifier
+  | ClosureParameterTypeSpecifier
   | ClassnameTypeSpecifier
   | FieldSpecifier
   | FieldInitializer
@@ -165,28 +184,43 @@ type t =
   | TupleExpression
   | GenericTypeSpecifier
   | NullableTypeSpecifier
+  | LikeTypeSpecifier
   | SoftTypeSpecifier
+  | ReifiedTypeArgument
   | TypeArguments
   | TypeParameters
   | TupleTypeSpecifier
   | ErrorSyntax
   | ListItem
+  | PocketAtomExpression
+  | PocketIdentifierExpression
+  | PocketAtomMappingDeclaration
+  | PocketEnumDeclaration
+  | PocketFieldTypeExprDeclaration
+  | PocketFieldTypeDeclaration
+  | PocketMappingIdDeclaration
+  | PocketMappingTypeDeclaration
 
+  [@@deriving show]
 
 let to_string kind =
   match kind with
+  | Token _                           -> "token"
   | Missing                           -> "missing"
-  | Token                             -> "token"
   | SyntaxList                        -> "list"
   | EndOfFile                         -> "end_of_file"
   | Script                            -> "script"
+  | QualifiedName                     -> "qualified_name"
   | SimpleTypeSpecifier               -> "simple_type_specifier"
   | LiteralExpression                 -> "literal"
+  | PrefixedStringExpression          -> "prefixed_string"
   | VariableExpression                -> "variable"
-  | QualifiedNameExpression           -> "qualified_name"
   | PipeVariableExpression            -> "pipe_variable"
+  | FileAttributeSpecification        -> "file_attribute_specification"
   | EnumDeclaration                   -> "enum_declaration"
   | Enumerator                        -> "enumerator"
+  | RecordDeclaration                 -> "record_declaration"
+  | RecordField                       -> "record_field"
   | AliasDeclaration                  -> "alias_declaration"
   | PropertyDeclaration               -> "property_declaration"
   | PropertyDeclarator                -> "property_declarator"
@@ -201,6 +235,7 @@ let to_string kind =
   | WhereClause                       -> "where_clause"
   | WhereConstraint                   -> "where_constraint"
   | MethodishDeclaration              -> "methodish_declaration"
+  | MethodishTraitResolution          -> "methodish_trait_resolution"
   | ClassishDeclaration               -> "classish_declaration"
   | ClassishBody                      -> "classish_body"
   | TraitUsePrecedenceItem            -> "trait_use_precedence_item"
@@ -215,18 +250,26 @@ let to_string kind =
   | ParameterDeclaration              -> "parameter_declaration"
   | VariadicParameter                 -> "variadic_parameter"
   | AttributeSpecification            -> "attribute_specification"
-  | Attribute                         -> "attribute"
   | InclusionExpression               -> "inclusion_expression"
   | InclusionDirective                -> "inclusion_directive"
   | CompoundStatement                 -> "compound_statement"
+  | AlternateLoopStatement            -> "alternate_loop_statement"
   | ExpressionStatement               -> "expression_statement"
   | MarkupSection                     -> "markup_section"
   | MarkupSuffix                      -> "markup_suffix"
   | UnsetStatement                    -> "unset_statement"
+  | LetStatement                      -> "let_statement"
+  | UsingStatementBlockScoped         -> "using_statement_block_scoped"
+  | UsingStatementFunctionScoped      -> "using_statement_function_scoped"
+  | DeclareDirectiveStatement         -> "declare_directive_statement"
+  | DeclareBlockStatement             -> "declare_block_statement"
   | WhileStatement                    -> "while_statement"
   | IfStatement                       -> "if_statement"
   | ElseifClause                      -> "elseif_clause"
   | ElseClause                        -> "else_clause"
+  | AlternateIfStatement              -> "alternate_if_statement"
+  | AlternateElseifClause             -> "alternate_elseif_clause"
+  | AlternateElseClause               -> "alternate_else_clause"
   | TryStatement                      -> "try_statement"
   | CatchClause                       -> "catch_clause"
   | FinallyClause                     -> "finally_clause"
@@ -234,6 +277,7 @@ let to_string kind =
   | ForStatement                      -> "for_statement"
   | ForeachStatement                  -> "foreach_statement"
   | SwitchStatement                   -> "switch_statement"
+  | AlternateSwitchStatement          -> "alternate_switch_statement"
   | SwitchSection                     -> "switch_section"
   | SwitchFallthrough                 -> "switch_fallthrough"
   | CaseLabel                         -> "case_label"
@@ -244,12 +288,12 @@ let to_string kind =
   | ThrowStatement                    -> "throw_statement"
   | BreakStatement                    -> "break_statement"
   | ContinueStatement                 -> "continue_statement"
-  | FunctionStaticStatement           -> "function_static_statement"
-  | StaticDeclarator                  -> "static_declarator"
   | EchoStatement                     -> "echo_statement"
-  | GlobalStatement                   -> "global_statement"
+  | ConcurrentStatement               -> "concurrent_statement"
   | SimpleInitializer                 -> "simple_initializer"
+  | AnonymousClass                    -> "anonymous_class"
   | AnonymousFunction                 -> "anonymous_function"
+  | Php7AnonymousFunction             -> "php7_anonymous_function"
   | AnonymousFunctionUseClause        -> "anonymous_function_use_clause"
   | LambdaExpression                  -> "lambda_expression"
   | LambdaSignature                   -> "lambda_signature"
@@ -264,10 +308,14 @@ let to_string kind =
   | PostfixUnaryExpression            -> "postfix_unary_expression"
   | BinaryExpression                  -> "binary_expression"
   | InstanceofExpression              -> "instanceof_expression"
+  | IsExpression                      -> "is_expression"
+  | AsExpression                      -> "as_expression"
+  | NullableAsExpression              -> "nullable_as_expression"
   | ConditionalExpression             -> "conditional_expression"
   | EvalExpression                    -> "eval_expression"
   | EmptyExpression                   -> "empty_expression"
   | DefineExpression                  -> "define_expression"
+  | HaltCompilerExpression            -> "halt_compiler_expression"
   | IssetExpression                   -> "isset_expression"
   | FunctionCallExpression            -> "function_call_expression"
   | ParenthesizedExpression           -> "parenthesized_expression"
@@ -276,6 +324,8 @@ let to_string kind =
   | ListExpression                    -> "list_expression"
   | CollectionLiteralExpression       -> "collection_literal_expression"
   | ObjectCreationExpression          -> "object_creation_expression"
+  | ConstructorCall                   -> "constructor_call"
+  | RecordCreationExpression          -> "record_creation_expression"
   | ArrayCreationExpression           -> "array_creation_expression"
   | ArrayIntrinsicExpression          -> "array_intrinsic_expression"
   | DarrayIntrinsicExpression         -> "darray_intrinsic_expression"
@@ -295,7 +345,8 @@ let to_string kind =
   | XHPClassAttributeDeclaration      -> "xhp_class_attribute_declaration"
   | XHPClassAttribute                 -> "xhp_class_attribute"
   | XHPSimpleClassAttribute           -> "xhp_simple_class_attribute"
-  | XHPAttribute                      -> "xhp_attribute"
+  | XHPSimpleAttribute                -> "xhp_simple_attribute"
+  | XHPSpreadAttribute                -> "xhp_spread_attribute"
   | XHPOpen                           -> "xhp_open"
   | XHPExpression                     -> "xhp_expression"
   | XHPClose                          -> "xhp_close"
@@ -311,6 +362,7 @@ let to_string kind =
   | MapArrayTypeSpecifier             -> "map_array_type_specifier"
   | DictionaryTypeSpecifier           -> "dictionary_type_specifier"
   | ClosureTypeSpecifier              -> "closure_type_specifier"
+  | ClosureParameterTypeSpecifier     -> "closure_parameter_type_specifier"
   | ClassnameTypeSpecifier            -> "classname_type_specifier"
   | FieldSpecifier                    -> "field_specifier"
   | FieldInitializer                  -> "field_initializer"
@@ -319,9 +371,19 @@ let to_string kind =
   | TupleExpression                   -> "tuple_expression"
   | GenericTypeSpecifier              -> "generic_type_specifier"
   | NullableTypeSpecifier             -> "nullable_type_specifier"
+  | LikeTypeSpecifier                 -> "like_type_specifier"
   | SoftTypeSpecifier                 -> "soft_type_specifier"
+  | ReifiedTypeArgument               -> "reified_type_argument"
   | TypeArguments                     -> "type_arguments"
   | TypeParameters                    -> "type_parameters"
   | TupleTypeSpecifier                -> "tuple_type_specifier"
   | ErrorSyntax                       -> "error"
   | ListItem                          -> "list_item"
+  | PocketAtomExpression              -> "pocket_atom"
+  | PocketIdentifierExpression        -> "pocket_identifier"
+  | PocketAtomMappingDeclaration      -> "pocket_atom_mapping"
+  | PocketEnumDeclaration             -> "pocket_enum_declaration"
+  | PocketFieldTypeExprDeclaration    -> "pocket_field_type_expr_declaration"
+  | PocketFieldTypeDeclaration        -> "pocket_field_type_declaration"
+  | PocketMappingIdDeclaration        -> "pocket_mapping_id_declaration"
+  | PocketMappingTypeDeclaration      -> "pocket_mapping_type_declaration"

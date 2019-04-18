@@ -47,7 +47,10 @@ bool ini_on_update(const Variant& value, std::string& p);
 bool ini_on_update(const Variant& value, String& p);
 bool ini_on_update(const Variant& value, Array& p);
 bool ini_on_update(const Variant& value, std::set<std::string>& p);
+bool ini_on_update(const Variant& value, std::vector<uint32_t>& p);
 bool ini_on_update(const Variant& value, std::vector<std::string>& p);
+bool ini_on_update(const Variant& value,
+                   std::unordered_map<std::string, int>& p);
 bool ini_on_update(const Variant& value,
                    std::map<std::string, std::string>& p);
 bool ini_on_update(const Variant& value,
@@ -72,7 +75,9 @@ Variant ini_get(std::string& p);
 Variant ini_get(String& p);
 Variant ini_get(Array& p);
 Variant ini_get(std::set<std::string>& p);
-Variant ini_get(std::vector<std::string>& p);
+template<typename T>
+Variant ini_get(std::vector<T>& p);
+Variant ini_get(std::unordered_map<std::string, int>& p);
 Variant ini_get(std::map<std::string, std::string>& p);
 Variant ini_get(std::map<std::string, std::string, stdltistr>& p);
 Variant ini_get(std::set<std::string, stdltistr>& p);
@@ -153,6 +158,7 @@ struct IniSetting {
 private:
 
   struct CallbackData {
+    String active_name;
     Variant active_section;
     Variant arr;
   };
@@ -160,7 +166,7 @@ private:
 public:
   // can remove later in a diff that explicitly changes all uses of
   // IniSetting::Map to IniSettingMap
-  typedef IniSettingMap Map;
+  using Map = IniSettingMap;
   static const Extension* CORE;
   enum ScannerMode {
     NormalScanner,
@@ -180,14 +186,14 @@ public:
     virtual void onOp(std::string &result, char type, const std::string& op1,
                       const std::string& op2);
   protected:
-    void makeArray(Variant &hash, const std::string &offset,
+    void makeArray(tv_lval hash, const std::string &offset,
                    const std::string &value);
   private:
     // Substitution copy or symlink via @ or : markers in the config line
     void makeSettingSub(const String &key, const std::string &offset,
                         const std::string &value, Variant& cur_settings);
     void traverseToSet(const String &key, const std::string& offset,
-                       Variant& value, Variant& cur_settings,
+                       tv_lval value, Variant& cur_settings,
                        const std::string& stopChar);
   };
   struct SectionParserCallback : ParserCallback {
@@ -412,7 +418,7 @@ private:
   /**
    * Take a Variant full of KindOfRefs and unbox it.
    */
-  static Variant Unbox(const Variant& boxed, std::set<ArrayData*>& seen,
+  static Variant Unbox(const_variant_ref boxed, std::set<ArrayData*>& seen,
                        bool& use_defaults, const String& array_key);
 };
 

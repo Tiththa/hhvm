@@ -94,7 +94,7 @@ struct CodeSmasher {
       cb.init(e.first, e.second - e.first, "relocated");
 
       CGMeta fixups;
-      SCOPE_EXIT { assert(fixups.empty()); };
+      SCOPE_EXIT { assertx(fixups.empty()); };
 
       DataBlock db;
       Vauto vasm { cb, cb, db, fixups };
@@ -192,6 +192,8 @@ struct TransRelocInfoHelper {
   std::vector<uint32_t> addressImmediates;
   std::vector<uint64_t> codePointers;
   std::vector<std::pair<uint32_t,std::pair<Alignment,AlignContext>>> alignments;
+  std::vector<std::tuple<FuncId, int32_t, IFrameID>> inlineFrames;
+  std::vector<std::pair<uint32_t, IStack>> inlineStacks;
 
   template<class SerDe> void serde(SerDe& sd) {
     sd
@@ -202,6 +204,8 @@ struct TransRelocInfoHelper {
       (addressImmediates)
       (codePointers)
       (alignments)
+      (inlineFrames)
+      (inlineStacks)
       ;
   }
 
@@ -223,6 +227,18 @@ struct TransRelocInfoHelper {
     }
     for (auto v : alignments) {
       tri.fixups.alignments.emplace(v.first + code.base(), v.second);
+    }
+    for (auto s : inlineFrames) {
+      auto const func = Func::fromFuncId(std::get<0>(s));
+      tri.fixups.inlineFrames.emplace_back(IFrame{
+        func, std::get<1>(s), std::get<2>(s)
+      });
+    }
+    for (auto s : inlineStacks) {
+      tri.fixups.inlineStacks.emplace_back(std::make_pair(
+        s.first + code.base(),
+        s.second
+      ));
     }
     return tri;
   }
@@ -282,11 +298,11 @@ void readRelocations(
         }
         continue;
       }
-      assert(pos != std::string::npos && pos > n);
+      assertx(pos != std::string::npos && pos > n);
       auto b64 = line.substr(pos + 1);
       auto decoded = base64_decode(b64.c_str(), b64.size(), true);
 
-      BlobDecoder blob(decoded.data(), decoded.size());
+      BlobDecoder blob(decoded.data(), decoded.size(), false);
       TransRelocInfoHelper trih;
       blob(trih);
 
@@ -304,7 +320,7 @@ void adjustProfiledCallers(RelocationInfo& rel) {
   auto pd = profData();
   if (!pd) return;
 
-  auto updateCallers = [&] (std::vector<TCA>& callers) {
+  auto updateCallers = [&] (auto& callers) {
     for (auto& caller : callers) {
       if (auto adjusted = rel.adjustedAddressAfter(caller)) {
         caller = adjusted;
@@ -323,7 +339,7 @@ void adjustProfiledCallers(RelocationInfo& rel) {
 void relocate(std::vector<TransRelocInfo>& relocs, CodeBlock& dest,
               CGMeta& fixups) {
   assertOwnsCodeLock();
-  assert(!Func::s_treadmill);
+  assertx(!Func::s_treadmill);
 
   auto newRelocMapName = Debug::DebugInfo::Get()->getRelocMapName() + ".tmp";
   auto newRelocMap = fopen(newRelocMapName.c_str(), "w+");
@@ -349,7 +365,7 @@ void relocate(std::vector<TransRelocInfo>& relocs, CodeBlock& dest,
 
   RelocationInfo rel;
   size_t num = 0;
-  assert(fixups.alignments.empty());
+  assertx(fixups.alignments.empty());
   for (size_t sz = relocs.size(); num < sz; num++) {
     auto& reloc = relocs[num];
     if (ignoreEntry(reloc.sk)) continue;
@@ -370,7 +386,7 @@ void relocate(std::vector<TransRelocInfo>& relocs, CodeBlock& dest,
     }
   }
   swap_trick(fixups.alignments);
-  assert(fixups.empty());
+  assertx(fixups.empty());
 
   adjustForRelocation(rel);
 
@@ -399,7 +415,7 @@ void relocate(std::vector<TransRelocInfo>& relocs, CodeBlock& dest,
     it.second->relocate(rel);
   }
 
-  std::unordered_set<Func*> visitedFuncs;
+  jit::fast_set<Func*> visitedFuncs;
   CodeSmasher s;
   for (size_t i = 0; i < num; i++) {
     auto& reloc = relocs[i];
@@ -561,7 +577,7 @@ bool relocateNewTranslation(TransLoc& loc,
       cb.init(start, end - start, "Dead code");
 
       CGMeta fixups;
-      SCOPE_EXIT { assert(fixups.empty()); };
+      SCOPE_EXIT { assertx(fixups.empty()); };
 
       DataBlock db;
       Vauto vasm { cb, cb, db, fixups };
@@ -643,7 +659,7 @@ void liveRelocate(int time) {
 
     unsigned new_size = g() % ((relocs.size() + 1) >> 1);
     new_size += (relocs.size() + 3) >> 2;
-    assert(new_size > 0 && new_size <= relocs.size());
+    assertx(new_size > 0 && new_size <= relocs.size());
 
     relocs.resize(new_size);
   } else {
@@ -706,10 +722,18 @@ perfRelocMapInfo(TCA start, TCA /*end*/, TCA coldStart, TCA coldEnd, SrcKey sk,
     trih.alignments.emplace_back(v.first - code().base(), v.second);
   }
 
+  for (auto f : fixups.inlineFrames) {
+    trih.inlineFrames.emplace_back(f.func->getFuncId(), f.callOff, f.parent);
+  }
+
+  for (auto s : fixups.inlineStacks) {
+    trih.inlineStacks.emplace_back(s.first - code().base(), s.second);
+  }
+
   trih.coldRange = std::make_pair(uint32_t(coldStart - code().base()),
                                   uint32_t(coldEnd - code().base()));
 
-  BlobEncoder blob;
+  BlobEncoder blob{false};
   blob(trih);
 
   auto data = base64_encode(static_cast<const char*>(blob.data()), blob.size());
@@ -732,7 +756,7 @@ perfRelocMapInfo(TCA start, TCA /*end*/, TCA coldStart, TCA coldEnd, SrcKey sk,
 //////////////////////////////////////////////////////////////////////
 
 void relocateTranslation(
-  const IRUnit& unit,
+  const IRUnit* unit,
   CodeBlock& main, CodeBlock& main_in, CodeAddress main_start,
   CodeBlock& cold, CodeBlock& cold_in, CodeAddress cold_start,
   CodeBlock& frozen, CodeAddress frozen_start,
@@ -743,14 +767,14 @@ void relocateTranslation(
     TRACE(1, "bcmaps before relocation\n");
     for (UNUSED auto const& map : bc_map) {
       TRACE(1, "%s %-6d %p %p %p\n",
-            map.md5.toString().c_str(),
+            map.sha1.toString().c_str(),
             map.bcStart,
             map.aStart,
             map.acoldStart,
             map.afrozenStart);
     }
   }
-  if (ai) printUnit(kRelocationLevel, unit, " before relocation ", ai);
+  if (ai && unit) printUnit(kRelocationLevel, *unit, " before relocation ", ai);
 
   RelocationInfo rel;
   size_t asm_count{0};
@@ -802,10 +826,8 @@ void relocateTranslation(
   memset(main.base(), 0xcc, main.frontier() - main.base());
   memset(cold.base(), 0xcc, cold.frontier() - cold.base());
   if (arch() == Arch::ARM) {
-    __builtin___clear_cache(reinterpret_cast<char*>(main.base()),
-                            reinterpret_cast<char*>(main.frontier()));
-    __builtin___clear_cache(reinterpret_cast<char*>(cold.base()),
-                            reinterpret_cast<char*>(cold.frontier()));
+    main.sync();
+    cold.sync();
   }
 #endif
 }

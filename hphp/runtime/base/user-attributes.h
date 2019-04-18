@@ -22,7 +22,6 @@
 
 #include "hphp/util/copy-ptr.h"
 #include "hphp/util/functional.h"
-#include "hphp/util/hash-map-typedefs.h"
 
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -85,7 +84,23 @@ public:
     return m_map->count(k);
   }
 
+  template<class SerDe>
+  typename std::enable_if<SerDe::deserializing>::type
+  serde(SerDe& sd) {
+    Map m;
+    sd(m);
+    lookup(std::move(m));
+  }
+
+  template<class SerDe>
+  typename std::enable_if<!SerDe::deserializing>::type
+  serde(SerDe& sd) const {
+    sd(map());
+  }
+
 private:
+  struct MapCompare;
+  void lookup(Map&& map);
   Map& map() {
     if (!m_map) m_map.emplace();
     return *m_map.mutate();
@@ -97,6 +112,7 @@ private:
 private:
   static Map s_empty_map; // so our iterators can be normal Map iterators
   copy_ptr<Map> m_map;
+  TYPE_SCAN_IGNORE_FIELD(m_map); // TypedValue in Map are never heap ptrs
 };
 
 //////////////////////////////////////////////////////////////////////

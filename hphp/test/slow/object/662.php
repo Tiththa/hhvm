@@ -12,10 +12,9 @@ class A {
     $this->d = $p4;
   }
 }
-;
 function gen() {
   $obj = new A(1, 2, 3, 4);
-  foreach ($obj as $key => &$val) {
+  foreach ($obj as $key => $val) {
     yield null;
     if($val == 2) {
       $obj->$key = 0;
@@ -25,10 +24,15 @@ function gen() {
       unset($obj->$key);
     }
  else {
-      $val++;
+      $obj->$key++;
     }
   }
   var_dump($obj);
 }
+
+<<__EntryPoint>>
+function main_662() {
+;
 foreach (gen() as $_) {
+}
 }

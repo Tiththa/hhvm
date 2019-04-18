@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_key() {
 $array = array(
   "fruit1" => "apple",
   "fruit2" => "orange",
@@ -12,12 +15,14 @@ $array = array(
 // key where value equals "apple"
 $output = '';
 while (true) {
-  $fruit_name = current($array);
+  $fruit_name = current(&$array);
   if ($fruit_name === false) break;
   if ($fruit_name === 'apple') {
-    $output .= key($array);
+    $output .= key(&$array);
   }
-  next($array);
+  next(&$array);
 }
 var_dump($output);
-var_dump(key(array()));
+$array = array();
+var_dump(key(&$array));
+}

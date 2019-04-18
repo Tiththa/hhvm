@@ -33,7 +33,11 @@ extern const StaticString s_Closure;
 // [ClosureHdr][ObjectData, kind=Closure][captured vars]
 struct ClosureHdr : HeapObject {
   explicit ClosureHdr(uint32_t size) {
-    initHeader(HeaderKind::ClosureHdr, size);
+    initHeader_32(HeaderKind::ClosureHdr, size);
+    // we need to set this here, because the next thing 'new Closure'
+    // will do is call the constructor, which will throw, and the
+    // destructor will examine this field.
+    ctx_bits = 0;
   }
   uint32_t& size() { return m_aux32; }
   uint32_t size() const { return m_aux32; }
@@ -64,7 +68,7 @@ struct c_Closure final : ObjectData {
    * Update that method if this assumption changes.
    */
   explicit c_Closure(Class* cls)
-    : ObjectData(cls, IsCppBuiltin | HasClone, HeaderKind::Closure) {
+    : ObjectData(cls, 0, HeaderKind::Closure) {
     // hdr()->ctx must be initialized by init() or the TC.
     if (debug) setThis(reinterpret_cast<ObjectData*>(-uintptr_t(1)));
   }
@@ -97,21 +101,18 @@ struct c_Closure final : ObjectData {
   Class* getScope() { return getInvokeFunc()->cls(); }
 
   /*
-   * Use and static local variables.
+   * Use variables.
    *
-   * Returns obj->propVec()
+   * Returns obj->propVecForWrite()
    * but with runtime generalized checks replaced with assertions
+   *
+   * NB: Closure properties can't have type-hints, so no checking is necessary
+   * for writes.
    */
-  TypedValue* getUseVars() { return propVec(); }
-
-  TypedValue* getStaticVar(Slot s) {
-    assertx(getVMClass()->numDeclProperties() > s);
-    return getUseVars() + s;
-  }
+  Cell* getUseVars() { return propVecForWrite(); }
 
   int32_t getNumUseVars() const {
-    return getVMClass()->numDeclProperties() -
-           getInvokeFunc()->numStaticLocals();
+    return getVMClass()->numDeclProperties();
   }
 
   /*
@@ -159,10 +160,6 @@ private:
   static Class* cls_Closure;
   static void setAllocators(Class* cls);
 };
-
-TypedValue* lookupStaticTvFromClosure(ObjectData* closure,
-                                      const StringData* name);
-Slot lookupStaticSlotFromClosure(const Class* cls, const StringData* name);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

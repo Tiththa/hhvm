@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Hh_core
 
 module Make(S : SearchUtils.Searchable) = struct
   module Fuzzy = FuzzySearchService.Make(S)
@@ -52,7 +51,11 @@ module Make(S : SearchUtils.Searchable) = struct
       Fuzzy.SearchKeyToTermMap.remove_batch fns;
       Fuzzy.SearchKeys.remove_batch fns
 
-    let query ~fuzzy workers input type_ =
+    let query
+      ~(fuzzy: bool)
+      (workers: MultiWorker.worker list option)
+      (input: string)
+      (type_: Fuzzy.TMap.key option) =
       let is_fuzzy_indexed = match type_ with
         | Some ty -> List.mem S.fuzzy_types ty
         | None -> true

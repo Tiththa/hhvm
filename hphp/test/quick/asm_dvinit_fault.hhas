@@ -5,12 +5,17 @@
 #
 
 .main {
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
+    NullUninit
+    NullUninit
+    NullUninit
     FPushFuncD 0 "main"
-    FCall 0
-    FPassR 0
-  FCall 1
-  PopR
+    FCall <> 0 1 "" - "" ""
+  FPushFuncD 1 "var_dump"
+  FCall <> 1 1 "" - "" ""
+  PopC
   Int 1
   RetC
 }
@@ -33,9 +38,13 @@ dv_init2:
       SetL $y
       PopC
 
-      FPushCtorD 0 "Exception"
-      FCall 0
-      PopR
+      NewObjD "Exception"
+      Dup
+      NullUninit
+      NullUninit
+      FPushCtor 0
+      FCall <> 0 1 "" - "" ""
+      PopC
       Throw
     } .catch {
       Int 4321

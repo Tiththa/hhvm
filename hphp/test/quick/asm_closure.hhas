@@ -5,12 +5,15 @@
   SetL $x
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+
   CUGetL $x
   CreateCl 1 0
 
   FPushFunc 0
-  FCall 0
-  UnboxR
+  FCall <> 0 1 "" - "" ""
   Print
   PopC
 

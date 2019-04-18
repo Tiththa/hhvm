@@ -20,15 +20,12 @@ mkdir($dir_path);
 $dir_handle = opendir($dir_path);
 
 $extra_arg = 10;
-var_dump( closedir($dir_handle, $extra_arg) );
+try { var_dump( closedir($dir_handle, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 //successfully close the directory handle so can delete in CLEAN section
 closedir($dir_handle);
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $base_dir = dirname(__FILE__);
 $dir_path = $base_dir . '\closedir_error';
 rmdir($dir_path);
-?>

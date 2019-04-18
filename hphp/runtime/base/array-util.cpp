@@ -23,7 +23,7 @@
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/string-util.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 
 #include "hphp/runtime/ext/std/ext_std_math.h"
 #include "hphp/runtime/ext/string/ext_string.h"
@@ -175,13 +175,13 @@ namespace {
 void rangeCheckAlloc(double estNumSteps) {
   // An array can hold at most INT_MAX elements
   if (estNumSteps > std::numeric_limits<int32_t>::max()) {
-    MM().forceOOM();
+    tl_heap->forceOOM();
     check_non_safepoint_surprise();
     return;
   }
 
   int32_t numElms = static_cast<int32_t>(estNumSteps);
-  if (MM().preAllocOOM(MixedArray::computeAllocBytesFromMaxElms(numElms))) {
+  if (tl_heap->preAllocOOM(MixedArray::computeAllocBytesFromMaxElms(numElms))) {
     check_non_safepoint_surprise();
   }
 }
@@ -249,14 +249,16 @@ Variant ArrayUtil::Range(int64_t low, int64_t high, int64_t step /* = 1 */) {
 Variant ArrayUtil::CountValues(const Array& input) {
   Array ret = Array::Create();
   for (ArrayIter iter(input); iter; ++iter) {
-    auto const rval = iter.secondRval();
-    auto const inner = tvToCell(rval);
-    if (isIntType(inner.type()) || isStringType(inner.type())) {
-      if (!ret.exists(inner.tv())) {
-        ret.set(inner.tv(), make_tv<KindOfInt64>(1));
+    auto const inner = iter.secondRval().unboxed();
+    if (isIntType(inner.type()) || isStringType(inner.type()) ||
+      isFuncType(inner.type()) || isClassType(inner.type())) {
+      auto const inner_key =
+        ret.convertKey<IntishCast::Cast>(inner.tv());
+      if (!ret.exists(inner_key)) {
+        ret.set(inner_key, make_tv<KindOfInt64>(1));
       } else {
-        ret.set(inner.tv(),
-                make_tv<KindOfInt64>(ret[inner.tv()].toInt64() + 1));
+        ret.set(inner_key,
+                make_tv<KindOfInt64>(ret[inner_key].toInt64() + 1));
       }
     } else {
       raise_warning("Can only count STRING and INTEGER values!");
@@ -405,13 +407,14 @@ Variant ArrayUtil::RandomKeys(const Array& input, int num_req /* = 1 */) {
 }
 
 Variant ArrayUtil::StringUnique(const Array& input) {
-  Array seenValues;
+  Array seenValues = Array::CreateKeyset();
   Array ret = Array::Create();
   for (ArrayIter iter(input); iter; ++iter) {
-    auto const str = String::attach(tvCastToString(iter.secondVal()));
+    auto const str = tvCastToString(iter.secondVal());
     if (!seenValues.exists(str)) {
-      seenValues.set(str, 1);
-      ret.set(iter.first(), iter.secondVal());
+      seenValues.append(str);
+      ret.set(ret.convertKey<IntishCast::Cast>(iter.first()),
+                                                       iter.secondVal());
     }
   }
   return ret;
@@ -425,7 +428,8 @@ Variant ArrayUtil::NumericUnique(const Array& input) {
     std::pair<std::set<double>::iterator, bool> res =
       seenValues.insert(value);
     if (res.second) { // it was inserted
-      ret.set(iter.first(), iter.secondVal());
+      ret.set(ret.convertKey<IntishCast::Cast>(iter.first()),
+                                                       iter.secondVal());
     }
   }
   return ret;
@@ -476,66 +480,6 @@ Variant ArrayUtil::RegularSortUnique(const Array& input) {
 
 ///////////////////////////////////////////////////////////////////////////////
 // iterations
-
-static void create_miter_for_walk(folly::Optional<MArrayIter>& miter,
-                                  Variant& var) {
-  if (!var.is(KindOfObject)) {
-    miter.emplace(var.asRef()->m_data.pref);
-    return;
-  }
-
-  auto const odata = var.getObjectData();
-  if (odata->isCollection()) {
-    raise_error("Collection elements cannot be taken by reference");
-  }
-  bool isIterable;
-  Object iterable = odata->iterableObject(isIterable);
-  if (isIterable) {
-    raise_fatal_error("An iterator cannot be used with "
-                              "foreach by reference");
-  }
-  Array properties = iterable->o_toIterArray(null_string,
-                                             ObjectData::CreateRefs);
-  miter.emplace(properties.detach());
-}
-
-void ArrayUtil::Walk(Variant& input, PFUNC_WALK walk_function,
-                     const void *data, bool recursive /* = false */,
-                     PointerSet *seen /* = NULL */,
-                     const Variant& userdata /* = uninit_variant */) {
-  assert(walk_function);
-
-  // The Optional is just to avoid copy constructing MArrayIter.
-  folly::Optional<MArrayIter> miter;
-  create_miter_for_walk(miter, input);
-  assert(miter.hasValue());
-
-  Variant k;
-  Variant v;
-  while (miter->advance()) {
-    k = miter->key();
-    v.assignRef(miter->val());
-    if (recursive && v.isArray()) {
-      assert(seen);
-      ArrayData *arr = v.getArrayData();
-
-      if (v.isReferenced()) {
-        if (seen->find((void*)arr) != seen->end()) {
-          raise_warning("array_walk_recursive(): recursion detected");
-          return;
-        }
-        seen->insert((void*)arr);
-      }
-
-      Walk(v, walk_function, data, recursive, seen, userdata);
-      if (v.isReferenced()) {
-        seen->erase((void*)arr);
-      }
-    } else {
-      walk_function(v, k, userdata, data);
-    }
-  }
-}
 
 Variant ArrayUtil::Reduce(const Array& input, PFUNC_REDUCE reduce_function,
                           const void *data,

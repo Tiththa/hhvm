@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <folly/futures/Future.h>
 #include <folly/json.h>
 #include <folly/Range.h>
 
@@ -28,6 +29,25 @@ namespace HPHP {
 struct StackTrace;
 
 ///////////////////////////////////////////////////////////////////////////////
+
+struct SLSampleThreshold {
+  SLSampleThreshold(
+    const std::string& category,
+    const std::string& key,
+    double samples_per_second,
+    std::vector<folly::Future<folly::Unit>>& futures
+  ) : category(category)
+    , key(key)
+    , samples_per_second(samples_per_second)
+    , futures(futures)
+  {}
+
+  std::string category;
+  std::string key;
+  double samples_per_second;
+
+  std::vector<folly::Future<folly::Unit>>& futures;
+};
 
 struct StructuredLogEntry {
   StructuredLogEntry();
@@ -42,22 +62,26 @@ struct StructuredLogEntry {
   void setStackTrace(folly::StringPiece key, const StackTrace& st);
   void clear();
 
+  bool force_init{false};
   folly::dynamic ints, strs, sets, vecs;
+  folly::Optional<SLSampleThreshold> ratelim;
 };
 
 std::string show(const StructuredLogEntry&);
-
-using StructuredLogImpl = void (*)(const std::string&,
-                                   const StructuredLogEntry&);
 
 /*
  * Interface for recording structured data for relatively infrequent events.
  */
 namespace StructuredLog {
+using LogFn = void (*)(const std::string&,
+                       const StructuredLogEntry&);
+using RecordGlobalsFn = void (*)(StructuredLogEntry&);
+
 bool enabled();
 bool coinflip(uint32_t rate);
-void enable(StructuredLogImpl impl);
-void log(const std::string& tableName, const StructuredLogEntry&);
+void enable(LogFn log, RecordGlobalsFn globals);
+void log(const std::string&, const StructuredLogEntry&);
+void recordRequestGlobals(StructuredLogEntry&);
 };
 
 ///////////////////////////////////////////////////////////////////////////////

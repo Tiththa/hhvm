@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 open Coverage_level
 open Hh_json
 open Ide_api_types
@@ -104,7 +103,7 @@ let print_pretty_entry = function
           merge_and_sum counts acc) r empty_counter in
         Printf.printf "== total ==\n";
         print_counts total_counts;
-        flush stdout
+        Out_channel.flush stdout
       end
 
 let print_pretty = function

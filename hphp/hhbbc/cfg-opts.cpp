@@ -30,6 +30,10 @@ TRACE_SET_MOD(hhbbc_cfg);
 
 //////////////////////////////////////////////////////////////////////
 
+static bool is_dead(const php::Block* blk) {
+  return blk->dead;
+}
+
 void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
   auto done_header = false;
   auto header = [&] {
@@ -38,26 +42,31 @@ void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
     FTRACE(2, "Remove unreachable blocks: {}\n", ainfo.ctx.func->name);
   };
 
-  auto make_unreachable = [&](borrowed_ptr<php::Block> blk) {
-    if (blk->id == NoBlockId) return false;
-    auto const& state = ainfo.bdata[blk->id].stateIn;
+  auto& blocks = ainfo.ctx.func->blocks;
+
+  auto make_unreachable = [&](BlockId bid) {
+    auto const blk = blocks[bid].get();
+    if (is_dead(blk)) return false;
+    auto const& state = ainfo.bdata[bid].stateIn;
     if (!state.initialized) return true;
     if (!state.unreachable) return false;
     return blk->hhbcs.size() != 2 ||
            blk->hhbcs.back().op != Op::Fatal;
   };
 
-  for (auto const& blk : ainfo.ctx.func->blocks) {
-    if (!make_unreachable(borrow(blk))) continue;
+  for (auto bid : ainfo.ctx.func->blockRange()) {
+    if (!make_unreachable(bid)) continue;
     header();
-    FTRACE(2, "Marking {} unreachable\n", blk->id);
+    FTRACE(2, "Marking {} unreachable\n", bid);
+    auto const blk = blocks[bid].mutate();
     auto const srcLoc = blk->hhbcs.front().srcLoc;
     blk->hhbcs = {
       bc_with_loc(srcLoc, bc::String { s_unreachable.get() }),
       bc_with_loc(srcLoc, bc::Fatal { FatalOp::Runtime })
     };
     blk->fallthrough = NoBlockId;
-    blk->exnNode = nullptr;
+    blk->throwExit = NoBlockId;
+    blk->exnNodeId = NoExnNodeId;
   }
 
   if (!options.RemoveDeadBlocks) return;
@@ -68,35 +77,48 @@ void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
     return state.initialized && !state.unreachable;
   };
 
-  for (auto const& blk : ainfo.rpoBlocks) {
-    if (!reachable(blk->id)) continue;
+  for (auto const bid : ainfo.rpoBlocks) {
+    if (!reachable(bid)) continue;
     auto reachableTarget = NoBlockId;
     auto hasUnreachableTargets = false;
-    forEachNormalSuccessor(*blk, [&] (BlockId id) {
+    forEachNormalSuccessor(
+      *blocks[bid],
+      [&] (BlockId id) {
         if (reachable(id)) {
           reachableTarget = id;
         } else {
           hasUnreachableTargets = true;
         }
-      });
+      }
+    );
     if (!hasUnreachableTargets || reachableTarget == NoBlockId) continue;
     header();
-    switch (blk->hhbcs.back().op) {
+    switch (blocks[bid]->hhbcs.back().op) {
       case Op::JmpNZ:
-      case Op::JmpZ:
-        FTRACE(2, "blk: {} - jcc -> jmp {}\n", blk->id, reachableTarget);
+      case Op::JmpZ: {
+        FTRACE(2, "blk: {} - jcc -> jmp {}\n", bid, reachableTarget);
+        auto const blk = blocks[bid].mutate();
         blk->hhbcs.back() = bc_with_loc(blk->hhbcs.back().srcLoc, bc::PopC {});
         blk->fallthrough = reachableTarget;
         break;
-      default:
-        FTRACE(2, "blk: {} -", blk->id, reachableTarget);
-        forEachNormalSuccessor(*blk, [&] (const BlockId& id) {
+      }
+      case Op::Switch:
+      case Op::SSwitch: {
+        FTRACE(2, "blk: {} -", bid);
+        auto const blk = blocks[bid].mutate();
+        forEachNormalSuccessor(
+          *blk,
+          [&] (BlockId& id) {
             if (!reachable(id)) {
               FTRACE(2, " {}->{}", id, reachableTarget);
-              const_cast<BlockId&>(id) = reachableTarget;
+              id = reachableTarget;
             }
-          });
+          }
+        );
         FTRACE(2, "\n");
+        break;
+      }
+      default:
         break;
     }
   }
@@ -128,11 +150,13 @@ struct SwitchInfo {
   DataType kind;
 };
 
-bool analyzeSwitch(const php::Block& blk,
+bool analyzeSwitch(const php::Func& func,
+                   BlockId bid,
                    std::vector<MergeBlockInfo>& blkInfos,
                    SwitchInfo* switchInfo) {
+  auto const& blk = *func.blocks[bid];
   auto const jmp = &blk.hhbcs.back();
-  auto& blkInfo = blkInfos[blk.id];
+  auto& blkInfo = blkInfos[bid];
 
   switch (jmp->op) {
     case Op::JmpZ:
@@ -168,7 +192,7 @@ bool analyzeSwitch(const php::Block& blk,
           }
         }
         auto const jmpTarget = jmp->op == Op::JmpNZ ?
-          jmp->JmpNZ.target : jmp->JmpZ.target;
+          jmp->JmpNZ.target1 : jmp->JmpZ.target1;
         BlockId caseTarget, defaultBlock;
         if ((jmp->op == Op::JmpNZ) == (cmp.op == Op::Eq)) {
           defaultBlock = blk.fallthrough;
@@ -262,7 +286,7 @@ Bytecode buildIntSwitch(SwitchInfo& switchInfo) {
 }
 
 Bytecode buildStringSwitch(SwitchInfo& switchInfo) {
-  std::set<SString> seen;
+  hphp_fast_set<SString> seen;
   SSwitchTab sswitchTab;
   for (auto& c : switchInfo.cases) {
     if (seen.insert(c.first.s).second) {
@@ -274,18 +298,18 @@ Bytecode buildStringSwitch(SwitchInfo& switchInfo) {
 }
 
 bool buildSwitches(php::Func& func,
-                   borrowed_ptr<php::Block> blk,
+                   BlockId bid,
                    std::vector<MergeBlockInfo>& blkInfos) {
   SwitchInfo switchInfo;
   std::vector<BlockId> blocks;
-  if (!analyzeSwitch(*blk, blkInfos, &switchInfo)) return false;
-  blkInfos[blk->id].couldBeSwitch = false;
-  blkInfos[blk->id].onlySwitch = false;
+  if (!analyzeSwitch(func, bid, blkInfos, &switchInfo)) return false;
+  blkInfos[bid].couldBeSwitch = false;
+  blkInfos[bid].onlySwitch = false;
   while (true) {
     auto const& bInfo = blkInfos[switchInfo.defaultBlock];
-    auto const nxt = borrow(func.blocks[switchInfo.defaultBlock]);
+    auto const nxtId = switchInfo.defaultBlock;
     if (bInfo.onlySwitch && !bInfo.multiplePreds &&
-        analyzeSwitch(*nxt, blkInfos, &switchInfo)) {
+        analyzeSwitch(func, nxtId, blkInfos, &switchInfo)) {
       blocks.push_back(switchInfo.defaultBlock);
       continue;
     }
@@ -296,6 +320,7 @@ bool buildSwitches(php::Func& func,
       auto bc = switchInfo.kind == KindOfInt64 ?
         buildIntSwitch(switchInfo) : buildStringSwitch(switchInfo);
       if (bc.op != Op::Nop) {
+        auto const blk = func.blocks[bid].mutate();
         auto it = blk->hhbcs.end();
         // blk->fallthrough implies it was a JmpZ JmpNZ block,
         // which means we have exactly 4 instructions making up
@@ -315,58 +340,21 @@ bool buildSwitches(php::Func& func,
         blk->fallthrough = NoBlockId;
         for (auto id : blocks) {
           if (blkInfos[id].multiplePreds) continue;
-          auto const removed = borrow(func.blocks[id]);
-          removed->id = NoBlockId;
+          auto const removed = func.blocks[id].mutate();
+          removed->dead = true;
           removed->hhbcs = { bc::Nop {} };
           removed->fallthrough = NoBlockId;
-          removed->factoredExits = {};
+          removed->throwExit = NoBlockId;
+          removed->exnNodeId = NoExnNodeId;
         }
         ret = true;
       }
     }
-    return (bInfo.couldBeSwitch && buildSwitches(func, nxt, blkInfos)) || ret;
-  }
-}
-
-template<typename S>
-bool strip_exn_tree(const php::Func& func,
-                    CompactVector<std::unique_ptr<php::ExnNode>>& nodes,
-                    const std::set<borrowed_ptr<php::ExnNode>> &seenExnNodes,
-                    uint32_t& nextId,
-                    S& sectionExits) {
-  auto it = std::remove_if(nodes.begin(), nodes.end(),
-                           [&] (const std::unique_ptr<php::ExnNode>& node) {
-                             if (seenExnNodes.count(borrow(node))) return false;
-                             FTRACE(2, "Stripping ExnNode {}\n", node->id);
-                             return true;
-                           });
-  auto ret = false;
-  if (it != nodes.end()) {
-    nodes.erase(it, nodes.end());
-    ret = true;
-  }
-  for (auto& n : nodes) {
-    n->id = nextId++;
-    if (n->parent) {
-      match<void>(
-        n->info, [&](const php::CatchRegion& /*cr*/) {},
-        [&](const php::FaultRegion& fr) {
-          auto pentry = match<BlockId>(
-            n->parent->info,
-            [&] (const php::CatchRegion& cr2) { return cr2.catchEntry; },
-            [&] (const php::FaultRegion& fr2) { return fr2.faultEntry; }
-          );
-          auto const sectionId =
-            static_cast<size_t>(func.blocks[fr.faultEntry]->section);
-          sectionExits[sectionId].insert(pentry);
-        });
-    }
-    if (strip_exn_tree(func, n->children, seenExnNodes, nextId, sectionExits)) {
+    if (bInfo.couldBeSwitch && buildSwitches(func, nxtId, blkInfos)) {
       ret = true;
     }
+    return ret;
   }
-
-  return ret;
 }
 
 }
@@ -379,69 +367,55 @@ bool rebuild_exn_tree(const FuncAnalysis& ainfo) {
   FTRACE(4, "Rebuild exn tree: {}\n", func.name);
 
   auto reachable = [&](BlockId id) {
-    if (id == NoBlockId) return false;
+    if (is_dead(func.blocks[id].get())) return false;
     auto const& state = ainfo.bdata[id].stateIn;
     return state.initialized && !state.unreachable;
   };
-  std::unordered_map<BlockId,std::set<BlockId>> factoredExits;
-  std::unordered_map<size_t, std::set<BlockId>> sectionExits;
-  std::set<borrowed_ptr<php::ExnNode>> seenExnNodes;
+  hphp_fast_set<ExnNodeId> seenNodes;
 
-  for (auto const& blk : ainfo.rpoBlocks) {
-    if (!reachable(blk->id)) {
-      FTRACE(4, "Unreachable: {}\n", blk->id);
+  for (auto const bid : ainfo.rpoBlocks) {
+    if (!reachable(bid)) {
+      FTRACE(4, "Unreachable: {}\n", bid);
       continue;
     }
-    if (auto node = blk->exnNode) {
-      auto entry = match<BlockId>(
-        node->info,
-        [&] (const php::CatchRegion& cr) { return cr.catchEntry; },
-        [&] (const php::FaultRegion& fr) { return fr.faultEntry; }
-      );
-      factoredExits[blk->id].insert(entry);
-      do {
-        if (!seenExnNodes.insert(node).second) break;
-      } while ((node = node->parent) != nullptr);
+    auto idx = func.blocks[bid]->exnNodeId;
+    while (idx != NoExnNodeId) {
+      if (!seenNodes.insert(idx).second) break;
+      idx = func.exnNodes[idx].parent;
     }
   }
 
-  uint32_t nextId = 0;
-  if (!strip_exn_tree(func, func.exnNodes,
-                      seenExnNodes, nextId, sectionExits)) {
-    return false;
-  }
-
-  for (auto const& blk : func.blocks) {
-    if (!reachable(blk->id)) {
-      blk->exnNode = nullptr;
-      continue;
-    }
-    auto &fe = factoredExits[blk->id];
-    auto it = sectionExits.find(static_cast<size_t>(blk->section));
-    if (it != sectionExits.end()) {
-      fe.insert(it->second.begin(), it->second.end());
-    }
-    auto update = false;
-    if (blk->factoredExits.size() != fe.size()) {
-      update = true;
-      FTRACE(2, "Old factored edges: blk:{} -", blk->id);
-      for (auto DEBUG_ONLY id : blk->factoredExits) FTRACE(2, " {}", id);
-      FTRACE(2, "\n");
-      blk->factoredExits.resize(fe.size());
-    }
-
-    size_t i = 0;
-    for (auto b : fe) {
-      if (blk->factoredExits[i] != b) {
-        assert(update);
-        blk->factoredExits[i] = b;
+  auto changed = false;
+  for (auto& n : func.exnNodes) {
+    if (n.idx == NoExnNodeId) continue;
+    if (!seenNodes.count(n.idx)) {
+      n.idx = NoExnNodeId;
+      n.depth = 0;
+      n.children.clear();
+      n.parent = NoExnNodeId;
+      changed = true;
+    } else {
+      auto it = std::remove_if(n.children.begin(), n.children.end(),
+                               [&] (ExnNodeId c) {
+                                 if (seenNodes.count(c)) return false;
+                                 FTRACE(2, "Stripping ExnNode {}\n", c);
+                                 return true;
+                               });
+      if (it != n.children.end()) {
+        n.children.erase(it, n.children.end());
+        changed = true;
       }
-      i++;
     }
-    if (update) {
-      FTRACE(2, "New factored edges: blk:{} -", blk->id);
-      for (auto DEBUG_ONLY id : blk->factoredExits) FTRACE(2, " {}", id);
-      FTRACE(2, "\n");
+  }
+
+  if (!changed) return false;
+
+  for (auto bid : func.blockRange()) {
+    if (!reachable(bid)) {
+      auto const blk = func.blocks[bid].mutate();
+      blk->exnNodeId = NoExnNodeId;
+      blk->throwExit = NoBlockId;
+      continue;
     }
   }
 
@@ -457,21 +431,23 @@ bool control_flow_opts(const FuncAnalysis& ainfo) {
   bool anyChanges = false;
 
   auto reachable = [&](BlockId id) {
+    if (is_dead(func.blocks[id].get())) return false;
     auto const& state = ainfo.bdata[id].stateIn;
     return state.initialized && !state.unreachable;
   };
   // find all the blocks with multiple preds; they can't be merged
   // into their predecessors
-  for (auto const& blk : func.blocks) {
-    if (blk->id == NoBlockId) continue;
-    auto& bbi = blockInfo[blk->id];
+  for (auto bid : func.blockRange()) {
+    auto& cblk = func.blocks[bid];
+    if (is_dead(cblk.get())) continue;
+    auto& bbi = blockInfo[bid];
     int numSucc = 0;
-    if (!reachable(blk->id)) {
+    if (!reachable(bid)) {
       bbi.multiplePreds = true;
       bbi.multipleSuccs = true;
       continue;
     } else {
-      analyzeSwitch(*blk, blockInfo, nullptr);
+      analyzeSwitch(func, bid, blockInfo, nullptr);
     }
     auto handleSucc = [&] (BlockId succId) {
       auto& bsi = blockInfo[succId];
@@ -481,16 +457,30 @@ bool control_flow_opts(const FuncAnalysis& ainfo) {
         bsi.hasPred = true;
       }
     };
-    forEachNormalSuccessor(*blk, [&](const BlockId& succId) {
-        auto skip = next_real_block(func, succId);
-        if (skip != succId) {
-          const_cast<BlockId&>(succId) = skip;
-          anyChanges = true;
-        }
-        handleSucc(succId);
+    auto followSucc = false;
+    forEachNormalSuccessor(
+      *cblk,
+      [&] (BlockId succId) {
+        auto const realSucc = next_real_block(func, succId);
+        if (succId != realSucc) followSucc = true;
+        handleSucc(realSucc);
         numSucc++;
-      });
-    for (auto& ex : blk->factoredExits) handleSucc(ex);
+      }
+    );
+    if (followSucc) {
+      anyChanges = true;
+      auto const blk = cblk.mutate();
+      forEachNormalSuccessor(
+        *blk,
+        [&] (BlockId& succId) {
+          auto skip = next_real_block(func, succId);
+          if (skip != succId) {
+            succId = skip;
+          }
+        }
+      );
+    }
+    if (cblk->throwExit != NoBlockId) handleSucc(cblk->throwExit);
     if (numSucc > 1) bbi.multipleSuccs = true;
   }
   blockInfo[func.mainEntry].multiplePreds = true;
@@ -500,42 +490,42 @@ bool control_flow_opts(const FuncAnalysis& ainfo) {
     }
   }
 
-  for (auto& blk : func.blocks) {
-    if (blk->id == NoBlockId) continue;
-    while (blk->fallthrough != NoBlockId) {
-      auto nxt = borrow(func.blocks[blk->fallthrough]);
-      if (blockInfo[blk->id].multipleSuccs ||
-          blockInfo[nxt->id].multiplePreds ||
-          blk->exnNode != nxt->exnNode ||
-          blk->section != nxt->section) {
+  for (auto bid : func.blockRange()) {
+    auto& cblk = func.blocks[bid];
+    if (is_dead(cblk.get())) continue;
+    while (cblk->fallthrough != NoBlockId) {
+      auto& cnxt = func.blocks[cblk->fallthrough];
+      if (blockInfo[bid].multipleSuccs ||
+          blockInfo[cblk->fallthrough].multiplePreds ||
+          cblk->exnNodeId != cnxt->exnNodeId ||
+          cblk->throwExit != cnxt->throwExit) {
         break;
       }
 
-      FTRACE(1, "merging: {} into {}\n", (void*)nxt, (void*)blk.get());
-      auto& bInfo = blockInfo[blk->id];
-      auto const& nInfo = blockInfo[nxt->id];
+      FTRACE(2, "   merging: {} into {}\n", cblk->fallthrough, bid);
+      auto& bInfo = blockInfo[bid];
+      auto const& nInfo = blockInfo[cblk->fallthrough];
       bInfo.multipleSuccs = nInfo.multipleSuccs;
       bInfo.couldBeSwitch = nInfo.couldBeSwitch;
       bInfo.onlySwitch = false;
 
-      blk->fallthrough = nxt->fallthrough;
-      blk->fallthroughNS = nxt->fallthroughNS;
-      // The blocks have the same exnNode, and the same section
-      // so they must have the same factoredExits.
-      assert(blk->factoredExits == nxt->factoredExits);
-      std::copy(nxt->hhbcs.begin(), nxt->hhbcs.end(),
+      auto const blk = cblk.mutate();
+      blk->fallthrough = cnxt->fallthrough;
+      blk->fallthroughNS = cnxt->fallthroughNS;
+      std::copy(cnxt->hhbcs.begin(), cnxt->hhbcs.end(),
                 std::back_inserter(blk->hhbcs));
+      auto const nxt = cnxt.mutate();
       nxt->fallthrough = NoBlockId;
-      nxt->id = NoBlockId;
+      nxt->dead = true;
       nxt->hhbcs = { bc::Nop {} };
       anyChanges = true;
     }
-    auto const& bInfo = blockInfo[blk->id];
+    auto const& bInfo = blockInfo[bid];
     if (bInfo.couldBeSwitch &&
         (bInfo.multiplePreds || !bInfo.onlySwitch || !bInfo.followsSwitch)) {
       // This block looks like it could be part of a switch, and it's
       // not in the middle of a sequence of such blocks.
-      if (buildSwitches(func, borrow(blk), blockInfo)) {
+      if (buildSwitches(func, bid, blockInfo)) {
         anyChanges = true;
       }
     }

@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -26,7 +25,25 @@ type t = {
   source_text : SourceText.t;
   offset : int;
   width : int
-}
+} [@@deriving show]
+
+let make_ignore_error source_text offset width =
+  { kind = TriviaKind.IgnoreError; source_text; offset; width }
+
+let make_unsafe source_text offset width =
+  { kind = TriviaKind.Unsafe; source_text; offset; width }
+
+let make_unsafe_expression source_text offset width =
+  { kind = TriviaKind.UnsafeExpression; source_text; offset; width }
+
+let make_extra_token_error source_text offset width =
+  { kind = TriviaKind.ExtraTokenError; source_text; offset; width }
+
+let make_fallthrough source_text offset width =
+  { kind = TriviaKind.FallThrough; source_text; offset; width }
+
+let make_fix_me source_text offset width =
+  { kind = TriviaKind.FixMe; source_text; offset; width }
 
 let make_whitespace source_text offset width =
   { kind = TriviaKind.WhiteSpace; source_text; offset; width }
@@ -39,6 +56,9 @@ let make_single_line_comment source_text offset width =
 
 let make_delimited_comment source_text offset width =
   { kind = TriviaKind.DelimitedComment; source_text; offset; width }
+
+let make_after_halt_compiler source_text offset width =
+  { kind = TriviaKind.AfterHaltCompiler; source_text; offset; width }
 
 let width trivia =
   trivia.width
@@ -57,12 +77,6 @@ let source_text trivia =
 
 let text trivia =
   SourceText.sub (source_text trivia) (start_offset trivia) (width trivia)
-
-let start_position trivia =
-  SourceText.offset_to_position (source_text trivia) (start_offset trivia)
-
-let end_position trivia =
-  SourceText.offset_to_position (source_text trivia) (end_offset trivia)
 
 let from_minimal source_text minimal_trivia offset =
   let kind = MinimalTrivia.kind minimal_trivia in

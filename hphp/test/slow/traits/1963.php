@@ -12,5 +12,3 @@ class C {
 }
 $o = new C;
 $o->Func1();
-?>
-

@@ -1,13 +1,17 @@
 
 .main {
   DefCls 0
-  FPushCtorD 0 "C"
-  FCall 0
+  NewObjD "C"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
 
   CheckProp "foo"
   InitProp "bar" NonStatic
 
-  PopR
+  PopC
   RetC
 }
 

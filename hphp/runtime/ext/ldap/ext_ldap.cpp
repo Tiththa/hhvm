@@ -19,7 +19,7 @@
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/root-map.h"
 #include <folly/String.h>
 #include <lber.h>
@@ -158,7 +158,7 @@ struct LdapLink : SweepableResourceData {
   DECLARE_RESOURCE_ALLOCATION(LdapLink)
 
   LdapLink() {}
-  ~LdapLink() { closeImpl(); }
+  ~LdapLink() override { closeImpl(); }
 
   void close() {
     closeImpl();
@@ -190,7 +190,7 @@ struct LdapRequestData {
 
   RootMap<LdapLink> m_links;
 };
-static IMPLEMENT_THREAD_LOCAL(LdapRequestData, s_ldap_data);
+static RDS_LOCAL(LdapRequestData, s_ldap_data);
 #define LDAPG(name) s_ldap_data->m_ ## name
 
 void LdapExtension::requestInit() {
@@ -246,7 +246,7 @@ struct LdapResult : SweepableResourceData {
   DECLARE_RESOURCE_ALLOCATION(LdapResult)
 
   LdapResult(LDAPMessage *res) : data(res) {}
-  ~LdapResult() { close();}
+  ~LdapResult() override { close();}
 
   void close() {
     if (data) {
@@ -272,7 +272,7 @@ struct LdapResultEntry : SweepableResourceData {
 
   LdapResultEntry(LDAPMessage *entry, req::ptr<LdapResult> res)
     : data(entry), ber(nullptr), result(std::move(res)) {}
-  ~LdapResultEntry() { close();}
+  ~LdapResultEntry() override { close();}
 
   void close() {
     if (ber != NULL) {
@@ -694,7 +694,7 @@ static int _ldap_rebind_proc(LDAP* /*ldap*/, const char* url, ber_tag_t /*req*/,
 
   /* callback */
   Variant ret = vm_call_user_func
-    (ld->rebindproc, make_packed_array(Variant(ld), String(url, CopyString)));
+    (ld->rebindproc, make_vec_array(Variant(ld), String(url, CopyString)));
   return ret.toInt64();
 }
 

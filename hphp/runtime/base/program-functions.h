@@ -18,15 +18,14 @@
 #define incl_HPHP_PROGRAM_FUNCTIONS_H_
 
 #include "hphp/runtime/base/types.h"
+#include "hphp/runtime/vm/treadmill.h"
 #include <boost/program_options/parsers.hpp>
-
-// Needed for compatibility with oniguruma-5.9.4+
-#define ONIG_ESCAPE_UCHAR_COLLISION
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 struct Transport;
+struct Unit;
 
 #if defined(__APPLE__) || defined(_MSC_VER)
 extern const void* __hot_start;
@@ -98,8 +97,14 @@ std::string get_right_option_name(
 struct ExecutionContext;
 
 void hphp_process_init();
-void hphp_session_init();
+void hphp_session_init(Treadmill::SessionKind session_kind,
+                       Transport* transport = nullptr);
 
+void invoke_prelude_script(
+     const char* currentDir,
+     const std::string& document,
+     const std::string& prelude,
+     const char* root = nullptr);
 bool hphp_invoke_simple(const std::string& filename, bool warmupOnly);
 bool hphp_invoke(ExecutionContext *context,
                  const std::string &cmd,
@@ -112,9 +117,9 @@ bool hphp_invoke(ExecutionContext *context,
                  std::string &errorMsg,
                  bool once,
                  bool warmupOnly,
-                 bool richErrorMsg);
-void hphp_context_shutdown();
-void hphp_context_exit(bool shutdown = true);
+                 bool richErrorMsg,
+                 const std::string& prelude);
+void hphp_context_exit();
 
 void hphp_thread_init();
 void hphp_thread_exit();
@@ -125,7 +130,7 @@ void hphp_memory_cleanup();
  * is provided, various statistics about resources consumed by the request will
  * be logged to ServiceData.
  */
-void hphp_session_exit(const Transport* transport = nullptr);
+void hphp_session_exit(Transport* transport = nullptr);
 void hphp_process_exit() noexcept;
 bool is_hphp_session_initialized();
 std::string get_systemlib(std::string* hhas = nullptr,
@@ -134,6 +139,10 @@ std::string get_systemlib(std::string* hhas = nullptr,
 
 // Helper function for stats tracking with exceptions.
 void bump_counter_and_rethrow(bool isPsp);
+
+
+// Log the first time a unit is loaded
+void log_loaded_unit(const Unit* u);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

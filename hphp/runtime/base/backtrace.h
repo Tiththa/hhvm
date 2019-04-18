@@ -16,7 +16,6 @@
 #ifndef incl_HPHP_BACKTRACE_H_
 #define incl_HPHP_BACKTRACE_H_
 
-#include "hphp/runtime/base/req-containers.h"
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/util/low-ptr.h"
 
@@ -65,7 +64,7 @@ struct CompactTrace : SweepableResourceData {
 
     TYPE_SCAN_IGNORE_ALL;
 
-    int64_t m_hash{0x9e3779b9};
+    uint64_t m_hash{0x9e3779b9};
     folly::small_vector<Frame, 16> m_frames;
   };
 
@@ -218,8 +217,14 @@ private:
 
 Array createBacktrace(const BacktraceArgs& backtraceArgs);
 void addBacktraceToStructLog(const Array& bt, StructuredLogEntry& cols);
-int64_t createBacktraceHash();
+int64_t createBacktraceHash(bool consider_metadata);
 req::ptr<CompactTrace> createCompactBacktrace();
+const Func* GetCallerFunc();
+const Func* GetCallerFuncSkipBuiltins();
+const Func* GetCallerFuncSkipCPPBuiltins();
+Class* GetCallerClass();
+Class* GetCallerClassSkipBuiltins();
+Class* GetCallerClassSkipCPPBuiltins();
 
 } // HPHP
 

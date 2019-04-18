@@ -32,6 +32,7 @@
 #include "hphp/runtime/vm/jit/vasm-reg.h"
 
 #include "hphp/util/asm-x64.h"
+#include "hphp/util/text-util.h"
 #include "hphp/util/trace.h"
 
 namespace HPHP { namespace jit { namespace irlower {
@@ -73,18 +74,6 @@ IMPL_OPCODE_CALL(DebugBacktraceFast)
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static void raiseVarEnvDynCall(const Func* func) {
-  assertx(func->accessesCallerFrame());
-  assertx(func->dynCallWrapper());
-  assertx(!func->dynCallTarget());
-  raise_disallowed_dynamic_call(func);
-}
-
-void cgRaiseVarEnvDynCall(IRLS& env, const IRInstruction* inst) {
-  cgCallHelper(vmain(env), env, CallSpec::direct(raiseVarEnvDynCall),
-               kVoidDest, SyncOptions::Sync, argGroup(env, inst).ssa(0));
-}
-
 static void raiseHackArrCompatNotice(const StringData* msg) {
   raise_hackarr_compat_notice(msg->toCppString());
 }
@@ -92,6 +81,62 @@ static void raiseHackArrCompatNotice(const StringData* msg) {
 void cgRaiseHackArrCompatNotice(IRLS& env, const IRInstruction* inst) {
   cgCallHelper(vmain(env), env, CallSpec::direct(raiseHackArrCompatNotice),
                kVoidDest, SyncOptions::Sync, argGroup(env, inst).ssa(0));
+}
+
+static void raiseForbiddenDynCall(const Func* func) {
+  assertx(RuntimeOption::EvalForbidDynamicCalls > 0);
+  assertx(!func->isDynamicallyCallable());
+
+  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+    std::string msg;
+    string_printf(
+      msg,
+      Strings::FUNCTION_CALLED_DYNAMICALLY,
+      func->fullDisplayName()->data()
+    );
+    throw_invalid_operation_exception(makeStaticString(msg));
+  } else {
+    raise_notice(
+      Strings::FUNCTION_CALLED_DYNAMICALLY,
+      func->fullDisplayName()->data()
+    );
+  }
+}
+
+static void raiseForbiddenDynConstruct(const Class* cls) {
+  assertx(RuntimeOption::EvalForbidDynamicCalls > 0);
+  assertx(!cls->isDynamicallyConstructible());
+
+  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+    std::string msg;
+    string_printf(
+      msg,
+      Strings::CLASS_CONSTRUCTED_DYNAMICALLY,
+      cls->name()->data()
+    );
+    throw_invalid_operation_exception(makeStaticString(msg));
+  } else {
+    raise_notice(
+      Strings::CLASS_CONSTRUCTED_DYNAMICALLY,
+      cls->name()->data()
+    );
+  }
+}
+
+void cgRaiseForbiddenDynCall(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(vmain(env), env, CallSpec::direct(raiseForbiddenDynCall),
+               kVoidDest, SyncOptions::Sync, argGroup(env, inst).ssa(0));
+}
+
+void cgRaiseForbiddenDynConstruct(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(vmain(env), env, CallSpec::direct(raiseForbiddenDynConstruct),
+               kVoidDest, SyncOptions::Sync, argGroup(env, inst).ssa(0));
+}
+
+void cgThrowLateInitPropError(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(vmain(env), env, CallSpec::direct(throw_late_init_prop),
+               kVoidDest, SyncOptions::Sync,
+               argGroup(env, inst).ssa(0).ssa(1).ssa(2));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -102,18 +147,24 @@ IMPL_OPCODE_CALL(RestoreErrorLevel)
 
 ///////////////////////////////////////////////////////////////////////////////
 
+IMPL_OPCODE_CALL(CheckClsReifiedGenericMismatch)
+IMPL_OPCODE_CALL(CheckFunReifiedGenericMismatch)
 IMPL_OPCODE_CALL(RaiseArrayIndexNotice)
 IMPL_OPCODE_CALL(RaiseArrayKeyNotice)
 IMPL_OPCODE_CALL(RaiseError)
 IMPL_OPCODE_CALL(RaiseMissingArg)
+IMPL_OPCODE_CALL(RaiseTooManyArg)
 IMPL_OPCODE_CALL(RaiseNotice)
 IMPL_OPCODE_CALL(RaiseUndefProp)
 IMPL_OPCODE_CALL(RaiseUninitLoc)
 IMPL_OPCODE_CALL(RaiseWarning)
+IMPL_OPCODE_CALL(RaiseParamRefMismatchForFunc)
 IMPL_OPCODE_CALL(RaiseMissingThis)
+IMPL_OPCODE_CALL(RaiseHasThisNeedStatic)
 IMPL_OPCODE_CALL(FatalMissingThis)
 IMPL_OPCODE_CALL(ThrowArithmeticError)
 IMPL_OPCODE_CALL(ThrowDivisionByZeroError)
+IMPL_OPCODE_CALL(ThrowDivisionByZeroException)
 IMPL_OPCODE_CALL(ThrowInvalidArrayKey)
 IMPL_OPCODE_CALL(ThrowInvalidOperation)
 IMPL_OPCODE_CALL(ThrowOutOfBounds)

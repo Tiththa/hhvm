@@ -39,7 +39,7 @@ $nots = $dtd->notations;
 $length = $nots->length;
 echo "Length: ".$length."\n";
 
-foreach ($nots AS $key=>$node) {
+foreach ($nots as $key=>$node) {
 	echo "Key $key: ".$node->nodeName." (".$node->systemId.") (".$node->publicId.")\n";
 }
 print "\n";
@@ -58,10 +58,10 @@ $length = $ents->length;
 echo "Length: ".$length."\n";
 
 $xkeys = array();
-foreach ($ents AS $key=>$node) {
+foreach ($ents as $key=>$node) {
 	$xkeys[] = "Key: $key Name: ".$node->nodeName."\n";
 }
-sort($xkeys);  // fix inconsistent output ordering (bug #61810)
+sort(&$xkeys);  // fix inconsistent output ordering (bug #61810)
 foreach ($xkeys as $key => $node) {
 	echo $node;
 }
@@ -71,7 +71,7 @@ $xkeys = array();
 for($x=0; $x < $length; $x++) {
 	$xkeys[] = "Index: ".$ents->item($x)->nodeName."\n";
 }
-sort($xkeys);  // fix inconsistent output ordering (bug #61810)
+sort(&$xkeys);  // fix inconsistent output ordering (bug #61810)
 foreach ($xkeys as $key => $node) {
 	echo $node;
 }
@@ -81,5 +81,3 @@ $node = $ents->item(3);
 var_dump($node);
 $node = $ents->getNamedItem('xxx');
 var_dump($node);
-
-

@@ -15,7 +15,7 @@ function test_preg_rep($a,$b,$c) {
 function test_preg_grep() {
   $array = array("foo 123.1", "fg 24bar", "123.1", "24");
   $fl_array = preg_grep("/^(\\d+)?\\.\\d+$/", $array);
-  VS(count(fl_array), 1);
+  VS(count($fl_array), 1);
   VS($fl_array[2], "123.1");
 
   VS(preg_grep("/a/", array("c", "b")), array());
@@ -32,16 +32,16 @@ function test_preg_match() {
   // get host name from URL
   $matches = null;
   preg_match("@^(?:http://)?([^/]+)@i",
-             "http://www.php.net/index.html", $matches);
+             "http://www.php.net/index.html", &$matches);
   $host = $matches[1];
   VS($host, "www.php.net");
 
   // get last two segments of host name
-  preg_match("/[^.]+\\.[^.]+$/", $host, $matches);
+  preg_match("/[^.]+\\.[^.]+$/", $host, &$matches);
   VS($matches[0], "php.net");
 
   $str = "foobar: 2008";
-  preg_match("/(?<name>\\w+): (?<digit>\\d+)/", $str, $matches);
+  preg_match("/(?<name>\\w+): (?<digit>\\d+)/", $str, &$matches);
   VS(print_r($matches, true),
      "Array\n".
      "(\n".
@@ -56,7 +56,7 @@ function test_preg_match() {
 
 function test_preg_match_all() {
   preg_match_all("/\\(?  (\\d{3})?  \\)?  (?(1)  [\\-\\s] ) \\d{3}-\\d{4}/x",
-                   "Call 555-1212 or 1-800-555-1212", $matches);
+                   "Call 555-1212 or 1-800-555-1212", &$matches);
   VS(print_r($matches, true),
      "Array\n".
      "(\n".
@@ -79,7 +79,7 @@ function test_preg_match_all() {
   // itself, which would be the ([\w]+) in this case. The extra backslash is
   // required because the string is in double quotes.
   $html = "<b>bold text</b><a href=howdy.html>click me</a>";
-  preg_match_all("/(<([\\w]+)[^>]*>)(.*)(<\\/\\2>)/", $html, $matches,
+  preg_match_all("/(<([\\w]+)[^>]*>)(.*)(<\\/\\2>)/", $html, &$matches,
                  PREG_SET_ORDER);
   VS(print_r($matches, true),
      "Array\n".
@@ -105,7 +105,7 @@ function test_preg_match_all() {
      ")\n");
 
   $str = "a: 1\nb: 2\nc: 3\n";
-  preg_match_all("/(?<name>\\w+): (?<digit>\\d+)/", $str, $matches);
+  preg_match_all("/(?<name>\\w+): (?<digit>\\d+)/", $str, &$matches);
   VS(print_r($matches, true),
      "Array\n".
      "(\n".
@@ -165,8 +165,8 @@ function test_preg_replace() {
   VS(preg_replace($patterns, $replacements, $str),
      "The bear black slow jumped over the lazy dog.");
 
-  ksort($patterns);
-  ksort($replacements);
+  ksort(&$patterns);
+  ksort(&$replacements);
   VS(preg_replace($patterns, $replacements, $str),
      "The slow black bear jumped over the lazy dog.");
 
@@ -192,7 +192,7 @@ function test_preg_replace() {
   VS($str, "foo o");
 
   $count = 0;
-  preg_replace(array("/\\d/", "/\\s/"), "*", "xp 4 to", -1, $count);
+  preg_replace(array("/\\d/", "/\\s/"), "*", "xp 4 to", -1, &$count);
   VS($count, 3);
 
   VS(preg_replace("/xxx", "w", "xxxx"), NULL);
@@ -304,7 +304,7 @@ function test_ereg_replace() {
   VS(ereg_replace("( )is", "\\1was", $str), "This was a test");
   VS(ereg_replace("(( )is)", "\\2was", $str), "This was a test");
 
-  $num = 4;
+  $num = '4';
   $str = "This string has four words.";
   $str = ereg_replace("four", $num, $str);
   VS($str, "This string has 4 words.");
@@ -325,7 +325,7 @@ function test_eregi_replace() {
 
 function test_ereg() {
   $date = "1973-04-30";
-  VERIFY(ereg("([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})", $date, $regs) !== false);
+  VERIFY(ereg("([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})", $date, &$regs) !== false);
   VS($regs[3], "30");
   VS($regs[2], "04");
   VS($regs[1], "1973");
@@ -364,6 +364,9 @@ function test_sql_regcase() {
   VS(sql_regcase("Foo - bar."), "[Ff][Oo][Oo] - [Bb][Aa][Rr].");
 }
 
+
+<<__EntryPoint>>
+function main_ext_preg() {
 test_preg_grep();
 test_preg_match();
 test_preg_match_all();
@@ -378,3 +381,4 @@ test_eregi();
 test_split();
 test_spliti();
 test_sql_regcase();
+}

@@ -2,14 +2,14 @@
 
 class A {
   public static function sgen() {
-    $class = get_called_class();
+    $class = static::class;
     yield $class;
   }
   public static function sfoo() {
     return self::gen();
   }
   public function gen() {
-    $class = get_called_class();
+    $class = static::class;
     yield $class;
   }
   public function foo() {
@@ -23,6 +23,9 @@ function t($x) {
  var_dump($v);
  }
  }
+
+<<__EntryPoint>>
+function main_2173() {
 t(B::sgen());
 t(B::sfoo());
 t(A::sgen());
@@ -37,3 +40,4 @@ t($b->foo());
 $a = new A;
 t($a->gen());
 t($a->foo());
+}

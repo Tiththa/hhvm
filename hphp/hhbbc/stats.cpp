@@ -44,6 +44,7 @@
 #include "hphp/hhbbc/index.h"
 #include "hphp/hhbbc/interp-internal.h"
 #include "hphp/hhbbc/interp.h"
+#include "hphp/hhbbc/context.h"
 #include "hphp/hhbbc/misc.h"
 #include "hphp/hhbbc/parallel.h"
 #include "hphp/hhbbc/representation.h"
@@ -70,13 +71,10 @@ TRACE_SET_MOD(hhbbc_stats);
   X(OptObj)                                     \
   X(Arr)                                        \
   X(SArr)                                       \
-  X(CArr)                                       \
   X(ArrE)                                       \
   X(ArrN)                                       \
   X(SArrN)                                      \
   X(SArrE)                                      \
-  X(CArrN)                                      \
-  X(CArrE)                                      \
   X(Null)                                       \
   X(Bottom)
 
@@ -381,7 +379,7 @@ void collect_simple(Stats& stats, const Bytecode& bc) {
   }
 
   if (rat.mayHaveArrData()) {
-    if (rat.array()) {
+    if (rat.hasArrData()) {
       if (bc.op == Op::AssertRATL) {
         ++stats.ratL_specialized_array;
       } else {
@@ -417,8 +415,9 @@ void collect_func(Stats& stats, const Index& index, php::Func& func) {
 
   add_type(stats.returns, ty);
 
-  for (auto& blk : func.blocks) {
-    if (blk->id == NoBlockId) continue;
+  for (auto const bid : func.blockRange()) {
+    auto const blk = func.blocks[bid].get();
+    if (blk->dead) continue;
     for (auto& bc : blk->hhbcs) {
       collect_simple(stats, bc);
     }
@@ -427,20 +426,22 @@ void collect_func(Stats& stats, const Index& index, php::Func& func) {
   if (!options.extendedStats) return;
 
   auto const ctx = Context { func.unit, &func, func.cls };
-  auto const fa  = analyze_func(index, ctx, false);
+  auto const fa  = analyze_func(index, ctx,
+                                CollectionOpts::TrackConstantArrays);
   {
     Trace::Bump bumper{Trace::hhbbc, kStatsBump};
-    for (auto& blk : func.blocks) {
-      if (blk->id == NoBlockId) continue;
-      auto state = fa.bdata[blk->id].stateIn;
+    for (auto const bid : func.blockRange()) {
+      auto const blk = func.blocks[bid].get();
+      auto state = fa.bdata[bid].stateIn;
       if (!state.initialized) continue;
 
-      CollectedInfo collect { index, ctx, nullptr, nullptr, false, &fa };
-      Interp interp { index, ctx, collect, borrow(blk), state };
+      CollectedInfo collect {
+        index, ctx, nullptr, CollectionOpts {}, &fa
+      };
+      Interp interp { index, ctx, collect, bid, blk, state };
       for (auto& bc : blk->hhbcs) {
-        auto noop    = [] (BlockId, const State&) {};
-        auto flags   = StepFlags {};
-        ISS env { interp, flags, noop };
+        auto noop    = [] (BlockId, const State*) {};
+        ISS env { interp, noop };
         StatsSS sss { env, stats };
         dispatch(sss, bc);
       }
@@ -466,10 +467,10 @@ void collect_class(Stats& stats, const Index& index, const php::Class& cls) {
   stats.totalMethods += cls.methods.size();
 
   for (auto& kv : index.lookup_private_props(&cls)) {
-    add_type(stats.privateProps, kv.second);
+    add_type(stats.privateProps, kv.second.ty);
   }
   for (auto& kv : index.lookup_private_statics(&cls)) {
-    add_type(stats.privateStatics, kv.second);
+    add_type(stats.privateStatics, kv.second.ty);
   }
 
   for (auto& prop : cls.properties) {

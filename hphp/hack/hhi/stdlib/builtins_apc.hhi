@@ -1,24 +1,37 @@
-<?hh     /* -*- php -*- */
+<?hh
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
-function apc_add($key, $var, $ttl = 0, $cache_id = 0) { }
-function apc_store($key, $var, $ttl = 0, $cache_id = 0) { }
-function apc_fetch($key, &$success = null, $cache_id = 0) { }
-function apc_delete($key, $cache_id = 0) { }
-function apc_cache_info($cache_type = "", $limited = false) { }
-function apc_clear_cache($cache_id = 0) { }
-function apc_sma_info($limited = false) { }
-function apc_inc($key, $step = 1, &$success = null, $cache_id = 0) { }
-function apc_dec($key, $step = 1, &$success = null, $cache_id = 0) { }
-function apc_cas($key, $old_cas, $new_cas, $cache_id = 0) { }
-function apc_exists($key, $cache_id = 0) { }
+
+<<__PHPStdLib>>
+function apc_add($key, $var, int $ttl = 0) { }
+<<__PHPStdLib>>
+function apc_store($key, $var, int $ttl = 0) { }
+<<__PHPStdLib>>
+function apc_fetch($key, &$success = null) { }
+<<__PHPStdLib>>
+function apc_delete($key) { }
+<<__PHPStdLib>>
+function apc_cache_info(string $cache_type = "", bool $limited = false) { }
+<<__PHPStdLib>>
+function apc_clear_cache(string $cache_id = "") { }
+<<__PHPStdLib>>
+function apc_sma_info(bool $limited = false) { }
+<<__PHPStdLib>>
+function apc_inc(string $key, int $step = 1, &$success = null) { }
+<<__PHPStdLib>>
+function apc_dec(string $key, int $step = 1, &$success = null) { }
+<<__PHPStdLib>>
+function apc_cas(string $key, int $old_cas, int $new_cas) { }
+<<__PHPStdLib>>
+function apc_exists($key) { }
+<<__PHPStdLib>>
+function apc_size(string $key): ?int;
 
 // The following are php std lib functions not supported by HHVM:
 //

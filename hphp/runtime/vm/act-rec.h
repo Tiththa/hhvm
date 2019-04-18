@@ -19,6 +19,7 @@
 
 #include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/vm/rx.h"
 /*
  * These header dependencies need to stay as minimal as possible.
  */
@@ -73,8 +74,8 @@ struct ActRec {
   uint64_t m_savedRip; // native (in-TC) return address
 #endif
   const Func* m_func;  // Function.
-  uint32_t m_soff;     // offset of caller from its bytecode start.
-  uint32_t m_numArgsAndFlags; // arg_count:28, flags:4
+  uint32_t m_callOff;  // bc offset of call opcode from caller func entry.
+  uint32_t m_numArgsAndFlags; // arg_count:26, flags:6
   union {
     ObjectData* m_thisUnsafe; // This.
     Class* m_clsUnsafe;       // Late bound class.
@@ -83,6 +84,7 @@ struct ActRec {
     VarEnv* m_varEnv;       // Variable environment when live
     ExtraArgs* m_extraArgs; // Lightweight extra args, when live
     StringData* m_invName;  // Invoked name, used for __call(), when pre-live
+    ArrayData* m_reifiedGenerics; // Used to store a pointer to reified generics
   };
 
   TYPE_SCAN_CUSTOM_FIELD(m_thisUnsafe) {
@@ -100,9 +102,15 @@ struct ActRec {
   enum Flags : uint32_t {
     None          = 0,
 
-    // In non-HH files the caller can specify whether param type-checking
-    // should be strict or weak.
-    UseWeakTypes = (1u << 28),
+    // Set if the function was called using FCall instruction with more
+    // than one return values and must return a value via RetM.
+    MultiReturn = (1u << 26),
+
+    // Set if this corresponds to a dynamic call
+    DynamicCall = (1u << 27),
+
+    // Set if m_reifiedGenerics contains valid data
+    HasReifiedGenerics = (1u << 28),
 
     // This bit can be independently set on ActRecs with any other flag state.
     // It's used by the unwinder to know that an ActRec has been partially torn
@@ -111,15 +119,15 @@ struct ActRec {
 
     // Four mutually exclusive execution mode states in these 2 bits.
     InResumed     = (1u << 30),
-    IsFCallAwait  = (1u << 31),
-    MagicDispatch = InResumed|IsFCallAwait,
-    // MayNeedStaticWaitHandle, if neither bit is set.
+    AsyncEagerRet = (1u << 31),
+    MagicDispatch = InResumed|AsyncEagerRet,
   };
 
-  static constexpr int kNumArgsBits = 28;
+  static constexpr int kNumArgsBits = 26;
   static constexpr int kNumArgsMask = (1 << kNumArgsBits) - 1;
   static constexpr int kFlagsMask = ~kNumArgsMask;
-  static constexpr int kExecutionModeMask = ~(LocalsDecRefd | UseWeakTypes);
+  static constexpr int kExecutionModeMask =
+    ~(LocalsDecRefd | DynamicCall | MultiReturn);
 
   /*
    * To conserve space, we use unions for pairs of mutually exclusive fields
@@ -135,6 +143,7 @@ struct ActRec {
   static constexpr uintptr_t kTrashedVarEnvSlot = 0xfeeefeee000f000f;
   static constexpr uintptr_t kTrashedThisSlot = 0xfeeefeeef00fe00e;
   static constexpr uintptr_t kTrashedFuncSlot = 0xfeeefeeef00fe00d;
+  static constexpr uintptr_t kTrashedReifiedGenericsSlot = 0xfeeefeeef00fe00c;
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -152,7 +161,7 @@ struct ActRec {
   /*
    * Set up frame linkage with the caller ActRec.
    */
-  void setReturn(ActRec* fp, PC pc, void* retAddr);
+  void setReturn(ActRec* fp, PC callPC, void* retAddr);
   void setJitReturn(void* retAddr);
 
   /*
@@ -180,12 +189,13 @@ struct ActRec {
    * Raw flags accessors.
    */
   Flags flags() const;
-  bool useWeakTypes() const;
   bool localsDecRefd() const;
   bool resumed() const;
-  bool isFCallAwait() const;
-  bool mayNeedStaticWaitHandle() const;
+  bool isAsyncEagerReturn() const;
   bool magicDispatch() const;
+  bool isDynamicCall() const;
+  bool isFCallM() const;
+  bool hasReifiedGenerics() const;
 
   /*
    * Pack `numArgs' and `flags' into the format expected by m_numArgsAndFlags.
@@ -204,10 +214,12 @@ struct ActRec {
   /*
    * Flags setters.
    */
-  void setUseWeakTypes();
   void setLocalsDecRefd();
   void setResumed();
-  void setFCallAwait();
+  void setAsyncEagerReturn();
+  void setDynamicCall();
+  void setFCallM();
+  void setHasReifiedGenerics();
 
   /*
    * Set or clear both m_invName and the MagicDispatch flag.
@@ -303,6 +315,25 @@ struct ActRec {
   void trashThis();
 
   /////////////////////////////////////////////////////////////////////////////
+  // Reified Generics.
+
+  /*
+   * Sets to reified generics slot
+   * It also sets HasReifiedGenerics on the m_numArgsAndFlags
+   */
+   void setReifiedGenerics(ArrayData* rg);
+
+  /*
+   * Gets reified generics
+   */
+   ArrayData* getReifiedGenerics() const;
+
+  /*
+   * Trashes the reified generics
+   */
+   void trashReifiedGenerics();
+
+  /////////////////////////////////////////////////////////////////////////////
   // VarEnv / ExtraArgs.
 
   /*
@@ -349,6 +380,7 @@ struct ActRec {
    */
   void setVarEnv(VarEnv* val);
   void setExtraArgs(ExtraArgs* val);
+  void resetExtraArgs();
 
   /*
    * Get the extra argument with index `ind', from either the VarEnv or the
@@ -357,6 +389,13 @@ struct ActRec {
    * Returns nullptr if there are no extra arguments.
    */
   TypedValue* getExtraArg(unsigned ind) const;
+
+  /*
+   * Get the minimum possible effective level of reactivity.
+   *
+   * Doesn't return precise level as conditional reactivity is not tracked yet.
+   */
+  RxLevel rxMinLevel() const;
 
   /*
    * address to teleport the return value after destroying this actrec.

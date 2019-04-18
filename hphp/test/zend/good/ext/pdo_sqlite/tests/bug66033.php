@@ -7,7 +7,7 @@ class DBStatement extends PDOStatement {
 	}
 }
 
-$pdo = new PDO('sqlite::memory:', null, null);
+$pdo = new PDO('sqlite::memory:', '', '');
 $pdo->setAttribute(PDO::ATTR_STATEMENT_CLASS, array('DBStatement',
 	array($pdo)));
 $pdo->exec("CREATE TABLE IF NOT EXISTS messages (
@@ -21,4 +21,3 @@ try {
 } catch (Exception $e) {
 	var_dump($e->getMessage());
 }
-?>

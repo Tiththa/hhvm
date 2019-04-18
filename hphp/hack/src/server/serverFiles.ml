@@ -2,9 +2,8 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -28,15 +27,14 @@ let is_of_root root fn =
 (**
  * Lock on this file will be held after the server has finished initializing.
  * *)
-let init_complete_file root = path_of_root root "init_complete"
 let lock_file root = path_of_root root "lock"
 let log_link root = path_of_root root "log"
 let pids_file root = path_of_root root "pids"
 let socket_file root = path_of_root root "sock"
 let dfind_log root = path_of_root root "dfind"
-let load_log root = path_of_root root "load"
+let client_lsp_log root = path_of_root root "client_lsp_log"
 
 let monitor_log_link root = path_of_root root "monitor_log"
-let recorder_log_link root = path_of_root root "recorder_log"
-let recorder_out_link root = path_of_root root "recorder_out"
-let recorder_lock root = path_of_root root "recorder_lock"
+
+let server_finale_file (pid: int) : string =
+  Filename.concat GlobalConfig.tmp_dir (spf "%d.fin" pid)

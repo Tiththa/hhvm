@@ -15,12 +15,12 @@ class z {
     var_dump($a11);
     var_dump($a12);
   }
-  function varArgsTest() {
-    $args = func_get_args();
+  function varArgsTest(...$args) {
     var_dump($args);
   }
-  function varArgsTest2($a1, $a2) {
-    $args = func_get_args();
+  function varArgsTest2($a1, $a2, ...$more_args) {
+    $args = array($a1, $a2);
+    $args = array_merge($args, $more_args);
     var_dump($args);
   }
   function refTestHelper(&$x) {
@@ -32,9 +32,12 @@ function refTest($q) {
  $q = 1;
  }
   $x = 1;
-  $q->refTestHelper($x);
+  $q->refTestHelper(&$x);
   var_dump($x);
 }
+
+<<__EntryPoint>>
+function main_1209() {
 $q = new z;
 $f = 'minArgTest';
 $q->minArgTest('one',2,3.333,4,5,6,7,8,9,10);
@@ -52,3 +55,4 @@ $q->varArgsTest2('one',2,3.333,4,5,6,7,8,9,10);
 $q->varArgsTest2('one',2,3.333,4,5,6,7,8,9,10,11,12);
 $q->$f('one',2,3.333,4,5,6,7,8,9,10);
 $q->$f('one',2,3.333,4,5,6,7,8,9,10,11,12);
+}

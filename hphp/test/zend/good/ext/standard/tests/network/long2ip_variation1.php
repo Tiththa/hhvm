@@ -98,10 +98,9 @@ $inputs = array(
 
 foreach($inputs as $key =>$value) {
       echo "\n--$key--\n";
-      var_dump( long2ip($value) );
+      try { var_dump( long2ip($value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
 fclose($res);
 
-?>
-===DONE===
+echo "===DONE===\n";

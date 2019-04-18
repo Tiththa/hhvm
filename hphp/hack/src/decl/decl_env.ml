@@ -2,12 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
+open Core_kernel
 open Decl_defs
 
 module Dep = Typing_deps.Dep
@@ -43,3 +43,8 @@ let get_construct env class_ =
   let dep = Dep.Cstr (class_.dc_name) in
   Option.iter env.droot (fun root -> Typing_deps.add_idep root dep);
   class_.dc_construct
+
+let add_constructor_dependency env class_name =
+  add_wclass env class_name;
+  let dep = Dep.Cstr class_name in
+  Option.iter env.droot (fun root -> Typing_deps.add_idep root dep)

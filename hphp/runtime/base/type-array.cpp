@@ -27,7 +27,7 @@
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/variable-unserializer.h"
 #include "hphp/runtime/base/zend-printf.h"
@@ -44,7 +44,6 @@ namespace HPHP {
 ////////////////////////////////////////////////////////////////////////////////
 
 const Array null_array{};
-const Array empty_array_ref{staticEmptyArray()};
 const StaticString array_string("Array");
 const StaticString vec_string("Vec");
 const StaticString dict_string("Dict");
@@ -54,7 +53,7 @@ void Array::setEvalScalar() const {
   Array* thisPtr = const_cast<Array*>(this);
   if (!m_arr) thisPtr->m_arr = Ptr::attach(ArrayData::Create());
   if (!m_arr->isStatic()) {
-    thisPtr->m_arr = ArrayData::GetScalarArray(get());
+    thisPtr->m_arr = ArrayData::GetScalarArray(std::move(*thisPtr));
   }
 }
 
@@ -68,16 +67,6 @@ void ArrNR::compileTimeAssertions() {
 
 ///////////////////////////////////////////////////////////////////////////////
 // constructors
-
-Array Array::Create(const Variant& name, const Variant& var) {
-  return Array{
-    ArrayData::Create(
-      name.isString() ? name.toKey(staticEmptyArray()) : name,
-      var
-    ),
-    NoIncRef{}
-  };
-}
 
 Array::~Array() {}
 
@@ -188,9 +177,9 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
                       const void *key_data,
                       PFUNC_CMP value_cmp_function,
                       const void *value_data) const {
-  assert(by_key || by_value);
-  assert(by_key || key_cmp_function == nullptr);
-  assert(by_value || value_cmp_function == nullptr);
+  assertx(by_key || by_value);
+  assertx(by_key || key_cmp_function == nullptr);
+  assertx(by_value || value_cmp_function == nullptr);
   PFUNC_CMP value_cmp_as_string_function = value_cmp_function;
   if (!value_cmp_function) {
     value_cmp_function = SortStringAscending;
@@ -204,11 +193,11 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
       Variant key(iter.first());
       auto const value = iter.secondVal();
       bool found = false;
-      if (array->exists(key)) {
+      if (array->exists(array.convertKey<IntishCast::Cast>(key))) {
         if (by_value) {
           found = value_cmp_as_string_function(
             VarNR(value),
-            array.rvalAt(key, AccessFlags::Key),
+            VarNR(array.rvalAt(key, AccessFlags::Key).tv()),
             value_data
           ) == 0;
         } else {
@@ -216,6 +205,8 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
         }
       }
       if (found == match) {
+        // this setWithRef never intish casted, even when *this or array is a
+        // hack array
         ret.setWithRef(key, value, true);
       }
     }
@@ -310,6 +301,7 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
     }
 
     if (found == match) {
+      // This never intish casted
       ret.setWithRef(iter.first(), iter.secondVal(), true);
     }
   }
@@ -324,7 +316,7 @@ Array& Array::plusImpl(ArrayData *data) {
   if (m_arr == nullptr || data == nullptr) {
     throw_bad_array_merge();
   }
-  if (RuntimeOption::EvalHackArrCompatNotices) raiseHackArrCompatAdd();
+  if (checkHACArrayPlus()) raiseHackArrCompatAdd();
   if (!data->empty()) {
     if (m_arr->empty()) {
       m_arr = data;
@@ -360,7 +352,7 @@ String Array::toString() const {
     raise_notice("Array to string conversion");
     return array_string;
   }
-  assert(m_arr->isHackArray());
+  assertx(m_arr->isHackArray());
   if (m_arr->isVecArray()) {
     raise_notice("Vec to string conversion");
     return vec_string;
@@ -369,7 +361,7 @@ String Array::toString() const {
     raise_notice("Dict to string conversion");
     return dict_string;
   }
-  assert(m_arr->isKeyset());
+  assertx(m_arr->isKeyset());
   raise_notice("Keyset to string conversion");
   return keyset_string;
 }
@@ -381,8 +373,7 @@ bool Array::same(const Array& v2) const {
   if (!m_arr) return !v2.get();
   if (m_arr->isPHPArray()) {
     if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                   v2.isHackArray())) {
+      if (UNLIKELY(checkHACCompare() && v2.isHackArray())) {
         raiseHackArrCompatArrMixedCmp();
       }
       return false;
@@ -391,8 +382,7 @@ bool Array::same(const Array& v2) const {
   }
 
   auto const nonHackArr = [&]{
-    if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                 v2.isPHPArray() && !v2.isNull())) {
+    if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
       raiseHackArrCompatArrMixedCmp();
     }
   };
@@ -421,14 +411,10 @@ bool Array::same(const Array& v2) const {
   not_reached();
 }
 
-bool Array::same(const Object& /*v2*/) const {
-  return false;
-}
-
 bool Array::equal(const Array& v2) const {
   if (isPHPArray()) {
     if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices && m_arr)) {
+      if (UNLIKELY(checkHACCompare() && m_arr)) {
         raiseHackArrCompatArrMixedCmp();
       }
       return false;
@@ -440,8 +426,7 @@ bool Array::equal(const Array& v2) const {
   }
 
   auto const nonHackArr = [&]{
-    if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                 v2.isPHPArray() && !v2.isNull())) {
+    if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
       raiseHackArrCompatArrMixedCmp();
     }
   };
@@ -470,19 +455,10 @@ bool Array::equal(const Array& v2) const {
   not_reached();
 }
 
-bool Array::equal(const Object& v2) const {
-  if (LIKELY(isPHPArray())) {
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::equal(toBoolean(), v2.toBoolean());
-    }
-  }
-  return false;
-}
-
 bool Array::less(const Array& v2, bool flip /* = false */) const {
   if (isPHPArray()) {
     if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices && m_arr)) {
+      if (UNLIKELY(checkHACCompare() && m_arr)) {
         raiseHackArrCompatArrMixedCmp();
       }
       if (v2.isVecArray()) throw_vec_compare_exception();
@@ -499,8 +475,7 @@ bool Array::less(const Array& v2, bool flip /* = false */) const {
   }
   if (m_arr->isVecArray()) {
     if (UNLIKELY(!v2.isVecArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                   v2.isPHPArray() && !v2.isNull())) {
+      if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
         raiseHackArrCompatArrMixedCmp();
       }
       throw_vec_compare_exception();
@@ -509,27 +484,9 @@ bool Array::less(const Array& v2, bool flip /* = false */) const {
       ? PackedArray::VecGt(v2.get(), m_arr.get())
       : PackedArray::VecLt(m_arr.get(), v2.get());
   }
-  if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-               v2.isPHPArray() && !v2.isNull())) {
+  if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
     raiseHackArrCompatArrMixedCmp();
   }
-  if (m_arr->isDict()) throw_dict_compare_exception();
-  if (m_arr->isKeyset()) throw_keyset_compare_exception();
-  not_reached();
-}
-
-bool Array::less(const Object& v2) const {
-  if (LIKELY(isPHPArray())) {
-    if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices && m_arr)) {
-      raiseHackArrCompatArrMixedCmp();
-    }
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::less(toBoolean(), v2.toBoolean());
-    }
-    check_collection_compare(v2.get());
-    return true;
-  }
-  if (m_arr->isVecArray()) throw_vec_compare_exception();
   if (m_arr->isDict()) throw_dict_compare_exception();
   if (m_arr->isKeyset()) throw_keyset_compare_exception();
   not_reached();
@@ -538,8 +495,7 @@ bool Array::less(const Object& v2) const {
 bool Array::less(const Variant& v2) const {
   if (isPHPArray()) {
     if (m_arr == nullptr || v2.isNull()) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                   ((bool)m_arr == !v2.isPHPArray()))) {
+      if (UNLIKELY(checkHACCompare() && ((bool)m_arr == !v2.isPHPArray()))) {
         raiseHackArrCompatArrMixedCmp();
       }
       return HPHP::less(toBoolean(), v2.toBoolean());
@@ -551,7 +507,7 @@ bool Array::less(const Variant& v2) const {
 bool Array::more(const Array& v2, bool flip /* = true */) const {
   if (isPHPArray()) {
     if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices && m_arr)) {
+      if (UNLIKELY(checkHACCompare() && m_arr)) {
         raiseHackArrCompatArrMixedCmp();
       }
       if (v2.isVecArray()) throw_vec_compare_exception();
@@ -568,8 +524,7 @@ bool Array::more(const Array& v2, bool flip /* = true */) const {
   }
   if (m_arr->isVecArray()) {
     if (UNLIKELY(!v2.isVecArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                   v2.isPHPArray() && !v2.isNull())) {
+      if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
         raiseHackArrCompatArrMixedCmp();
       }
       throw_vec_compare_exception();
@@ -578,8 +533,7 @@ bool Array::more(const Array& v2, bool flip /* = true */) const {
       ? PackedArray::VecGt(v2.get(), m_arr.get())
       : PackedArray::VecLt(m_arr.get(), v2.get());
   }
-  if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-               v2.isPHPArray() && !v2.isNull())) {
+  if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
     raiseHackArrCompatArrMixedCmp();
   }
   if (m_arr->isDict()) throw_dict_compare_exception();
@@ -587,28 +541,10 @@ bool Array::more(const Array& v2, bool flip /* = true */) const {
   not_reached();
 }
 
-bool Array::more(const Object& v2) const {
-  if (LIKELY(isPHPArray())) {
-    if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices && m_arr)) {
-      raiseHackArrCompatArrMixedCmp();
-    }
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::more(toBoolean(), v2.toBoolean());
-    }
-    check_collection_compare(v2.get());
-    return false;
-  }
-  if (isVecArray()) throw_vec_compare_exception();
-  if (isDict()) throw_dict_compare_exception();
-  if (isKeyset()) throw_keyset_compare_exception();
-  not_reached();
-}
-
 bool Array::more(const Variant& v2) const {
   if (isPHPArray()) {
     if (m_arr == nullptr || v2.isNull()) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                   ((bool)m_arr == !v2.isPHPArray()))) {
+      if (UNLIKELY(checkHACCompare() && ((bool)m_arr == !v2.isPHPArray()))) {
         raiseHackArrCompatArrMixedCmp();
       }
       return HPHP::more(toBoolean(), v2.toBoolean());
@@ -620,7 +556,7 @@ bool Array::more(const Variant& v2) const {
 int Array::compare(const Array& v2, bool flip /* = false */) const {
   if (isPHPArray()) {
     if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices && m_arr)) {
+      if (UNLIKELY(checkHACCompare() && m_arr)) {
         raiseHackArrCompatArrMixedCmp();
       }
       if (v2.isVecArray()) throw_vec_compare_exception();
@@ -637,8 +573,7 @@ int Array::compare(const Array& v2, bool flip /* = false */) const {
   }
   if (m_arr->isVecArray()) {
     if (UNLIKELY(!v2.isVecArray())) {
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-                   v2.isPHPArray() && !v2.isNull())) {
+      if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
         raiseHackArrCompatArrMixedCmp();
       }
       throw_vec_compare_exception();
@@ -647,8 +582,7 @@ int Array::compare(const Array& v2, bool flip /* = false */) const {
       ? -PackedArray::VecCmp(v2.get(), m_arr.get())
       : PackedArray::VecCmp(m_arr.get(), v2.get());
   }
-  if (UNLIKELY(RuntimeOption::EvalHackArrCompatNotices &&
-               v2.isPHPArray() && !v2.isNull())) {
+  if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
     raiseHackArrCompatArrMixedCmp();
   }
   if (m_arr->isDict()) throw_dict_compare_exception();
@@ -659,26 +593,26 @@ int Array::compare(const Array& v2, bool flip /* = false */) const {
 ///////////////////////////////////////////////////////////////////////////////
 
 template<typename T> ALWAYS_INLINE
-const Variant& Array::rvalAtImpl(const T& key, AccessFlags flags) const {
-  if (!m_arr) return uninit_variant;
-  return m_arr->get(key, any(flags & AccessFlags::Error));
+tv_rval Array::rvalAtImpl(const T& key, AccessFlags flags) const {
+  return m_arr ? m_arr->get(key, any(flags & AccessFlags::Error))
+               : tv_rval::dummy();
 }
 
 template<typename T> ALWAYS_INLINE
-member_lval Array::lvalAtImpl(const T& key, AccessFlags) {
+arr_lval Array::lvalAtImpl(const T& key, AccessFlags) {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
   auto const lval = m_arr->lval(key, m_arr->cowCheck());
-  if (lval.arr_base() != m_arr) m_arr = Ptr::attach(lval.arr_base());
-  assert(lval.has_ref());
+  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
+  assertx(lval);
   return lval;
 }
 
 template<typename T> ALWAYS_INLINE
-member_lval Array::lvalAtRefImpl(const T& key, AccessFlags) {
+arr_lval Array::lvalAtRefImpl(const T& key, AccessFlags) {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
   auto const lval = m_arr->lvalRef(key, m_arr->cowCheck());
-  if (lval.arr_base() != m_arr) m_arr = Ptr::attach(lval.arr_base());
-  assert(lval.has_ref());
+  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
+  assertx(lval);
   return lval;
 }
 
@@ -691,7 +625,7 @@ bool Array::existsImpl(const T& key) const {
 template<typename T> ALWAYS_INLINE
 void Array::removeImpl(const T& key) {
   if (m_arr) {
-    ArrayData* escalated = m_arr->remove(key, m_arr->cowCheck());
+    ArrayData* escalated = m_arr->remove(key);
     if (escalated != m_arr) m_arr = Ptr::attach(escalated);
   }
 }
@@ -701,28 +635,17 @@ void Array::setImpl(const T& key, TypedValue v) {
   if (!m_arr) {
     m_arr = Ptr::attach(ArrayData::Create(key, v));
   } else {
-    auto const escalated = m_arr->set(key, tvToCell(v), m_arr->cowCheck());
+    auto const escalated = m_arr->set(key, tvToCell(v));
     if (escalated != m_arr) m_arr = Ptr::attach(escalated);
   }
 }
 
 template<typename T> ALWAYS_INLINE
-void Array::setRefImpl(const T& key, Variant& v) {
+void Array::setWithRefImpl(const T& key, TypedValue v) {
   if (!m_arr) {
-    m_arr = Ptr::attach(ArrayData::CreateRef(key, v));
+    m_arr = Ptr::attach(ArrayData::CreateWithRef(key, v));
   } else {
-    escalate();
-    auto const escalated = m_arr->setRef(key, v, m_arr->cowCheck());
-    if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-  }
-}
-
-template<typename T> ALWAYS_INLINE
-void Array::addImpl(const T& key, TypedValue v) {
-  if (!m_arr) {
-    m_arr = Ptr::attach(ArrayData::Create(key, v));
-  } else {
-    auto const escalated = m_arr->add(key, tvToCell(v), m_arr->cowCheck());
+    auto const escalated = m_arr->setWithRef(key, v);
     if (escalated != m_arr) m_arr = Ptr::attach(escalated);
   }
 }
@@ -742,8 +665,11 @@ template<> bool not_found<bool>() { return false; }
 template<> const Variant& not_found<const Variant&>() { return uninit_variant; }
 template<> Variant& not_found<Variant&>() { return lvalBlackHole(); }
 
-template<> member_lval not_found<member_lval>() {
-  return member_lval { nullptr, lvalBlackHole().asTypedValue() };
+template<> tv_rval not_found<tv_rval>() {
+  return tv_rval::dummy();
+}
+template<> arr_lval not_found<arr_lval>() {
+  return arr_lval { nullptr, lvalBlackHole().asTypedValue() };
 }
 
 /*
@@ -762,10 +688,10 @@ decltype(auto) elem(const Array& arr, Fn fn, bool is_key,
   // The logic here is a specialization of cellToKey().
   if (key.isNull()) {
     if (!ad->useWeakKeys()) {
-      throwInvalidArrayKeyException(uninit_variant.asTypedValue(), ad);
+      throwInvalidArrayKeyException(&immutable_uninit_base, ad);
     }
-    if (RuntimeOption::EvalHackArrCompatNotices) {
-      raiseHackArrCompatImplicitArrayKey(uninit_variant.asTypedValue());
+    if (checkHACArrayKeyCast()) {
+      raiseHackArrCompatImplicitArrayKey(&immutable_uninit_base);
     }
     return fn(make_tv<KindOfPersistentString>(staticEmptyString()),
               std::forward<Args>(args)...);
@@ -797,13 +723,8 @@ decltype(auto) elem(const Array& arr, Fn fn, bool is_key,
 template<typename Fn, typename... Args> ALWAYS_INLINE
 decltype(auto) elem(const Array& arr, Fn fn, bool is_key,
                     const Variant& key, Args&&... args) {
-  return elem(arr, fn, is_key, *key.asCell(), std::forward<Args>(args)...);
+  return elem(arr, fn, is_key, *key.toCell(), std::forward<Args>(args)...);
 }
-
-/*
- * Conversion helpers.
- */
-Variant& as_var(member_lval lval) { return tvAsVariant(lval.tv()); }
 
 }
 
@@ -821,22 +742,19 @@ Variant& as_var(member_lval lval) { return tvAsVariant(lval.tv()); }
 
 #define FK(flags) any(flags & AccessFlags::Key)
 
-#define C(key_t, name, ret_t, var_ret_t, conv, cns)         \
+#define C(key_t, name, ret_t, cns)                          \
   ret_t Array::name(key_t k, AccessFlags fl) cns {          \
     return detail::elem(*this, WRAP(name), FK(fl), k, fl);  \
   }
-#define V(key_t, name, ret_t, var_ret_t, conv, cns)               \
-  var_ret_t Array::name(key_t k, AccessFlags fl) cns {            \
-    return conv(detail::elem(*this, WRAP(name), FK(fl), k, fl));  \
-  }
-#define I(key_t, name, ret_t, var_ret_t, conv, cns)     \
-  var_ret_t Array::name(key_t k, AccessFlags fl) cns {  \
-    return conv(name##Impl(int64_t(k), fl));            \
+#define V C
+#define I(key_t, name, ret_t, cns)                  \
+  ret_t Array::name(key_t k, AccessFlags fl) cns {  \
+    return name##Impl(int64_t(k), fl);              \
   }
 
-FOR_EACH_KEY_TYPE(rvalAt, const Variant&, const Variant&, identity, const)
-FOR_EACH_KEY_TYPE(lvalAt, member_lval, Variant&, detail::as_var, )
-FOR_EACH_KEY_TYPE(lvalAtRef, member_lval, Variant&, detail::as_var, )
+FOR_EACH_KEY_TYPE(rvalAt, tv_rval, const)
+FOR_EACH_KEY_TYPE(lvalAt, arr_lval, )
+FOR_EACH_KEY_TYPE(lvalAtRef, arr_lval, )
 
 #undef I
 #undef V
@@ -871,29 +789,7 @@ FOR_EACH_KEY_TYPE(void, remove, )
   }
 
 FOR_EACH_KEY_TYPE(set, TypedValue)
-FOR_EACH_KEY_TYPE(add, TypedValue)
-FOR_EACH_KEY_TYPE(setRef, Variant&)
-
-#undef I
-#undef V
-#undef C
-
-#define C(key_t, name) \
-  void Array::name(key_t k, TypedValue v, bool isKey) {         \
-    auto lval = lvalAt(k, isKey ? Flags::Key : Flags::None);    \
-    tvSetWithRef(v, *lval.tv());                                \
-    if (lval.type() == KindOfUninit) lval.type() = KindOfNull;  \
-  }
-#define V(key_t, name) \
-  void Array::name(key_t k, TypedValue v, bool isKey) {         \
-    lvalAt(k, isKey ? Flags::Key : Flags::None).setWithRef(v);  \
-  }
-#define I(key_t, name) \
-  void Array::name(key_t k, TypedValue v) { \
-    lvalAt(k).setWithRef(v);                \
-  }
-
-FOR_EACH_KEY_TYPE(setWithRef)
+FOR_EACH_KEY_TYPE(setWithRef, TypedValue)
 
 #undef I
 #undef V
@@ -911,7 +807,6 @@ FOR_EACH_KEY_TYPE(setWithRef)
 
 FOR_EACH_KEY_TYPE(set)
 FOR_EACH_KEY_TYPE(setWithRef)
-FOR_EACH_KEY_TYPE(add)
 
 #undef I
 #undef V
@@ -922,48 +817,39 @@ FOR_EACH_KEY_TYPE(add)
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Variant& Array::lvalAt() {
+arr_lval Array::lvalAt() {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
   auto const lval = m_arr->lvalNew(m_arr->cowCheck());
-  if (lval.arr_base() != m_arr) m_arr = Ptr::attach(lval.arr_base());
-  assert(lval.tv());
-  return tvAsVariant(lval.tv());
+  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
+  assertx(lval);
+  return lval;
 }
 
-Variant& Array::lvalAtRef() {
+arr_lval Array::lvalAtRef() {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
   auto const lval = m_arr->lvalNewRef(m_arr->cowCheck());
-  if (lval.arr_base() != m_arr) m_arr = Ptr::attach(lval.arr_base());
-  assert(lval.tv());
-  return tvAsVariant(lval.tv());
+  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
+  assertx(lval);
+  return lval;
 }
 
 void Array::append(TypedValue v) {
   if (!m_arr) operator=(Create());
   assertx(m_arr);
-  auto const escalated = m_arr->append(tvToInitCell(v), m_arr->cowCheck());
+  auto const escalated = m_arr->append(tvToInitCell(v));
   if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-}
-
-void Array::appendRef(Variant& v) {
-  if (!m_arr) {
-    m_arr = Ptr::attach(ArrayData::CreateRef(v));
-  } else {
-    auto const escalated = m_arr->appendRef(v, m_arr->cowCheck());
-    if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-  }
 }
 
 void Array::appendWithRef(TypedValue v) {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
-  auto const escalated = m_arr->appendWithRef(v, m_arr->cowCheck());
+  auto const escalated = m_arr->appendWithRef(v);
   if (escalated != m_arr) m_arr = Ptr::attach(escalated);
 }
 
 void Array::prepend(TypedValue v) {
   if (!m_arr) operator=(Create());
   assertx(m_arr);
-  auto const escalated = m_arr->prepend(tvToInitCell(v), m_arr->cowCheck());
+  auto const escalated = m_arr->prepend(tvToInitCell(v));
   if (escalated != m_arr) m_arr = Ptr::attach(escalated);
 }
 
@@ -1037,7 +923,7 @@ static int multi_compare_func(const void *n1, const void *n2, const void *op) {
 void Array::SortImpl(std::vector<int> &indices, const Array& source,
                      Array::SortData &opaque, Array::PFUNC_CMP cmp_func,
                      bool by_key, const void *data /* = NULL */) {
-  assert(cmp_func);
+  assertx(cmp_func);
 
   int count = source.size();
   if (count == 0) {
@@ -1080,14 +966,14 @@ void Array::sort(PFUNC_CMP cmp_func, bool by_key, bool renumber,
 }
 
 bool Array::MultiSort(std::vector<SortData> &data, bool renumber) {
-  assert(!data.empty());
+  assertx(!data.empty());
 
   int count = -1;
   for (unsigned int k = 0; k < data.size(); k++) {
     SortData &opaque = data[k];
 
-    assert(opaque.array);
-    assert(opaque.cmp_func);
+    assertx(opaque.array);
+    assertx(opaque.cmp_func);
     int size = opaque.array->size();
     if (count == -1) {
       count = size;
@@ -1109,6 +995,7 @@ bool Array::MultiSort(std::vector<SortData> &data, bool renumber) {
   if (count == 0) {
     return true;
   }
+  if (count < 0) not_reached();
 
   int *indices = (int *)malloc(sizeof(int) * count);
   for (int i = 0; i < count; i++) {
@@ -1130,7 +1017,7 @@ bool Array::MultiSort(std::vector<SortData> &data, bool renumber) {
         sorted.set(k, arr->atPos(pos));
       }
     }
-    if (opaque.original->getRawType() == KindOfRef) {
+    if (isRefType(opaque.original->getRawType())) {
       *opaque.original->getRefData() = sorted;
     }
   }

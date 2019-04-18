@@ -2,21 +2,23 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
-open Core
+open Core_kernel
 open Hhbc_string_utils
 
 module A = Ast
 module TV = Typed_value
 
+let hack_arr_dv_arrs () =
+  Hhbc_options.hack_arr_dv_arrs !Hhbc_options.compiler_options
+
 (* Taken from: hphp/runtime/base/type-structure.h *)
 let get_kind_num ~tparams p =
-  let p = if List.mem tparams p then "typevar" else String.lowercase_ascii p in
+  let p = if List.mem ~equal:(=) tparams p then "typevar" else String.lowercase p in
   Int64.of_int @@
   match p with
   | "hh\\void" -> 0
@@ -31,8 +33,8 @@ let get_kind_num ~tparams p =
   | "hh\\mixed" -> 9
   | "tuple" -> 10
   | "fun" -> 11
-  | "hh\\darray" | "hh\\varray" | "array" -> 12
-  | "typevar" -> 13 (* corresponds to user OF_GENERIC *)
+  | "array" -> 12
+  | "typevar" | "_" -> 13 (* corresponds to user OF_GENERIC *)
   | "shape" -> 14
   | "class" -> 15
   | "interface" -> 16
@@ -41,8 +43,17 @@ let get_kind_num ~tparams p =
   | "hh\\dict" -> 19
   | "hh\\vec" -> 20
   | "hh\\keyset" -> 21
+  | "hh\\vec_or_dict" -> 22
+  | "hh\\nonnull" -> 23
+  | "hh\\darray" -> 24
+  | "hh\\varray" -> 25
+  | "hh\\varray_or_darray" ->  26
+  | "hh\\arraylike" -> 27
+  | "hh\\null" -> 28
+  | "hh\\nothing" -> 29
   | "typeaccess" -> 102
-  | "xhp" -> 103
+  | _ when String.length p > 4 && String.sub p 0 4 = "xhp_" -> 103
+  | "reifiedtype" -> 104
   | "unresolved"
   | _ -> 101
 
@@ -51,21 +62,36 @@ and is_prim = function
   | "HH\\bool" | "HH\\float"
   | "HH\\string" | "HH\\resource"
   | "HH\\num" | "HH\\noreturn"
-  | "HH\\arraykey" | "HH\\mixed" -> true
+  | "HH\\arraykey" | "HH\\mixed"
+  | "HH\\nonnull" | "HH\\null"
+  | "HH\\nothing" -> true
   | _ -> false
 
 and is_resolved_classname = function
-  | "HH\\darray" | "HH\\varray"
-  | "array" | "HH\\vec"
-  | "HH\\dict" | "HH\\keyset" -> true
+  | "array"
+  | "HH\\darray"
+  | "HH\\varray"
+  | "HH\\varray_or_darray"
+  | "HH\\vec"
+  | "HH\\dict"
+  | "HH\\keyset"
+  | "HH\\vec_or_dict"
+  | "HH\\arraylike" -> true
   | _ -> false
 
-let shape_field_name = function
-  | A.SFlit ((_, s)) -> s, false
-  | A.SFclass_const ((_, id), (_, s)) -> id ^ "::" ^ s, true
+let add_ns ~namespace id =
+  let classname = Hhbc_id.Class.elaborate_id namespace id in
+  Hhbc_id.Class.to_raw_string classname
 
-let rec shape_field_to_pair ~tparams ~namespace sf =
-  let name, is_class_const = shape_field_name sf.A.sf_name in
+let shape_field_name ~namespace = function
+  | A.SFlit_int (_, s)
+  | A.SFlit_str (_, s) ->
+    s, false
+  | A.SFclass_const (id, (_, s)) ->
+    add_ns ~namespace id ^ "::" ^ s, true
+
+let rec shape_field_to_pair ~tparams ~namespace ~targ_map sf =
+  let name, is_class_const = shape_field_name ~namespace sf.A.sf_name in
   let is_optional = sf.A.sf_optional in
   let hint = sf.A.sf_hint in
   let class_const =
@@ -76,16 +102,20 @@ let rec shape_field_to_pair ~tparams ~namespace sf =
     then [(TV.String "optional_shape_field", TV.Bool true)] else []
   in
   let inner_value =
-    [(TV.String "value", hint_to_type_constant ~tparams ~namespace hint)]
+    [(TV.String "value", hint_to_type_constant ~tparams ~namespace ~targ_map hint)]
   in
   let inner_value = class_const @ optional @ inner_value in
-  let value = TV.Array inner_value in
-  (TV.String name, value)
+  let value =
+    if hack_arr_dv_arrs () then (TV.Dict inner_value) else (TV.DArray inner_value)
+  in
+    (TV.String name, value)
 
-and shape_info_to_typed_value ~tparams ~namespace si =
-  TV.Array (
-    List.map ~f:(shape_field_to_pair ~tparams ~namespace)
-    si.A.si_shape_field_list)
+and shape_info_to_typed_value ~tparams ~namespace ~targ_map si =
+  let info =
+    List.map ~f:(shape_field_to_pair ~tparams ~namespace~targ_map)
+             si.A.si_shape_field_list
+  in
+  if hack_arr_dv_arrs () then (TV.Dict info) else (TV.DArray info)
 
 and shape_allows_unknown_fields { A.si_allows_unknown_fields; _ } =
   if si_allows_unknown_fields then
@@ -93,80 +123,104 @@ and shape_allows_unknown_fields { A.si_allows_unknown_fields; _ } =
   else []
 
 and type_constant_access_list sl =
-  let l =
-    List.mapi ~f:(fun i (_, s) -> (TV.Int (Int64.of_int i), TV.String s)) sl
-  in
-  TV.Array l
+  let l = List.map ~f:(fun (_, s) -> TV.String s) sl
+  in if hack_arr_dv_arrs () then (TV.Vec l) else (TV.VArray l)
 
 and resolve_classname ~tparams ~namespace (p, s) =
-  let s = Types.fix_casing s in
-  let classname, _ = Hhbc_id.Class.elaborate_id namespace (p, s) in
-  let s = Hhbc_id.Class.to_raw_string classname in
+  let s = if s = "_" then s else add_ns namespace (p, Types.fix_casing s) in
   if is_prim s || is_resolved_classname s then [], s
   else
-    let id = if List.mem tparams s then "name" else "classname" in
+    let is_tparam = s = "_" || List.mem ~equal:(=) tparams s in
+    let id = if is_tparam then "name" else "classname" in
     [TV.String id, TV.String s], s
 
-and get_generic_types ~tparams ~namespace = function
+and get_generic_types ~tparams ~namespace ~targ_map = function
   | [] -> []
   | l ->
-    [TV.String "generic_types", hints_to_type_constant ~tparams ~namespace l]
+    [ TV.String "generic_types"
+    , hints_to_type_constant ~tparams ~namespace ~targ_map l
+    ]
 
 and get_kind ~tparams s = [TV.String "kind", TV.Int (get_kind_num ~tparams s)]
 
-and root_to_string s =
+and root_to_string ~namespace s =
   if s = "this" then prefix_namespace "HH" s
-  else s
+  else add_ns namespace (Pos.none, s)
 
 and get_typevars = function
  | [] -> []
- | tparams -> [TV.String "typevars", TV.String (String.concat "," tparams)]
+ | tparams -> [TV.String "typevars", TV.String (String.concat ~sep:"," tparams)]
 
-and hint_to_type_constant_list ~tparams ~namespace h =
+and hint_to_type_constant_list ~tparams ~namespace ~targ_map h =
   match snd h with
+  | A.Happly ((_, name), []) when SMap.mem name targ_map ->
+    let id = Int64.of_int @@
+      match SMap.get name targ_map with
+      | Some i -> i | None -> failwith "impossible"
+    in
+    get_kind ~tparams "reifiedtype" @ [TV.String "id", TV.Int id]
   | A.Happly (s, l) ->
     let classname, s_res = resolve_classname ~tparams ~namespace s in
     let kind = get_kind ~tparams s_res in
+    let n = String.lowercase @@ snd s in
     let generic_types =
-      if snd s = "classname" then []
-      else get_generic_types ~tparams ~namespace l in
+      if n = "classname" || n = "typename" then []
+      else get_generic_types ~tparams ~namespace ~targ_map l in
     kind @ classname @ generic_types
   | A.Hshape (si) ->
     shape_allows_unknown_fields si
     @ get_kind ~tparams "shape"
-    @ [TV.String "fields", shape_info_to_typed_value ~tparams ~namespace si]
+    @ [ TV.String "fields"
+      , shape_info_to_typed_value ~tparams ~namespace ~targ_map si
+      ]
   | A.Haccess ((_, s0), s1, sl) ->
     get_kind ~tparams "typeaccess" @
-     [TV.String "root_name", TV.String (root_to_string s0);
+     [TV.String "root_name", TV.String (root_to_string ~namespace s0);
      TV.String "access_list", type_constant_access_list @@ s1::sl]
-  | A.Hfun (hl, _b, h) ->
+  | A.Hfun (true, _, _, _, _) ->
+    failwith "Codegen for coroutine functions is not supported"
+  | A.Hfun (false, hl, _kl, _b, h) ->
+    (* TODO(mqian): Implement for inout parameters *)
     (* TODO: Bool indicates variadic argument. What to do? *)
     let kind = get_kind ~tparams "fun" in
     let return_type =
-      [TV.String "return_type", hint_to_type_constant ~tparams ~namespace h]
+      [ TV.String "return_type"
+      , hint_to_type_constant ~tparams ~namespace ~targ_map h
+      ]
     in
     let param_types =
-      [TV.String "param_types", hints_to_type_constant ~tparams ~namespace hl]
+      [ TV.String "param_types"
+      , hints_to_type_constant ~tparams ~namespace ~targ_map hl
+      ]
     in
     kind @ return_type @ param_types
   | A.Hoption h ->
     [TV.String "nullable", TV.Bool true]
-    @ hint_to_type_constant_list ~tparams ~namespace h
+    @ hint_to_type_constant_list ~tparams ~namespace ~targ_map h
   | A.Htuple hl ->
     let kind = get_kind ~tparams "tuple" in
     let elem_types =
-      [TV.String "elem_types", hints_to_type_constant ~tparams ~namespace hl]
+      [ TV.String "elem_types"
+      , hints_to_type_constant ~tparams ~namespace ~targ_map hl
+      ]
     in
     kind @ elem_types
-  | A.Hsoft h -> hint_to_type_constant_list ~tparams ~namespace h
+  | A.Hsoft h ->
+    [TV.String "soft", TV.Bool true]
+    @ hint_to_type_constant_list ~tparams ~namespace ~targ_map h
+  | A.Hlike h ->
+    [TV.String "like", TV.Bool true]
+    @ hint_to_type_constant_list ~tparams ~namespace ~targ_map h
 
-and hint_to_type_constant ?(is_typedef = false) ~tparams ~namespace h =
-  let l = hint_to_type_constant_list ~tparams ~namespace h in
-  TV.Array (l @ if is_typedef then get_typevars tparams else [])
+and hint_to_type_constant
+  ?(is_typedef = false) ~tparams ~namespace ~targ_map h =
+  let l = hint_to_type_constant_list ~tparams ~namespace ~targ_map h in
+  let tconsts = l @ if is_typedef then get_typevars tparams else [] in
+  if hack_arr_dv_arrs () then (TV.Dict tconsts) else (TV.DArray tconsts)
 
-and hints_to_type_constant ~tparams ~namespace l =
-  TV.Array (
-    List.mapi l
-      ~f:(fun i h ->
-            (TV.Int (Int64.of_int i),
-            hint_to_type_constant ~tparams ~namespace h)))
+and hints_to_type_constant ~tparams ~namespace ~targ_map l =
+  let tconsts =
+    List.map l
+     ~f:(fun h -> hint_to_type_constant ~tparams ~namespace ~targ_map h)
+  in
+  if hack_arr_dv_arrs () then (TV.Vec tconsts) else (TV.VArray tconsts)

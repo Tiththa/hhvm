@@ -1,6 +1,6 @@
-<?hh
+<?hh // partial
 
-enum Bar : int {
+enum Bar: int {
   FOO = 1;
   BAR = 2;
   BAZ = 3;

@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -24,34 +23,39 @@ type param_num = int
 type stack_index = int
 type class_id = Hhbc_id.Class.t
 type class_num = int
-type function_num = int
+type record_num = int
 type typedef_num = int
 type function_id = Hhbc_id.Function.t
 type method_id = Hhbc_id.Method.t
 type const_id = Hhbc_id.Const.t
 type prop_id = Hhbc_id.Prop.t
 type num_params = int
+type fcall_flags = {
+  has_unpack : bool;
+  supports_async_eager_return : bool;
+}
+type by_refs = bool list
+type fcall_args =
+  fcall_flags * num_params * num_params * by_refs * (Label.t option)
 type classref_id = int
 (* Conventionally this is "A_" followed by an integer *)
 type adata_id = string
+type param_locations = int list
 
-(* These are the three flavors of value that can live on the stack:
- *   C = cell
- *   V = ref
- *   R = return value
- *   F = function argument
- *   U = uninit
- * Note: Function argument and uninit are not added to the type
- *       as they are handled separately
- *)
-module Flavor = struct
-  type t = Cell | Ref | ReturnVal
-end
+module SpecialClsRef = struct
 
-(* When using the PassX instructions we need to emit the right kind *)
-module PassByRefKind = struct
-  type t = AllowCell | WarnOnCell | ErrorOnCell
-end
+  type t =
+  | Static
+  | Self
+  | Parent
+
+  let to_string r =
+  match r with
+  | Static -> "Static"
+  | Self -> "Self"
+  | Parent -> "Parent"
+
+end (* of SpecialClsRef *)
 
 module MemberOpMode = struct
 
@@ -60,6 +64,7 @@ module MemberOpMode = struct
   | Warn
   | Define
   | Unset
+  | InOut
 
   let to_string op =
   match op with
@@ -67,6 +72,7 @@ module MemberOpMode = struct
   | Warn -> "Warn"
   | Define -> "Define"
   | Unset -> "Unset"
+  | InOut -> "InOut"
 
 end (* of MemberOpMode *)
 
@@ -76,6 +82,7 @@ module QueryOp = struct
   | CGetQuiet
   | Isset
   | Empty
+  | InOut
 
   let to_string op =
   match op with
@@ -83,6 +90,7 @@ module QueryOp = struct
   | CGetQuiet -> "CGetQuiet"
   | Isset -> "Isset"
   | Empty -> "Empty"
+  | InOut -> "InOut"
 
 end (* of QueryOp *)
 
@@ -125,7 +133,7 @@ module MemberKey = struct
   type t =
   | EC of stack_index
   | EL of local_id
-  | ET of Litstr.id
+  | ET of string
   | EI of int64
   | PC of stack_index
   | PL of local_id
@@ -139,18 +147,20 @@ type instruct_basic =
   | EntryNop
   | PopC
   | PopV
-  | PopR
   | PopU
   | Dup
   | Box
-  | Unbox
-  | BoxR
-  | UnboxR
-  | UnboxRNop
-  | RGetCNop
+
+type typestruct_resolve_op =
+  | Resolve
+  | DontResolve
+
+type has_generics_op =
+  | NoGenerics
+  | MaybeGenerics
+  | HasGenerics
 
 type instruct_lit_const =
-  | NYI of string
   | Null
   | True
   | False
@@ -168,33 +178,31 @@ type instruct_lit_const =
   | NewArray of int (* capacity hint *)
   | NewMixedArray of int (* capacity hint *)
   | NewDictArray of int (* capacity hint *)
-  | NewMIArray of int (* capacity hint *)
-  | NewMSArray of int (* capacity hint *)
+  | NewDArray of int (* capacity hint *)
   | NewLikeArrayL of local_id * int (* capacity hint *)
   | NewPackedArray of int
-  | NewStructArray of Litstr.id list
+  | NewStructArray of string list
+  | NewStructDArray of string list
+  | NewStructDict of string list
+  | NewVArray of int
   | NewVecArray of int
   | NewKeysetArray of int
   | NewPair
+  | NewRecord of class_id * string list
   | AddElemC
-  | AddElemV
   | AddNewElemC
-  | AddNewElemV
   | NewCol of CollectionType.t
   | ColFromArray of CollectionType.t
-  | MapAddElemC
-  | Cns of const_id
   | CnsE of const_id
-  | CnsU of const_id * Litstr.id
   | ClsCns of const_id * classref_id
   | ClsCnsD of const_id * class_id
   | File
   | Dir
   | Method
-  | NameA
 
 type instruct_operator =
   | Concat
+  | ConcatN of int
   | Abs
   | Add
   | Sub
@@ -234,12 +242,21 @@ type instruct_operator =
   | CastVec
   | CastDict
   | CastKeyset
+  | CastVArray
+  | CastDArray
   | InstanceOf
   | InstanceOfD of class_id
+  | IsLateBoundCls
+  | IsTypeStructC of typestruct_resolve_op
+  | AsTypeStructC of typestruct_resolve_op
+  | CombineAndResolveTypeStruct of int
   | Print
   | Clone
   | Exit
   | Fatal of FatalOp.t
+  | ResolveFunc of function_id
+  | ResolveObjMethod
+  | ResolveClsMethod
 
 type switchkind =
   | Bounded
@@ -253,36 +270,30 @@ type instruct_control_flow =
   (* bounded, base, offset vector *)
   | Switch of switchkind * int * Label.t list
   (* litstr id / offset vector *)
-  | SSwitch of (Litstr.id * Label.t) list
+  | SSwitch of (string * Label.t) list
   | RetC
-  | RetV
-  | Unwind
+  | RetCSuspended
+  | RetM of num_params
   | Throw
-
-type iterator_list = (bool * Iterator.t) list
 
 type instruct_special_flow =
   | Continue of int
   | Break of int
+  | Goto of string
 
 type instruct_get =
   | CGetL of local_id
   | CGetQuietL of local_id
   | CGetL2 of local_id
-  | CGetL3 of local_id
   | CUGetL of local_id
   | PushL of local_id
-  | CGetN
-  | CGetQuietN
   | CGetG
   | CGetQuietG
   | CGetS of classref_id
   | VGetL of local_id
-  | VGetN
-  | VGetG
   | VGetS of classref_id
-  | ClsRefGetL of local_id * classref_id
   | ClsRefGetC of classref_id
+  | ClsRefGetTS of classref_id
 
 type istype_op =
   | OpNull
@@ -292,23 +303,30 @@ type istype_op =
   | OpStr
   | OpArr
   | OpObj
+  | OpRes
   | OpScalar (* Int or Dbl or Str or Bool *)
   | OpKeyset
   | OpDict
   | OpVec
+  | OpArrLike (* Arr or Vec or Dict or Keyset *)
+  | OpVArray
+  | OpDArray
+  | OpClsMeth
 
 type instruct_isset =
   | IssetC
   | IssetL of local_id
-  | IssetN
   | IssetG
   | IssetS of classref_id
   | EmptyL of local_id
-  | EmptyN
   | EmptyG
   | EmptyS of classref_id
   | IsTypeC of istype_op
   | IsTypeL of local_id * istype_op
+
+type setrange_op =
+  | Forward
+  | Reverse
 
 type eq_op =
   | PlusEqual
@@ -343,111 +361,72 @@ type initprop_op =
 
 type instruct_mutator =
   | SetL of local_id
-  | SetN
+  (* PopL is put in mutators since it behaves as SetL + PopC *)
+  | PopL of Local.t
   | SetG
   | SetS of classref_id
   | SetOpL of local_id * eq_op
-  | SetOpN of eq_op
   | SetOpG of eq_op
   | SetOpS of eq_op * classref_id
   | IncDecL of local_id * incdec_op
-  | IncDecN of incdec_op
   | IncDecG of incdec_op
   | IncDecS of incdec_op * classref_id
-  | BindL of local_id
-  | BindN
-  | BindG
-  | BindS of classref_id
   | UnsetL of local_id
-  | UnsetN
   | UnsetG
   | CheckProp of prop_id
   | InitProp of prop_id * initprop_op
 
 type instruct_call =
-  | FPushFunc of num_params
+  | FPushFunc of num_params * param_locations
   | FPushFuncD of num_params * function_id
-  | FPushFuncU of num_params * function_id * Litstr.id
-  | FPushObjMethod of num_params * Ast.og_null_flavor
+  | FPushObjMethod of num_params * Ast.og_null_flavor * param_locations
   | FPushObjMethodD of num_params * method_id * Ast.og_null_flavor
-  | FPushClsMethod of num_params * classref_id
-  | FPushClsMethodF of num_params * classref_id
+  | FPushObjMethodRD of num_params * method_id * Ast.og_null_flavor
+  | FPushClsMethod of num_params * classref_id * param_locations
   | FPushClsMethodD of num_params * method_id * class_id
-  | FPushCtor of num_params * classref_id
-  | FPushCtorD of num_params * class_id
-  | FPushCtorI of num_params * classref_id
-  | DecodeCufIter of num_params * Label.t
-  | FPushCufIter of num_params * Iterator.t
-  | FPushCuf of num_params
-  | FPushCufF of num_params
-  | FPushCufSafe of num_params
-  | CufSafeArray
-  | CufSafeReturn
-  | FPassC of param_num
-  | FPassCW of param_num
-  | FPassCE of param_num
-  | FPassV of param_num
-  | FPassVNop of param_num
-  | FPassR of param_num
-  | FPassL of param_num * local_id
-  | FPassN of param_num
-  | FPassG of param_num
-  | FPassS of param_num * classref_id
-  | FCall of num_params
-  | FCallD of num_params * class_id * function_id
-  | FCallArray
-  | FCallAwait of num_params * class_id * function_id
-  | FCallUnpack of num_params
-  | FCallBuiltin of num_params * num_params * Litstr.id
+  | FPushClsMethodS of num_params * SpecialClsRef.t
+  | FPushClsMethodSD of num_params * SpecialClsRef.t * method_id
+  | NewObj of classref_id * has_generics_op
+  | NewObjD of class_id
+  | NewObjS of SpecialClsRef.t
+  | FPushCtor of num_params
+  | FCall of fcall_args
+  | FCallBuiltin of num_params * num_params * string
 
 type instruct_base =
-  | BaseNC of stack_index * MemberOpMode.t
-  | BaseNL of local_id * MemberOpMode.t
-  | FPassBaseNC of param_num * stack_index
-  | FPassBaseNL of param_num * local_id
   | BaseGC of stack_index * MemberOpMode.t
   | BaseGL of local_id * MemberOpMode.t
-  | FPassBaseGC of param_num * stack_index
-  | FPassBaseGL of param_num * local_id
-  | BaseSC of stack_index * classref_id
-  | BaseSL of local_id * stack_index
+  | BaseSC of stack_index * classref_id * MemberOpMode.t
   | BaseL of local_id * MemberOpMode.t
-  | FPassBaseL of param_num * local_id
-  | BaseC of stack_index
-  | BaseR of stack_index
+  | BaseC of stack_index * MemberOpMode.t
   | BaseH
   | Dim of MemberOpMode.t * MemberKey.t
-  | FPassDim of param_num * MemberKey.t
 
 type instruct_final =
   | QueryM of num_params * QueryOp.t * MemberKey.t
   | VGetM of num_params * MemberKey.t
-  | FPassM of param_num * num_params * MemberKey.t
   | SetM of num_params * MemberKey.t
   | IncDecM of num_params * incdec_op * MemberKey.t
   | SetOpM of num_params  * eq_op * MemberKey.t
-  | BindM of num_params * MemberKey.t
   | UnsetM of num_params * MemberKey.t
-  | SetWithRefLML of local_id * local_id
-  | SetWithRefRML of local_id
+  | SetRangeM of num_params * setrange_op * int
+
+type iter_kind =
+  | Iter
+  | LIter
 
 type instruct_iterator =
   | IterInit of Iterator.t * Label.t * local_id
   | IterInitK of Iterator.t * Label.t * local_id * local_id
-  | WIterInit of Iterator.t * Label.t * local_id
-  | WIterInitK of Iterator.t * Label.t * local_id * local_id
-  | MIterInit of Iterator.t * Label.t * local_id
-  | MIterInitK of Iterator.t * Label.t * local_id * local_id
+  | LIterInit of Iterator.t * local_id * Label.t * local_id
+  | LIterInitK of Iterator.t * local_id * Label.t * local_id * local_id
   | IterNext of Iterator.t * Label.t * local_id
   | IterNextK of Iterator.t * Label.t * local_id * local_id
-  | WIterNext of Iterator.t * Label.t * local_id
-  | WIterNextK of Iterator.t * Label.t * local_id * local_id
-  | MIterNext of Iterator.t * Label.t * local_id
-  | MIterNextK of Iterator.t * Label.t * local_id * local_id
+  | LIterNext of Iterator.t * local_id * Label.t * local_id
+  | LIterNextK of Iterator.t * local_id * Label.t * local_id * local_id
   | IterFree of Iterator.t
-  | MIterFree of Iterator.t
-  | CIterFree of Iterator.t
-  | IterBreak of Label.t * (bool * Iterator.t) list
+  | LIterFree of Iterator.t * local_id
+  | IterBreak of Label.t * (iter_kind * Iterator.t) list
 
 type instruct_include_eval_define =
   | Incl
@@ -456,16 +435,17 @@ type instruct_include_eval_define =
   | ReqOnce
   | ReqDoc
   | Eval
-  | AliasCls of Litstr.id * Litstr.id
-  | DefFunc of function_num
+  | AliasCls of string * string
   | DefCls of class_num
   | DefClsNop of class_num
+  | DefRecord of record_num
   | DefCns of const_id
   | DefTypeAlias of typedef_num
 
 type bare_this_op =
   | Notice
   | NoNotice
+  | NeverNull
 
 type class_kind =
   | KClass
@@ -481,20 +461,22 @@ type instruct_misc =
   | BareThis of bare_this_op
   | CheckThis
   | InitThisLoc of local_id
-  | StaticLocCheck of local_id * Litstr.id
-  | StaticLocDef of local_id * Litstr.id
-  | StaticLocInit of local_id * Litstr.id
-  | Catch
+  | FuncNumArgs
+  | ChainFaults
   | OODeclExists of class_kind
   | VerifyParamType of param_id
+  | VerifyParamTypeTS of param_id
+  | VerifyOutType of param_id
   | VerifyRetTypeC
-  | VerifyRetTypeV
+  | VerifyRetTypeTS
   | Self of classref_id
   | Parent of classref_id
   | LateBoundCls of classref_id
   | ClsRefName of classref_id
+  | ReifiedName of string
+  | RecordReifiedGeneric
+  | CheckReifiedGenericMismatch
   | NativeImpl
-  | IncStat of int * int (* counter id, value *)
   | AKExists
   | CreateCl of num_params * class_num
   | Idx
@@ -504,14 +486,12 @@ type instruct_misc =
   | BreakTraceHint
   | Silence of local_id * op_silence
   | GetMemoKeyL of local_id
-  | VarEnvDynCall
-  | IsUninit
   | CGetCUNop
   | UGetCUNop
-  | MemoSet of int * local_id * int
-  | MemoGet of int * local_id * int
-  | IsMemoType
-  | MaybeMemoType
+  | MemoGet of Label.t * (local_id * int) option
+  | MemoGetEager of Label.t * Label.t * (local_id * int) option
+  | MemoSet of (local_id * int) option
+  | MemoSetEager of (local_id * int) option
 
 type gen_creation_execution =
   | CreateCont
@@ -521,9 +501,9 @@ type gen_creation_execution =
   | YieldK
   | ContCheck of check_started
   | ContValid
-  | ContStarted
   | ContKey
   | ContGetReturn
+  | ContCurrent
 
 type gen_delegation =
   | ContAssignDelegate of Iterator.t
@@ -534,16 +514,14 @@ type gen_delegation =
 type async_functions =
   | WHResult
   | Await
+  | AwaitAll of (Local.t * int) option
 
 type instruct_try =
   | TryCatchBegin
   | TryCatchMiddle
   | TryCatchEnd
-  | TryCatchLegacyBegin of Label.t
-  | TryCatchLegacyEnd
-  | TryFaultBegin of Label.t
-  | TryFaultEnd
 
+type srcloc = { line_begin:int; col_begin:int; line_end:int; col_end:int }
 type instruct =
   | IBasic of instruct_basic
   | IIterator of instruct_iterator
@@ -561,6 +539,7 @@ type instruct =
   | ILabel of Label.t
   | ITry of instruct_try
   | IComment of string
+  | ISrcLoc of srcloc
   | IAsync of async_functions
   | IGenerator of gen_creation_execution
   | IGenDelegation of gen_delegation

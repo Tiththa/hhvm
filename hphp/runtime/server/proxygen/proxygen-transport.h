@@ -155,7 +155,7 @@ struct ProxygenTransport final
    * Get request header(s).
    */
   std::string getHeader(const char *name) override;
-  void getHeaders(HeaderMap &headers) override;
+  const HeaderMap& getHeaders() override;
 
   /**
    * Get a description of the type of transport.
@@ -300,6 +300,8 @@ struct ProxygenTransport final
   }
 
   void setShouldRepost(bool shouldRepost) { m_shouldRepost = shouldRepost; }
+
+  void trySetMaxThreadCount(int max) override;
 
  private:
   bool bufferRequest() const;

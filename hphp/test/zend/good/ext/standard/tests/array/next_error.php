@@ -1,6 +1,6 @@
 <?php
 /* Prototype  : mixed next(array $array_arg)
- * Description: Move array argument's internal pointer to the next element and return it 
+ * Description: Move array argument's internal pointer to the next element and return it
  * Source code: ext/standard/array.c
  */
 
@@ -12,12 +12,11 @@ echo "*** Testing next() : error conditions ***\n";
 
 // Zero arguments
 echo "\n-- Testing next() function with Zero arguments --\n";
-var_dump( next() );
+try { var_dump( next() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 //Test next with one more than the expected number of arguments
 echo "\n-- Testing next() function with more than expected no. of arguments --\n";
 $array_arg = array(1, 2);
 $extra_arg = 10;
-var_dump( next($array_arg, $extra_arg) );
-?>
-===DONE===
+try { var_dump( next(&$array_arg, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+echo "===DONE===\n";

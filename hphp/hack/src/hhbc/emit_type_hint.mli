@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -34,3 +33,9 @@ val hint_to_class :
   namespace: Namespace_env.env ->
   Ast.hint ->
   Hhbc_id.Class.t
+
+val emit_type_constraint_for_native_function :
+  string list ->
+  Ast.hint option ->
+  Hhas_type_info.t ->
+  Hhas_type_info.t

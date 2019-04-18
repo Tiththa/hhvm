@@ -78,10 +78,9 @@ $values = array(
 
 foreach($values as $value) {
       echo @"\nArg value $value \n";
-      var_dump( xml_parser_get_option($parser, $value) );
+      try { var_dump( xml_parser_get_option($parser, $value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
 fclose($fp);
 xml_parser_free($parser);
 echo "Done";
-?>

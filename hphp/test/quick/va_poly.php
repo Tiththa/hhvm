@@ -1,4 +1,4 @@
-<?
+<?php
 
 class C1 {
   function __call($a, $b) {
@@ -9,13 +9,6 @@ class C1 {
 class C2 {
   function __call($a, $b) {
     echo '+';
-  }
-}
-
-class C3 {
-  function maul($a,$b,&$c) {
-    echo '*';
-    $c++;
   }
 }
 
@@ -30,7 +23,7 @@ function main() {
     $o->maul(1, 2, $i, 3, 4, 5, 6, 7);
     $o->maul(1, 2, $i, 3, 4, 5, 6, 7, 8);
     // Send subsequent passes to C2::__call
-    $o = $i == 0 ? new C2() : new C3();
+    $o = new C2();
     echo "\n";
   }
 }

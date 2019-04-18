@@ -1,4 +1,6 @@
-<?hh
+<?hh // partial
+
+namespace {
 
 /**
  * Return thread type. See enum class ThreadType.
@@ -32,9 +34,10 @@ function pagelet_server_is_enabled(): bool;
  */
 <<__HipHopSpecific, __Native>>
 function pagelet_server_task_start(string $url,
-                                   array $headers = [],
+                                   darray $headers = darray[],
                                    string $post_data = "",
-                                   array $files = []): resource;
+                                   darray $files = darray[],
+                                   int $timeout_seconds = 0): resource;
 
 /**
  * Checks finish status of a pagelet task.
@@ -214,6 +217,8 @@ function xbox_schedule_thread_reset(): void;
  */
 <<__HipHopSpecific, __Native>>
 function xbox_get_thread_time(): int;
+
+} // root namespace
 
 namespace HH {
 /**

@@ -1,0 +1,8 @@
+-vRuntime.Eval.EmitFuncPointers=1
+-vRuntime.Eval.EmitClsMethPointers=1
+-vRuntime.Eval.IsCompatibleClsMethType=1
+
+-vCheckPropTypeHints=2
+-vCheckReturnTypeHints=2
+
+-vHackArrDVArrs=0

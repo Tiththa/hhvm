@@ -35,7 +35,7 @@ struct NativeDataInfo {
   typedef void (*WakeupFunc)(ObjectData *wakeup, const Variant& data);
 
   size_t sz;
-  uint16_t odattrs;
+  uint8_t rt_attrs;
   type_scan::Index tyindex;
   InitFunc init; // new Object
   CopyFunc copy; // clone $obj
@@ -91,7 +91,8 @@ void registerNativeDataInfo(const StringData* name,
                             NativeDataInfo::SweepFunc sweep,
                             NativeDataInfo::SleepFunc sleep,
                             NativeDataInfo::WakeupFunc wakeup,
-                            type_scan::Index tyindex);
+                            type_scan::Index tyindex,
+                            uint8_t rt_attrs = 0);
 
 template<class T>
 void nativeDataInfoInit(ObjectData* obj) {
@@ -227,7 +228,7 @@ typename std::enable_if<
   !std::is_base_of<Sweepable, T>::value,
   void
 >::type registerNativeDataInfo(const StringData* name,
-                               int64_t flags = 0) {
+                               int64_t flags = 0, uint8_t rt_attrs = 0) {
   auto ndic = &nativeDataInfoCopy<T>;
   auto ndisw = getNativeDataInfoSweep<T>();
   auto ndisl = &nativeDataInfoSleep<T>;
@@ -241,7 +242,8 @@ typename std::enable_if<
     (flags & NDIFlags::NO_SWEEP) ? nullptr : ndisw,
     hasSleep<T, Variant() const>::value ? ndisl : nullptr,
     hasWakeup<T, void(const Variant&, ObjectData*)>::value ? ndiw : nullptr,
-    nativeTyindex<T>());
+    nativeTyindex<T>(),
+    rt_attrs);
 }
 
 // Return the ObjectData payload allocated after this NativeNode header
@@ -249,8 +251,7 @@ inline ObjectData* obj(NativeNode* node) {
   auto obj = reinterpret_cast<ObjectData*>(
     reinterpret_cast<char*>(node) + node->obj_offset
   );
-  assert(isObjectKind(obj->headerKind()));
-  assert(obj->getAttribute(ObjectData::HasNativeData));
+  assertx(obj->hasNativeData());
   return obj;
 }
 
@@ -259,29 +260,19 @@ inline const ObjectData* obj(const NativeNode* node) {
   auto obj = reinterpret_cast<const ObjectData*>(
     reinterpret_cast<const char*>(node) + node->obj_offset
   );
-  assert(isObjectKind(obj->headerKind()));
-  assert(obj->getAttribute(ObjectData::HasNativeData));
+  assertx(obj->hasNativeData());
   return obj;
 }
 
 ObjectData* nativeDataInstanceCtor(Class* cls);
-void nativeDataInstanceCopy(ObjectData* dest, ObjectData *src);
+ObjectData* nativeDataInstanceCopyCtor(ObjectData *src, Class* cls,
+                                       size_t nProps);
 void nativeDataInstanceDtor(ObjectData* obj, const Class* cls);
 
 Variant nativeDataSleep(const ObjectData* obj);
 void nativeDataWakeup(ObjectData* obj, const Variant& data);
 
 size_t ndsize(const ObjectData* obj, const NativeDataInfo* ndi);
-
-// return the full native header size, which is also the distance from
-// the allocated pointer to the ObjectData*.
-inline size_t ndsize(size_t dataSize) {
-  return alignTypedValue(dataSize + sizeof(NativeNode));
- }
-
-inline size_t ndextra(const ObjectData* obj, const NativeDataInfo* ndi) {
-  return ndsize(obj, ndi) - ndsize(ndi->sz);
-}
 
 inline NativeNode* getNativeNode(ObjectData* obj, const NativeDataInfo* ndi) {
   return reinterpret_cast<NativeNode*>(

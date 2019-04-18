@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -28,7 +27,7 @@ module Typedef :
     val description : string
   end
 module GConst : sig
-  type t = decl ty
+  type t = decl ty * Errors.t
   val prefix : Prefix.t
   val description : string
 end
@@ -61,18 +60,21 @@ end
 module ClassEltKey : SharedMem.UserKeyType
   with type t = string * string
 
-module Funs : module type of SharedMem.WithCache (StringKey) (Fun)
-module Classes : module type of SharedMem.WithCache (StringKey) (Class)
-module Typedefs : module type of SharedMem.WithCache (StringKey) (Typedef)
-module GConsts : module type of SharedMem.WithCache (StringKey) (GConst)
+module Funs : module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Fun)
+module Classes :
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Class)
+module Typedefs :
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Typedef)
+module GConsts :
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (GConst)
 
 module Props :
-  module type of SharedMem.WithCache (ClassEltKey) (Property)
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (Property)
 module StaticProps :
-  module type of SharedMem.WithCache (ClassEltKey) (StaticProperty)
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (StaticProperty)
 module Methods :
-  module type of SharedMem.WithCache (ClassEltKey) (Method)
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (Method)
 module StaticMethods :
-  module type of SharedMem.WithCache (ClassEltKey) (StaticMethod)
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (StaticMethod)
 module Constructors :
-  module type of SharedMem.WithCache (StringKey) (Constructor)
+  module type of SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Constructor)

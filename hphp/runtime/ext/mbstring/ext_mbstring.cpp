@@ -16,8 +16,9 @@
 */
 
 #include "hphp/runtime/ext/mbstring/ext_mbstring.h"
+#include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/string-buffer.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/ext/mbstring/php_unicode.h"
 #include "hphp/runtime/ext/mbstring/unicode_data.h"
 #include "hphp/runtime/ext/string/ext_string.h"
@@ -3331,8 +3332,8 @@ static php_mb_regex_t *php_mbregex_compile_pattern(const String& pattern,
     rc = it->second;
   }
 
-  if (!rc || rc->options != options || rc->enc != enc ||
-      rc->syntax != syntax) {
+  if (!rc || onig_get_options(rc) != options || onig_get_encoding(rc) != enc ||
+      onig_get_syntax(rc) != syntax) {
     if (rc) {
       onig_free(rc);
       rc = nullptr;
@@ -4386,7 +4387,7 @@ bool HHVM_FUNCTION(mb_send_mail,
       }
       to_r[to_len - 1] = '\0';
     }
-    for (int i = 0; to_r[i]; i++) {
+    for (size_t i = 0; to_r[i]; i++) {
       if (iscntrl((unsigned char)to_r[i])) {
         /**
          * According to RFC 822, section 3.1.1 long headers may be

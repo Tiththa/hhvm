@@ -1,25 +1,25 @@
-<?hh // decl
+<?hh
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
+
+<<__PHPStdLib>>
 function get_defined_functions(): array<string, array<string>>;
-function function_exists(string $function_name, $autoload = true): bool;
-function is_callable($v, $syntax = false, &$name = null): bool;
+<<__PHPStdLib, __Rx>>
+function function_exists(string $function_name, bool $autoload = true): bool;
+<<__PHPStdLib, __Rx>>
+/* HH_FIXME[2088] byref arg is not Rx */
+function is_callable($v, bool $syntax = false, &$name = null): bool;
 function call_user_func_array<T>($function, Container<T> $params);
 function call_user_func($function, ...);
-function forward_static_call_array<T>($function, Container<T> $params);
-function forward_static_call($function, ...);
-/* A get_called_class is treated at static::class */
-function get_called_class(): string; // false if called from outside class
-<<__Deprecated('Use an anonymous function instead.')>>
-function create_function($args, $code);
-function func_get_arg(int $arg_num);
+<<__Deprecated('Will be removed in future version of Hack')>>
 function func_num_args(): int;
+<<__PHPStdLib>>
 function register_postsend_function($function, ...);
+<<__PHPStdLib>>
 function register_shutdown_function($function, ...);

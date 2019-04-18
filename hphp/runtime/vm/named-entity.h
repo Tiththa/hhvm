@@ -35,6 +35,7 @@ namespace HPHP {
 
 struct Func;
 struct String;
+struct Record;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -44,7 +45,7 @@ struct String;
  */
 struct ahm_string_data_isame {
   bool operator()(const StringData *s1, const StringData *s2) const {
-    assert(int64_t(s2) > 0);  // RHS is never a magic value.
+    assertx(int64_t(s2) > 0);  // RHS is never a magic value.
     return s1 == s2 || (int64_t(s1) > 0 && s1->isame(s2));
   }
 };
@@ -85,11 +86,7 @@ struct NamedEntity {
   /////////////////////////////////////////////////////////////////////////////
   // Constructors.
 
-  explicit NamedEntity()
-    : m_cachedClass(rds::kInvalidHandle)
-    , m_cachedFunc(rds::kInvalidHandle)
-    , m_cachedTypeAlias(rds::kInvalidHandle)
-  {}
+  explicit NamedEntity() {}
 
   NamedEntity(NamedEntity&& ne) noexcept;
 
@@ -127,6 +124,22 @@ struct NamedEntity {
 
 
   /////////////////////////////////////////////////////////////////////////////
+  // Record cache.
+
+  /*
+   * Get the rds::Handle that caches this Record*, creating a (non-persistent)
+   * one if it doesn't exist yet.
+   */
+  rds::Handle getRecordHandle() const;
+
+  /*
+   * Set and get the cached Record*.
+   */
+  void setCachedRecord(Record* c);
+  Record* getCachedRecord() const;
+
+
+  /////////////////////////////////////////////////////////////////////////////
   // Type alias cache.
 
   /*
@@ -139,6 +152,15 @@ struct NamedEntity {
    */
   void setCachedTypeAlias(const TypeAliasReq&);
   const TypeAliasReq* getCachedTypeAlias() const;
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Reified generic cache.
+
+  /*
+   * Set and get the cached ReifiedGenerics.
+   */
+  void setCachedReifiedGenerics(ArrayData*);
+  ArrayData* getCachedReifiedGenerics() const;
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -176,6 +198,11 @@ struct NamedEntity {
   void setUniqueFunc(Func* func);
 
   /////////////////////////////////////////////////////////////////////////////
+  // Record.
+  Record* recordList() const;
+  void pushRecord(Record*);
+  void removeRecord(Record*);
+  /////////////////////////////////////////////////////////////////////////////
   // Global table.                                                     [static]
 
   /*
@@ -195,6 +222,7 @@ struct NamedEntity {
   template<class Fn> static void foreach_class(Fn fn);
   template<class Fn> static void foreach_cached_class(Fn fn);
   template<class Fn> static void foreach_cached_func(Fn fn);
+  template<class Fn> static void foreach_name(Fn);
 
   /*
    * Size of the global NamedEntity table.
@@ -207,22 +235,27 @@ struct NamedEntity {
   static std::vector<std::pair<const char*, int64_t>> tableStats();
 
 private:
-  template<class Fn> static void foreach_name(Fn);
   static Map* table();
 
   /////////////////////////////////////////////////////////////////////////////
   // Data members.
 
 public:
-  mutable rds::Link<LowPtr<Class>> m_cachedClass;
-  mutable rds::Link<LowPtr<Func>> m_cachedFunc;
-  mutable rds::Link<TypeAliasReq> m_cachedTypeAlias;
+  mutable rds::Link<LowPtr<Class>, rds::Mode::NonLocal> m_cachedClass;
+  mutable rds::Link<LowPtr<Func>, rds::Mode::NonLocal> m_cachedFunc;
+  union {
+    mutable rds::Link<TypeAliasReq, rds::Mode::NonLocal> m_cachedTypeAlias{};
+    mutable rds::Link<ArrayData*, rds::Mode::NonLocal> m_cachedReifiedGenerics;
+  };
+  mutable rds::Link<LowPtr<Record>, rds::Mode::NonLocal> m_cachedRecord;
 
+  template<class T>
+  using ListType = AtomicLowPtr<T, std::memory_order_acquire,
+                                   std::memory_order_release>;
 private:
-  AtomicLowPtr<Class, std::memory_order_acquire,
-               std::memory_order_release> m_clsList{nullptr};
-  AtomicLowPtr<Func, std::memory_order_acquire,
-               std::memory_order_release> m_uniqueFunc{nullptr};
+  ListType<Class> m_clsList{nullptr};
+  ListType<Func> m_uniqueFunc{nullptr};
+  ListType<Record> m_recordList{nullptr};
 };
 
 /*

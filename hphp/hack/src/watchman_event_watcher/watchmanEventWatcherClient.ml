@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -15,6 +14,7 @@
  * See .mli file for details.
  *)
 
+open Core_kernel
 module Config = WatchmanEventWatcherConfig
 module Responses = WatchmanEventWatcherConfig.Responses
 
@@ -55,9 +55,9 @@ let init root =
   (** Copied wholesale from MonitorConnection *)
   let sockaddr =
     if Sys.win32 then
-      let ic = open_in_bin sock_path in
-      let port = input_binary_int ic in
-      close_in ic;
+      let ic = In_channel.create ~binary:true sock_path in
+      let port = Option.value_exn (In_channel.input_binary_int ic) in
+      In_channel.close ic;
       Unix.(ADDR_INET (inet_addr_loopback, port))
     else
       Unix.ADDR_UNIX sock_path
@@ -85,7 +85,7 @@ let get_status_ instance =
   | Mid_update reader
   | Unknown reader when Buffered_line_reader.is_readable reader ->
     begin try
-      let msg = Buffered_line_reader.get_next_line ~approx_size:25 reader in
+      let msg = Buffered_line_reader.get_next_line reader in
       let msg = Responses.of_string msg in
       let response = begin match msg with
       | Responses.Unknown ->

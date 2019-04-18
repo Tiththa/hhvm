@@ -5,11 +5,10 @@ $h = gzopen($f, 'r');
 $length = 10; 
 $extra_arg = 'nothing'; 
 
-var_dump(gzread( $h, $length, $extra_arg ) );
+try { var_dump(gzread( $h, $length, $extra_arg ) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-var_dump(gzread());
+try { var_dump(gzread()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 gzclose($h);
 
-?>
-===DONE===
+echo "===DONE===\n";

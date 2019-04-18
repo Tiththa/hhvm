@@ -2,151 +2,444 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
- (* What we're lowering from *)
- open Full_fidelity_positioned_syntax
- type node = Full_fidelity_positioned_syntax.t (* Let's be more explicit *)
- (* What we're lowering to *)
- open Ast
+module SyntaxError = Full_fidelity_syntax_error
+module SN = Naming_special_names
+open Core_kernel
+open Prim_defs
+(* What we are lowering to *)
+open Ast
+
+(* Don't allow expressions to nest deeper than this to avoid stack overflow *)
+let recursion_limit = 30000
+
+[@@@warning "-32"] (* unused ppx_deriving show function in OCaml ast trips Werror *)
+type lifted_await_kind = LiftedFromStatement | LiftedFromConcurrent [@@deriving show]
+[@@@warning "+32"]
+
+type lifted_awaits = {
+    mutable awaits: (id option * expr) list;
+    mutable name_counter: int;
+    lift_kind: lifted_await_kind
+}[@@deriving show]
+
+let make_tmp_var_name c =
+  SN.SpecialIdents.tmp_var_prefix ^ (string_of_int c)
+
+let lift_await expr awaits ~with_temp_local =
+    if (with_temp_local)
+    then
+      let name = make_tmp_var_name awaits.name_counter in
+      awaits.name_counter <- awaits.name_counter + 1;
+      awaits.awaits <- ((Some (Pos.none, name)), expr) :: awaits.awaits;
+      Lvar (Pos.none, name)
+    else
+      (awaits.awaits <- (None, expr) :: awaits.awaits;
+      Null)
+
+(* Context of the file being parsed, as (hopefully some day read-only) state. *)
+type env =
+  { is_hh_file               : bool
+  ; codegen                  : bool
+  ; systemlib_compat_mode    : bool
+  ; php5_compat_mode         : bool
+  ; elaborate_namespaces     : bool
+  ; include_line_comments    : bool
+  ; keep_errors              : bool
+  ; quick_mode               : bool
+  ; lower_coroutines         : bool
+  ; enable_hh_syntax         : bool
+  ; enable_xhp               : bool
+  ; fail_open                : bool
+  ; parser_options           : ParserOptions.t
+  ; fi_mode                  : FileInfo.mode
+  ; file                     : Relative_path.t
+  ; stats                    : Stats_container.t option
+  ; hacksperimental          : bool
+  ; top_level_statements     : bool (* Whether we are (still) considering TLSs*)
+  ; inside_declare           : bool (* Whether we're inside a declare directive. *)
+  (* Changing parts; should disappear in future. `mutable` saves allocations. *)
+  ; mutable ignore_pos       : bool
+  ; mutable max_depth        : int    (* Filthy hack around OCaml bug *)
+  ; mutable saw_yield        : bool   (* Information flowing back up *)
+  ; mutable unsafes          : ISet.t (* Offsets of UNSAFE_EXPR in trivia *)
+  ; mutable lifted_awaits    : lifted_awaits option
+  (* Whether we've seen COMPILER_HALT_OFFSET. The value of COMPILER_HALT_OFFSET
+    defaults to 0 if HALT_COMPILER isn't called.
+    None -> COMPILER_HALT_OFFSET isn't in the source file
+    Some 0 -> COMPILER_HALT_OFFSET is in the source file, but HALT_COMPILER isn't
+    Some x -> COMPILER_HALT_OFFSET is in the source file,
+              HALT_COMPILER is at x bytes offset in the file.
+  *)
+  ; saw_compiler_halt_offset : (int option) ref
+  ; recursion_depth : int ref
+  ; cls_reified_generics : SSet.t ref
+  ; in_static_method : bool ref
+  ; parent_maybe_reified : bool ref
+  (* This provides a generic mechanism to delay raising parsing errors;
+   * since we're moving FFP errors away from CST to a stage after lowering
+   * _and_ want to prioritize errors before lowering, the lowering errors
+   * must be merely stored when the lowerer runs (until check for FFP runs (on AST)
+   * and raised _after_ FFP error checking (unless we run the lowerer twice,
+   * which would be expensive). *)
+  ; lowpri_errors : (Pos.t * string) list ref
+  }[@@deriving show]
+
+let make_env
+  ?(codegen                  = false                   )
+  ?(systemlib_compat_mode    = false                   )
+  ?(php5_compat_mode         = false                   )
+  ?(elaborate_namespaces     = true                    )
+  ?(include_line_comments    = false                   )
+  ?(keep_errors              = true                    )
+  ?(ignore_pos               = false                   )
+  ?(quick_mode               = false                   )
+  ?(lower_coroutines         = true                    )
+  ?(enable_hh_syntax         = false                   )
+  ?enable_xhp
+  ?(fail_open                = true                    )
+  ?(parser_options           = ParserOptions.default   )
+  ?(fi_mode                  = FileInfo.Mpartial       )
+  ?(is_hh_file               = false                   )
+  ?stats
+  ?(hacksperimental          = false                   )
+  (file : Relative_path.t)
+  : env
+  =
+    let enable_xhp = match enable_xhp with
+      | Some b -> b
+      | None -> enable_hh_syntax in
+    let parser_options = ParserOptions.with_hh_syntax_for_hhvm parser_options
+      (codegen && (enable_hh_syntax || is_hh_file)) in
+    { is_hh_file
+    ; codegen = codegen || systemlib_compat_mode
+    ; systemlib_compat_mode
+    ; php5_compat_mode
+    ; elaborate_namespaces
+    ; include_line_comments
+    ; keep_errors
+    ; quick_mode =
+         not codegen
+      && (match fi_mode with
+         | FileInfo.Mdecl
+         | FileInfo.Mphp -> true
+         | _ -> quick_mode
+         )
+    ; lower_coroutines
+    ; enable_hh_syntax
+    ; enable_xhp
+    ; parser_options
+    ; fi_mode
+    ; fail_open
+    ; file
+    ; stats
+    ; hacksperimental
+    ; top_level_statements = true
+    ; inside_declare = false
+    ; ignore_pos
+    ; max_depth = 42
+    ; saw_yield = false
+    ; unsafes = ISet.empty
+    ; saw_compiler_halt_offset = ref None
+    ; recursion_depth = ref 0
+    ; cls_reified_generics = ref SSet.empty
+    ; in_static_method = ref false
+    ; parent_maybe_reified = ref false
+    ; lifted_awaits = None
+    ; lowpri_errors = ref []
+    }
+
+type result =
+  { fi_mode  : FileInfo.mode
+  ; is_hh_file : bool
+  ; ast      : Ast.program
+  ; content  : string
+  ; file     : Relative_path.t
+  ; comments : (Pos.t * comment) list
+  } [@@deriving show]
+
+module WithPositionedSyntax(Syntax : Positioned_syntax_sig.PositionedSyntax_S) = struct
+
+(* What we're lowering from *)
+open Syntax
+
+type node = Syntax.t
+
+module Token = Syntax.Token
+module Trivia = Token.Trivia
+module TriviaKind = Trivia.TriviaKind
 
 module SyntaxKind = Full_fidelity_syntax_kind
 module TK = Full_fidelity_token_kind
-module PT = Full_fidelity_positioned_token
-module SourceText = Full_fidelity_source_text
-open Prim_defs
+module SourceText = Trivia.SourceText
 
-open Core
+let is_hack (env : env) = env.is_hh_file || env.enable_hh_syntax
+let is_typechecker env =
+  is_hack env && (not env.codegen)
 
 let drop_pstr : int -> pstring -> pstring = fun cnt (pos, str) ->
   let len = String.length str in
   pos, if cnt >= len then "" else String.sub str cnt (len - cnt)
 
-(* Context of the file being parsed, as global state. *)
-type state_variables =
-  { language  : string ref
-  ; filePath  : Relative_path.t ref
-  ; mode      : FileInfo.mode ref
-  ; popt      : ParserOptions.t ref
-  ; ignorePos : bool ref
-  ; quickMode : bool ref
-  ; suppress_output : bool ref
-  }
-
-let lowerer_state =
-  { language  = ref "UNINITIALIZED"
-  ; filePath  = ref Relative_path.default
-  ; mode      = ref FileInfo.Mstrict
-  ; popt      = ref ParserOptions.default
-  ; ignorePos = ref false
-  ; quickMode = ref false
-  ; suppress_output = ref false
-  }
-
-let php_file () = !(lowerer_state.mode) == FileInfo.Mphp
-
-(* "Local" context. *)
-type env =
-  { saw_yield : bool ref
-  ; errors    : (Pos.t * string) list ref
-  ; max_depth : int
-  }
+let non_tls env = if not env.top_level_statements then env else
+  { env with top_level_statements = false }
 
 type +'a parser = node -> env -> 'a
 type ('a, 'b) metaparser = 'a parser -> 'b parser
 
-let get_pos : node -> Pos.t = fun node ->
-  if !(lowerer_state.ignorePos)
+let underscore = Str.regexp "_"
+let quoted = Str.regexp "[ \t\n\r\012]*\"\\(\\(.\\|\n\\)*\\)\""
+let whitespace = Str.regexp "[ \t\n\r\012]+"
+let hashbang = Str.regexp "^#!.*\n"
+let ignore_error = Str.regexp "HH_\\(FIXME\\|IGNORE_ERROR\\)[ \\t\\n]*\\[\\([0-9]+\\)\\]"
+let namespace_use = Str.regexp "[^\\\\]*$"
+
+let mode_annotation = function
+  | FileInfo.Mphp -> FileInfo.Mdecl
+  | m -> m
+
+let with_new_nonconcurrent_scope env f =
+  let saved_lifted_awaits = env.lifted_awaits in
+  env.lifted_awaits <- None;
+  Utils.try_finally
+    ~f
+    ~finally:(fun () -> env.lifted_awaits <- saved_lifted_awaits;)
+
+let with_new_concurrent_scope env f =
+  let lifted_awaits =
+    { awaits = []; name_counter = 1; lift_kind = LiftedFromConcurrent } in
+  let saved_lifted_awaits = env.lifted_awaits in
+  env.lifted_awaits <- Some lifted_awaits;
+  let result = Utils.try_finally
+    ~f
+    ~finally:(fun () -> env.lifted_awaits <- saved_lifted_awaits;) in
+  (lifted_awaits, result)
+
+let clear_statement_scope env f =
+  match env.lifted_awaits with
+  | Some { lift_kind = LiftedFromStatement; _ } ->
+    let saved_lifted_awaits = env.lifted_awaits in
+    env.lifted_awaits <- None;
+    Utils.try_finally
+      ~f
+      ~finally:(fun () -> env.lifted_awaits <- saved_lifted_awaits;)
+  | _ -> f ()
+
+let with_new_statement_scope env f =
+  match (ParserOptions.enable_await_as_an_expression env.parser_options), env.lifted_awaits with
+  | false, _
+  | true, Some { lift_kind = LiftedFromConcurrent; _ } ->
+    (None, f ())
+  | true, Some { lift_kind = LiftedFromStatement; _ }
+  | true, None ->
+    let lifted_awaits =
+      { awaits = []; name_counter = 1; lift_kind = LiftedFromStatement } in
+    let saved_lifted_awaits = env.lifted_awaits in
+    env.lifted_awaits <- Some lifted_awaits;
+    let result = Utils.try_finally
+      ~f
+      ~finally:(fun () -> env.lifted_awaits <- saved_lifted_awaits;) in
+    let lifted_awaits =
+      if List.is_empty lifted_awaits.awaits then None else Some lifted_awaits in
+    (lifted_awaits, result)
+
+let syntax_to_list include_separators node  =
+  let rec aux acc syntax_list =
+    match syntax_list with
+    | [] -> acc
+    | h :: t ->
+      begin
+        match syntax h with
+        | ListItem { list_item; list_separator } ->
+          let acc = list_item :: acc in
+          let acc =
+            if include_separators then (list_separator :: acc ) else acc in
+          aux acc t
+        | _ -> aux (h :: acc) t
+      end in
+  match syntax node with
+  | Missing -> [ ]
+  | SyntaxList s -> List.rev (aux [] s)
+  | ListItem { list_item; list_separator } ->
+    if include_separators then [ list_item; list_separator ] else [ list_item ]
+  | _ -> [ node ]
+
+let syntax_to_list_no_separators = syntax_to_list false
+
+let pPos : Pos.t parser = fun node env ->
+  if env.ignore_pos
   then Pos.none
-  else begin
-    let pos_file = !(lowerer_state.filePath) in
-    let text = source_text node in
-    (* TODO(8086635) Figure out where this off-by-one comes from *)
-    let start_offset =
-      (*should be removed after resolving TODO above *)
-      let start_offset = start_offset node in
-      if start_offset = 0 then 0 else start_offset - 1
+  else Option.value ~default:Pos.none (position_exclusive env.file node)
+
+let raise_parsing_error env node_or_pos msg =
+  if not env.quick_mode && env.keep_errors then
+    let p = match node_or_pos with
+      | `Pos pos -> pos
+      | `Node node -> pPos node env
     in
-    let end_offset = end_offset node in
-    let s_line, s_column = SourceText.offset_to_position text start_offset in
-    let e_line, e_column = SourceText.offset_to_position text end_offset in
-    let pos_start =
-      File_pos.of_line_column_offset
-        ~line:s_line
-        ~column:s_column
-        ~offset:start_offset
+    env.lowpri_errors := (p, msg) :: !(env.lowpri_errors)
+  else if env.codegen && not env.lower_coroutines then
+    let p = match node_or_pos with
+      | `Pos pos -> pos
+      | `Node node -> (Option.value (position env.file node) ~default:Pos.none)
     in
-    let pos_end =
-      File_pos.of_line_column_offset
-        ~line:e_line
-        ~column:e_column
-        ~offset:end_offset
-    in
-    Pos.make_from_file_pos ~pos_file ~pos_start ~pos_end
-  end
+    env.lowpri_errors := (p, msg) :: !(env.lowpri_errors)
+  else ()
+
+(* HHVM starts range of function declaration from the 'function' keyword *)
+let pFunction node env =
+  let p = pPos node env in
+  match syntax node with
+  | FunctionDeclaration  { function_declaration_header = h; _ }
+  | MethodishDeclaration { methodish_function_decl_header = h; _ }
+    when env.codegen ->
+    begin match syntax h with
+    | FunctionDeclarationHeader { function_keyword = f; _ }
+      when not (is_missing f) ->
+      (* For continuation compilation, we end up with spans across files :-( *)
+      Pos.btw_nocheck (pPos f env) p
+    | _ -> p
+    end
+  | _ -> p
 
 exception Lowerer_invariant_failure of string * string
-let invariant_failure where what =
-  raise (Lowerer_invariant_failure (where, what))
+let invariant_failure node msg env =
+  let pos = Pos.string (Pos.to_absolute (pPos node env)) in
+  raise (Lowerer_invariant_failure (pos, msg))
+
+let scuba_table = Scuba.Table.of_name "hh_missing_lowerer_cases"
+
+let log_missing ?(caught = false) ~(env:env) ~expecting node : unit =
+  EventLogger.log_if_initialized @@ fun () ->
+    let source = source_text node in
+    let start = start_offset node in
+    let end_ = end_offset node in
+    let pos = SourceText.relative_pos env.file source start end_ in
+    let file = Relative_path.to_absolute env.file in
+    let contents =
+      let context_size = 5000 in
+      let start = max 0 (start - context_size) in
+      let length = min (2 * context_size) (SourceText.length source - start) in
+      SourceText.sub source start length
+    in
+    let kind = SyntaxKind.to_string (Syntax.kind node) in
+    let line = Pos.line pos in
+    let column = Pos.start_cnum pos in
+    let synthetic = is_synthetic node in
+    Scuba.new_sample (Some scuba_table)
+    |> Scuba.add_normal "filename" file
+    |> Scuba.add_normal "expecting" expecting
+    |> Scuba.add_normal "contents" contents
+    |> Scuba.add_normal "found_kind" kind
+    |> Scuba.add_int "line" line
+    |> Scuba.add_int "column" column
+    |> Scuba.add_int "is_synthetic" (if synthetic then 1 else 0)
+    |> Scuba.add_int "caught" (if caught then 1 else 0)
+    |> EventLogger.log
 
 exception API_Missing_syntax of string * env * node
-let missing_syntax : string -> node -> env -> 'a = fun s n env ->
-  raise (API_Missing_syntax (s, env, n))
-let handle_missing_syntax : string -> node -> env -> 'a = fun s n _ ->
-  let pos = Pos.string (Pos.to_absolute (get_pos n)) in
-  let msg = Printf.sprintf
-    "Missing case in %s.
- - Pos: %s
- - Unexpected: '%s'
- - Kind: %s
- "
-  s
-  pos
-  (text n)
-  (SyntaxKind.to_string (kind n))
-  in
-  if not !(lowerer_state.suppress_output) then
-    Printf.eprintf "EXCEPTION\n---------\n%s\n" msg;
-  raise (Failure msg)
+
+(* If we fail to lower something, raise an error in the typechecker
+complaining that the code does not parse. Don't raise a parsing error
+if there already is one, since that one will likely be better than this one. *)
+let lowering_error env pos text syntax_kind =
+  if not (is_typechecker env) then () else
+  if not (Errors.currently_has_errors () || !(env.lowpri_errors) <> []) then
+    raise_parsing_error env (`Pos pos)
+      (SyntaxError.lowering_parsing_error text syntax_kind)
+
+let missing_syntax : ?fallback:'a -> string -> node -> env -> 'a =
+  fun ?fallback expecting node env ->
+    let pos = pPos node env in
+    let text = (text node) in
+    lowering_error env pos text expecting;
+    match fallback with
+    | Some x when env.fail_open ->
+      let () = log_missing ~env ~expecting node in
+      x
+    | _ -> raise (API_Missing_syntax (expecting, env, node))
 
 let runP : 'a parser -> node -> env -> 'a = fun pThing thing env ->
   try pThing thing env with
-  | API_Missing_syntax (ex, env, n) -> handle_missing_syntax ex n env
-  | e -> raise e
-
+  | API_Missing_syntax (s, env, n) ->
+    let pos = Pos.string (Pos.to_absolute (pPos n env)) in
+    let msg = Printf.sprintf
+      "missing case in %s.
+   - pos: %s
+   - unexpected: '%s'
+   - kind: %s
+   "
+    s
+    pos
+    (text n)
+    (SyntaxKind.to_string (kind n))
+    in
+    raise (Failure msg)
 
 (* TODO: Cleanup this hopeless Noop mess *)
-let mk_noop : stmt list -> stmt list = function
-  | [] -> [Noop]
+let mk_noop pos : stmt list -> stmt list = function
+  | [] -> [pos, Noop]
   | s -> s
 let mpStripNoop pThing node env = match pThing node env with
-  | [Noop] -> []
+  | [_, Noop] -> []
   | stmtl -> stmtl
 
 let mpOptional : ('a, 'a option) metaparser = fun p -> fun node env ->
-  Option.try_with (fun () -> p node env)
+  match syntax node with
+    | Missing -> None
+    | _ -> Some (p node env)
 let mpYielding : ('a, ('a * bool)) metaparser = fun p node env ->
-  let local_ptr = ref false in
-  let result = p node { env with saw_yield = local_ptr } in
-  result, !local_ptr
+  let outer_saw_yield = env.saw_yield in
+  let () = env.saw_yield <- false in
+  let result = p node env in
+  let result = result, env.saw_yield in
+  let () = env.saw_yield <- outer_saw_yield in
+  result
 
+type expr_location =
+  | TopLevel
+  | MemberSelect
+  | InDoubleQuotedString
+  | InBacktickedString
+  | AsStatement
+  | RightOfAssignment
+  | RightOfReturn
 
+let in_string l =
+  l = InDoubleQuotedString || l = InBacktickedString
 
-
-let pos_name node =
-  let name = text node in
-  let local_ignore_pos = !(lowerer_state.ignorePos) in
-  (* Special case for __LINE__; never ignore position for that special name *)
-  if name = "__LINE__" then lowerer_state.ignorePos := false;
-  let p = get_pos node in
-  lowerer_state.ignorePos := local_ignore_pos;
+  let pos_qualified_name node env =
+  let aux p =
+    match syntax p with
+    | ListItem li -> (text li.list_item) ^ (text li.list_separator)
+    | _ -> text p in
+  let p = pPos node env in
+  let name =
+    match syntax node with
+    | QualifiedName {
+        qualified_name_parts = { syntax = SyntaxList l; _ };
+      } ->
+      String.concat ~sep:"" @@ List.map ~f:aux l
+    | _ -> missing_syntax "qualified name" node env in
   p, name
 
-let is_ret_by_ref node = not @@ is_missing node
+let rec pos_name node env =
+  match syntax node with
+  | QualifiedName _ -> pos_qualified_name node env
+  | SimpleTypeSpecifier { simple_type_specifier = s } -> pos_name s env
+  | _ ->
+  let name = text node in
+  let local_ignore_pos = env.ignore_pos in
+  (* Special case for __LINE__; never ignore position for that special name *)
+  if name = "__LINE__" then env.ignore_pos <- false;
+  if name = "__COMPILER_HALT_OFFSET__" then env.saw_compiler_halt_offset := Some 0;
+  let p = pPos node env in
+  env.ignore_pos <- local_ignore_pos;
+  p, name
 
 let couldMap : 'a . f:'a parser -> 'a list parser = fun ~f -> fun node env ->
   let rec synmap : 'a . 'a parser -> 'a list parser = fun f node env ->
@@ -171,23 +464,8 @@ let as_list : node -> node list =
   | { syntax = Missing; _ } -> []
   | syn -> [syn]
 
-let missing =
-  let module V = Full_fidelity_positioned_syntax.PositionedSyntaxValue in
-  let open Full_fidelity_source_text in
-  { syntax = Missing
-  ; value =
-    { V.source_text    = { text = ""; offset_map = Line_break_map.make "" }
-    ; V.offset         = 0
-    ; V.leading_width  = 0
-    ; V.width          = 0
-    ; V.trailing_width = 0
-    }
-  }
-
-
-
 let token_kind : node -> TK.t option = function
-  | { syntax = Token t; _ } -> Some (PT.kind t)
+  | { syntax = Token t; _ } -> Some (Token.kind t)
   | _ -> None
 
 let pBop : (expr -> expr -> expr_) parser = fun node env lhs rhs ->
@@ -198,9 +476,15 @@ let pBop : (expr -> expr -> expr_) parser = fun node env lhs rhs ->
   | Some TK.Plus                        -> Binop (Plus,              lhs, rhs)
   | Some TK.Minus                       -> Binop (Minus,             lhs, rhs)
   | Some TK.Star                        -> Binop (Star,              lhs, rhs)
-  | Some TK.Or                          -> Binop (BArbar,            lhs, rhs)
-  | Some TK.And                         -> Binop (AMpamp,            lhs, rhs)
-  | Some TK.Xor                         -> Binop (LogXor,            lhs, rhs)
+  | Some TK.Or                          ->
+    if not env.codegen then raise_parsing_error env (`Node node) SyntaxError.do_not_use_or;
+    Binop (Barbar,            lhs, rhs)
+  | Some TK.And                         ->
+    if not env.codegen then raise_parsing_error env (`Node node) SyntaxError.do_not_use_and;
+    Binop (Ampamp,            lhs, rhs)
+  | Some TK.Xor                         ->
+    if not env.codegen then raise_parsing_error env (`Node node) SyntaxError.do_not_use_xor;
+    Binop (LogXor,            lhs, rhs)
   | Some TK.Carat                       -> Binop (Xor,               lhs, rhs)
   | Some TK.Slash                       -> Binop (Slash,             lhs, rhs)
   | Some TK.Dot                         -> Binop (Dot,               lhs, rhs)
@@ -222,23 +506,28 @@ let pBop : (expr -> expr -> expr_) parser = fun node env lhs rhs ->
   | Some TK.PercentEqual                -> Binop (Eq (Some Percent), lhs, rhs)
   | Some TK.CaratEqual                  -> Binop (Eq (Some Xor),     lhs, rhs)
   | Some TK.AmpersandEqual              -> Binop (Eq (Some Amp),     lhs, rhs)
-  | Some TK.BarBar                      -> Binop (BArbar,            lhs, rhs)
-  | Some TK.AmpersandAmpersand          -> Binop (AMpamp,            lhs, rhs)
+  | Some TK.BarBar                      -> Binop (Barbar,            lhs, rhs)
+  | Some TK.AmpersandAmpersand          -> Binop (Ampamp,            lhs, rhs)
   | Some TK.LessThanLessThan            -> Binop (Ltlt,              lhs, rhs)
   | Some TK.GreaterThanGreaterThan      -> Binop (Gtgt,              lhs, rhs)
-  | Some TK.EqualEqualEqual             -> Binop (EQeqeq,            lhs, rhs)
+  | Some TK.EqualEqualEqual             -> Binop (Eqeqeq,            lhs, rhs)
   | Some TK.LessThanLessThanEqual       -> Binop (Eq (Some Ltlt),    lhs, rhs)
   | Some TK.GreaterThanGreaterThanEqual -> Binop (Eq (Some Gtgt),    lhs, rhs)
-  | Some TK.LessThanGreaterThan         -> Binop (Diff,              lhs, rhs)
+  | Some TK.LessThanGreaterThan         ->
+    if is_hack env
+    then raise_parsing_error env (`Node node) SyntaxError.do_not_use_ltgt;
+    Binop (Diff, lhs, rhs)
   | Some TK.ExclamationEqualEqual       -> Binop (Diff2,             lhs, rhs)
   | Some TK.LessThanEqualGreaterThan    -> Binop (Cmp,               lhs, rhs)
-  (* The ugly ducklings; In the FFP, `|>` and '??' are parsed as
-   * `BinaryOperator`s, whereas the typed AST has separate constructors for
-   * NullCoalesce, Pipe and Binop. This is why we don't just project onto a
+  | Some TK.QuestionQuestion            -> Binop (QuestionQuestion,  lhs, rhs)
+  | Some TK.QuestionQuestionEqual       -> Binop (Eq (Some QuestionQuestion), lhs, rhs)
+  (* The ugly duckling; In the FFP, `|>` is parsed as a
+   * `BinaryOperator`, whereas the typed AST has separate constructors for
+   * Pipe and Binop. This is why we don't just project onto a
    * `bop`, but a `expr -> expr -> expr_`.
    *)
   | Some TK.BarGreaterThan              -> Pipe         (lhs, rhs)
-  | Some TK.QuestionQuestion            -> NullCoalesce (lhs, rhs)
+  | Some TK.QuestionColon               -> Eif          (lhs, None, rhs)
   (* TODO: Figure out why this fails silently when used in a pBlock; probably
      just caught somewhere *)
   | _ -> missing_syntax "binary operator" node env
@@ -257,114 +546,152 @@ let pNullFlavor : og_null_flavor parser = fun node env ->
   | Some TK.MinusGreaterThan         -> OG_nullthrows
   | _ -> missing_syntax "null flavor" node env
 
-let pKinds : kind list parser = couldMap ~f:(fun node env ->
-  match token_kind node with
-  | Some TK.Final     -> Final
-  | Some TK.Static    -> Static
-  | Some TK.Abstract  -> Abstract
-  | Some TK.Private   -> Private
-  | Some TK.Public    -> Public
-  | Some TK.Protected -> Protected
-  | Some TK.Var       -> Public
-  | _ -> missing_syntax "kind" node env
-  )
+type modifiers = {
+  has_async: bool;
+  has_coroutine: bool;
+  kinds: kind list
+}
 
-let syntax_of_token : PositionedToken.t -> node = fun t ->
-  { syntax = Token t
-  ; value  = PositionedSyntaxValue.make t.PT.source_text
-               t.PT.offset t.PT.leading_width t.PT.width t.PT.trailing_width
-  }
+let pModifiers check_modifier node env =
+  let f (has_async, has_coroutine, kinds) node =
+    let add_kind k =
+      check_modifier node;
+      k :: kinds
+    in
+    match token_kind node with
+    | Some TK.Final     -> has_async, has_coroutine, add_kind Final
+    | Some TK.Static    -> has_async, has_coroutine, add_kind Static
+    | Some TK.Abstract  -> has_async, has_coroutine, add_kind Abstract
+    | Some TK.Private   -> has_async, has_coroutine, add_kind Private
+    | Some TK.Public    -> has_async, has_coroutine, add_kind Public
+    | Some TK.Protected -> has_async, has_coroutine, add_kind Protected
+    | Some TK.Var       -> has_async, has_coroutine, add_kind Public
+    | Some TK.Async     -> true, has_coroutine, kinds
+    | Some TK.Coroutine -> has_async, true, kinds
+    | _ -> missing_syntax "kind" node env in
+  let (has_async, has_coroutine, kinds) =
+    List.fold_left ~init:(false, false, []) ~f (as_list node) in
+  { has_async; has_coroutine; kinds = List.rev kinds }
+
+let pKinds check_modifier node env =
+  (pModifiers check_modifier node env).kinds
+
+let pParamKind : param_kind parser = fun node env ->
+  match token_kind node with
+  | Some TK.Inout -> Pinout
+  | _ -> missing_syntax "param kind" node env
 
 (* TODO: Clean up string escaping *)
-let prepString2 : node list -> node list =
-  let trimLeft ~n t =
-    PT.({ t with leading_width = t.leading_width + n; width = t.width - n })
-  in
-  let trimRight ~n t =
-    PT.({ t with trailing_width = t.trailing_width + n; width = t.width - n })
-  in
+let prepString2 env : node list -> node list =
+  let is_double_quote_or_backtick ch = ch = '"' || ch = '`' in
+  let is_binary_string_header s =
+    (String.length s > 1) && (s.[0] = 'b') && (s.[1] = '"') in
+  let trimLeft = Token.trim_left in
+  let trimRight = Token.trim_right in
   function
-  | ({ syntax = Token t; _ }::ss)
-  when t.PT.width > 0 && (PT.text t).[0] = '"' ->
+  | ({ syntax = Token t; _ } as node::ss)
+  when (Token.width t) > 0 &&
+    ((is_double_quote_or_backtick (Token.text t).[0])
+      || is_binary_string_header (Token.text t)) ->
     let rec unwind = function
       | [{ syntax = Token t; _ }]
-      when t.PT.width > 0 && (PT.text t).[t.PT.width - 1] = '"' ->
-        let s = syntax_of_token (trimRight ~n:1 t) in
+      when (Token.width t) > 0 &&
+          is_double_quote_or_backtick ((Token.text t).[(Token.width t) - 1]) ->
+        let s = make_token (trimRight ~n:1 t) in
         if width s > 0 then [s] else []
       | x :: xs -> x :: unwind xs
-      | _ -> raise (Invalid_argument "Malformed String2 SyntaxList")
+      | _ -> raise_parsing_error env (`Node node) "Malformed String2 SyntaxList"; []
     in
-    let s = syntax_of_token (trimLeft ~n:1 t) in
+    (* Trim the starting b and double quote *)
+    let left_trim = if (Token.text t).[0] = 'b' then 2 else 1 in
+    let s = make_token (trimLeft ~n:left_trim t) in
     if width s > 0 then s :: unwind ss else unwind ss
-  | ({ syntax = Token t; _ }::ss)
-  when t.PT.width > 3 && String.sub (PT.text t) 0 3 = "<<<" ->
+  | ({ syntax = Token t; _ } as node ::ss)
+  when (Token.width t) > 3 && String.sub (Token.text t) 0 3 = "<<<" ->
     let rec unwind = function
-      | [{ syntax = Token t; _ }] when t.PT.width > 0 ->
-        let content = PT.text t in
-        let len = t.PT.width in
-        let n = len - (String.rindex_from content (len - 2) '\n') in
-        let s = syntax_of_token (trimRight ~n t) in
+      | [{ syntax = Token t; _ }] when (Token.width t) > 0 ->
+        let content = Token.text t in
+        let len = (Token.width t) in
+        let n = len - (String.rindex_from_exn content (len - 2) '\n') in
+        let s = make_token (trimRight ~n t) in
         if width s > 0 then [s] else []
       | x :: xs -> x :: unwind xs
-      | _ -> raise (Invalid_argument "Malformed String2 SyntaxList")
+      | _ -> raise_parsing_error env (`Node node) "Malformed String2 SyntaxList"; []
     in
-    let content = PT.text t in
-    let n = (String.index content '\n') + 1 in
-    let s = syntax_of_token (trimLeft ~n t) in
+    let content = Token.text t in
+    let n = (String.index_exn content '\n') + 1 in
+    let s = make_token (trimLeft ~n t) in
     if width s > 0 then s :: unwind ss else unwind ss
   | x -> x (* unchanged *)
 
-let mkStr : (string -> string) -> string -> string = fun unescaper content ->
-  let no_quotes = try
-      if String.sub content 0 3 = "<<<" (* The heredoc case *)
-      then
-        (* These types of strings begin with an opening line containing <<<
-         * followed by a string to use as a terminator (which is optionally
-         * quoted) and end with a line containing only the terminator and a
-         * semicolon followed by a blank line. We need to drop the opening
-         * line as well as the blank line and preceding terminator line. *)
-        let len = String.length content in
-        let start = (String.index content '\n') + 1 in
-        let end_ = (String.rindex_from content (len - 2) '\n') in
-        let len = end_ - start in
-          String.sub content start len
-      else String.sub content 1 (String.length content - 2)
-    with
-    | Invalid_argument _ -> content
-  in
+let extract_unquoted_string ~start ~len content =
+  try (* Using String.sub; Invalid_argument when str too short *)
+    if len >= 3 && String.sub content start 3 = "<<<" (* The heredoc case *)
+    then
+       (* These types of strings begin with an opening line containing <<<
+        * followed by a string to use as a terminator (which is optionally
+        * quoted) and end with a line containing only the terminator and a
+        * semicolon followed by a blank line. We need to drop the opening line
+        * as well as the blank line and preceding terminator line.
+        *)
+       let start_ = String.index_from_exn content start '\n' + 1 in
+       let end_ = String.rindex_from_exn content (start + len - 2) '\n' in
+       (* An empty heredoc, this way, will have start >= end *)
+       if start_ >= end_ then "" else String.sub content start_ (end_ - start_)
+    else
+      match String.get content start, String.get content (start + len - 1) with
+        | '"', '"' | '\'', '\'' | '`', '`' ->
+            String.sub content (start + 1) (len - 2)
+        | _ ->
+            if start = 0 && len = String.length content then
+              content
+            else
+              String.sub content start len
+  with Invalid_argument _ | Not_found_s _ | Caml.Not_found -> content
+
+let mkStr env node : (string -> string) -> string -> string = fun unescaper content ->
+  let content = if String.length content > 0 && content.[0] = 'b'
+    then String.sub content 1 (String.length content - 1) else content in
+  let len = String.length content in
+  let no_quotes = extract_unquoted_string ~start:0 ~len content in
   try unescaper no_quotes with
-  | Php_escaping.Invalid_string _ -> raise @@
-      Failure (Printf.sprintf "Malformed string literal <<%s>>" no_quotes)
+  | Php_escaping.Invalid_string _ ->
+    raise_parsing_error env
+      (`Node node) (Printf.sprintf "Malformed string literal <<%s>>" no_quotes);
+    ""
+
 let unempty_str = function
   | "''" | "\"\"" -> ""
   | s -> s
 let unesc_dbl s = unempty_str @@ Php_escaping.unescape_double s
-let unesc_sgl s = unempty_str @@ Php_escaping.unescape_single s
-let unesc_xhp s =
-  let whitespace = Str.regexp "[ \t\n\r\012]+" in
-  let s = Str.global_replace whitespace " " s in
-  let quotes = Str.regexp " ?\"\\([^\"]*\\)\" ?" in
-  if Str.string_match quotes s 0
-  then Str.matched_group 1 s
-  else s
-let unesc_xhp_attr s =
+let get_quoted_content s =
   let open Str in
-  unesc_dbl @@
-    if string_match (regexp "[ \t\n\r\012]*\"\\(\\(.\\|\n\\)*\\)\"") s 0
-    then matched_group 1 s
-    else s
+  if string_match (quoted) s 0
+  then matched_group 1 s
+  else s
+let unesc_xhp s =
+  Str.global_replace whitespace " " s
+let unesc_xhp_attr s =
+  unesc_dbl @@ get_quoted_content s
 
 type suspension_kind =
   | SKSync
   | SKAsync
   | SKCoroutine
 
-let mk_suspension_kind async_node coroutine_node =
-  match is_missing async_node, is_missing coroutine_node with
-  | true, true -> SKSync
-  | false, true -> SKAsync
-  | true, false -> SKCoroutine
-  | false, false -> raise (Failure "Couroutine functions may not be async")
+let mk_suspension_kind_ node env has_async has_coroutine =
+  match has_async, has_coroutine with
+  | false, false -> SKSync
+  | true, false -> SKAsync
+  | false, true -> SKCoroutine
+  | true, true ->
+    raise_parsing_error env (`Node node) "Coroutine functions may not be async";
+    SKCoroutine
+
+let mk_suspension_kind node env is_async is_coroutine =
+  mk_suspension_kind_ node env
+    (not (is_missing is_async))
+    (not (is_missing is_coroutine))
 
 let mk_fun_kind suspension_kind yield =
   match suspension_kind, yield with
@@ -372,47 +699,68 @@ let mk_fun_kind suspension_kind yield =
   | SKAsync, true  -> FAsyncGenerator
   | SKSync,  false -> FSync
   | SKAsync, false -> FAsync
-  (* TODO(t17335630): Implement an FCoroutine fun_kind *)
-  | SKCoroutine, false -> assert false
-  | SKCoroutine, true -> raise (Failure "Couroutine functions may not yield")
+  | SKCoroutine, _ -> FCoroutine
+  (* Yield in coroutine is not permitted, the error will be reported at NastCheck *)
 
-let fun_template yielding node suspension_kind =
-  let p = get_pos node in
-  { f_mode            = !(lowerer_state.mode)
+let fun_template yielding node suspension_kind env =
+  let p = pFunction node env in
+  { f_mode            = mode_annotation env.fi_mode
   ; f_tparams         = []
   ; f_constrs         = []
   ; f_ret             = None
-  ; f_ret_by_ref      = false
   ; f_name            = p, ";anonymous"
   ; f_params          = []
   ; f_body            = []
   ; f_user_attributes = []
+  ; f_file_attributes = []
   ; f_fun_kind        = mk_fun_kind suspension_kind yielding
-  ; f_namespace       = Namespace_env.empty !(lowerer_state.popt)
+  ; f_namespace       = Namespace_env.empty env.parser_options
   ; f_span            = p
   ; f_doc_comment     = None
   ; f_static          = false
+  ; f_external        = false  (* true if this declaration has no body
+                                  because it is an external function declaration
+                                  (e.g. from an HHI file)*)
   }
 
-let param_template node =
+let param_template node env =
   { param_hint            = None
   ; param_is_reference    = false
   ; param_is_variadic     = false
-  ; param_id              = pos_name node
+  ; param_id              = pos_name node env
   ; param_expr            = None
   ; param_modifier        = None
+  ; param_callconv        = None
   ; param_user_attributes = []
   }
 
-let pShapeFieldName : shape_field_name parser = fun name _env ->
+let pShapeFieldName : shape_field_name parser = fun name env ->
+  let is_valid_shape_literal t =
+    let is_str =
+    (Token.kind t = TK.SingleQuotedStringLiteral ||
+    Token.kind t = TK.DoubleQuotedStringLiteral) in
+    let is_empty = let text = Token.text t in
+        text = "\'\'" || text = "\"\"" in
+    is_str && (not is_empty) in
   match syntax name with
   | ScopeResolutionExpression
     { scope_resolution_qualifier; scope_resolution_name; _ } ->
       SFclass_const
-      ( pos_name scope_resolution_qualifier
-      , pos_name scope_resolution_name
+      ( pos_name scope_resolution_qualifier env
+      , pos_name scope_resolution_name env
       )
-  | _ -> let p, n = pos_name name in SFlit (p, mkStr unesc_dbl n)
+  | LiteralExpression {
+      literal_expression = { syntax = Token t; _ }
+    } when is_valid_shape_literal t ->
+    let p, n = pos_name name env in
+    let str = mkStr env name unesc_dbl n in
+    begin match int_of_string_opt str with
+    | Some _ -> raise_parsing_error env (`Node name) SyntaxError.shape_field_int_like_string
+    | None -> () end;
+    SFlit_str (p, str)
+  | _ ->
+    raise_parsing_error env (`Node name) SyntaxError.invalid_shape_field_name;
+    let p, n = pos_name name env in SFlit_str (p, mkStr env name unesc_dbl n)
 
 let mpShapeExpressionField : ('a, (shape_field_name * 'a)) metaparser =
   fun hintParser node env ->
@@ -437,21 +785,88 @@ let mpShapeField : ('a, shape_field) metaparser =
         (* Shape expressions can never have optional fields. *)
         { sf_optional = false; sf_name; sf_hint }
 
+let mpClosureParameter : ('a, hint * param_kind option) metaparser =
+  fun hintParser node env ->
+    match syntax node with
+    | ClosureParameterTypeSpecifier
+      { closure_parameter_call_convention
+      ; closure_parameter_type
+      } ->
+        let cp_kind =
+          mpOptional pParamKind closure_parameter_call_convention env in
+        let cp_hint = hintParser closure_parameter_type env in
+        cp_hint, cp_kind
+    | _ -> missing_syntax "closure parameter" node env
+
+(* In some cases, we need to unwrap an extra layer of Block due to lowering
+ * from CompoundStatement. This applies to `if`, `while` and other control flow
+ * statements which allow optional curly braces.
+ *
+ * In other words, we want these to be lowered into the same Ast
+ * `if ($b) { func(); }` and `if ($b) func();`
+ * rather than the left hand side one having an extra `Block` in the Ast
+ *)
+let unwrap_extra_block (stmt : block) : block =
+  let de_noop = function
+  | [_, Noop] -> []
+  | stmts -> stmts
+  in
+  match stmt with
+  | [pos, Unsafe; _, Block b] -> (pos, Unsafe) :: de_noop b
+  | [_, Block b] -> de_noop b
+  | blk -> blk
+
+let fail_if_invalid_class_creation env node (_, id) =
+  if not !(env.in_static_method) then () else begin
+    if (id = SN.Classes.cSelf && not @@ SSet.is_empty !(env.cls_reified_generics)) ||
+      (id = SN.Classes.cParent && !(env.parent_maybe_reified)) then
+        raise_parsing_error env (`Node node) SyntaxError.static_method_reified_obj_creation;
+  end
+
+let fail_if_invalid_reified_generic env node (_, id) =
+  if not !(env.in_static_method) then () else begin
+    if SSet.mem id !(env.cls_reified_generics) then
+      raise_parsing_error env (`Node node) SyntaxError.cls_reified_generic_in_static_method
+  end
+
+let check_valid_reified_hint env node h =
+  if not !(env.in_static_method) then () else
+  let reified_hint_visitor = object(self) inherit [_] iter as super
+    method! on_hint env hint =
+      match snd hint with
+      | Happly (id, hl) ->
+        fail_if_invalid_reified_generic env node id;
+        List.iter hl ~f:(self#on_hint env)
+      | Haccess (id1, id2, ids) ->
+        fail_if_invalid_reified_generic env node id1;
+        fail_if_invalid_reified_generic env node id2;
+        List.iter ids ~f:(fail_if_invalid_reified_generic env node)
+      | _ -> super#on_hint env hint
+    end in
+  reified_hint_visitor#on_hint env h
+
 let rec pHint : hint parser = fun node env ->
   let rec pHint_ : hint_ parser = fun node env ->
     match syntax node with
     (* Dirty hack; CastExpression can have type represented by token *)
     | Token _
     | SimpleTypeSpecifier _
-      -> Happly (pos_name node, [])
+    | QualifiedName _
+      -> Happly (pos_name node env, [])
     | ShapeTypeSpecifier { shape_type_fields; shape_type_ellipsis; _ } ->
-      let si_allows_unknown_fields = not (is_missing shape_type_ellipsis) in
+      let si_allows_unknown_fields =
+        not (is_missing shape_type_ellipsis)
+      in
+      (* if last element lacks a separator and ellipsis is present, error *)
+      Option.iter (List.last (syntax_to_list true shape_type_fields)) (fun last ->
+        if is_missing last && si_allows_unknown_fields then
+        raise_parsing_error env (`Node node) SyntaxError.shape_type_ellipsis_without_trailing_comma
+      );
       let si_shape_field_list =
         couldMap ~f:(mpShapeField pHint) shape_type_fields env in
       Hshape { si_allows_unknown_fields; si_shape_field_list }
     | TupleTypeSpecifier { tuple_types; _ } ->
       Htuple (couldMap ~f:pHint tuple_types env)
-
     | KeysetTypeSpecifier { keyset_type_keyword = kw; keyset_type_type = ty; _ }
     | VectorTypeSpecifier { vector_type_keyword = kw; vector_type_type = ty; _ }
     | ClassnameTypeSpecifier {classname_keyword = kw; classname_type   = ty; _ }
@@ -467,7 +882,7 @@ let rec pHint : hint parser = fun node env ->
       { vector_array_keyword = kw
       ; vector_array_type    = ty
       ; _ }
-      -> Happly (pos_name kw, couldMap ~f:pHint ty env)
+      -> Happly (pos_name kw env, couldMap ~f:pHint ty env)
 
     | DarrayTypeSpecifier
       { darray_keyword = kw
@@ -480,80 +895,153 @@ let rec pHint : hint parser = fun node env ->
       ; map_array_value   = value
       ; _ } ->
         Happly
-        ( pos_name kw
-        , List.map ~f:(fun x -> pHint x env) [ key; value ]
+        ( pos_name kw env
+        , pHint key env :: couldMap ~f:pHint value env
         )
     | DictionaryTypeSpecifier
       { dictionary_type_keyword = kw
       ; dictionary_type_members = members
-      ; _ } -> Happly (pos_name kw, couldMap ~f:pHint members env)
+      ; _ } -> Happly (pos_name kw env, couldMap ~f:pHint members env)
     | GenericTypeSpecifier { generic_class_type; generic_argument_list } ->
-      Happly
-      ( pos_name generic_class_type
-      , match syntax generic_argument_list with
+      let name = pos_name generic_class_type env in
+      let type_args =
+        match syntax generic_argument_list with
         | TypeArguments { type_arguments_types; _ }
           -> couldMap ~f:pHint type_arguments_types env
         | _ -> missing_syntax "generic type arguments" generic_argument_list env
-      )
+      in
+      if env.codegen
+      then match String.lowercase (snd name), type_args with
+      | ("rx" | "rxlocal" | "rxshallow"), [_, (Hfun _ as t)]
+      | ("mutable" | "maybemutable" | "ownedmutable"), [_, (Happly _ as t)] -> t
+      | _ -> Happly(name, type_args)
+      else Happly(name, type_args)
     | NullableTypeSpecifier { nullable_type; _ } ->
       Hoption (pHint nullable_type env)
+    | LikeTypeSpecifier { like_type; _ } ->
+      Hlike (pHint like_type env)
     | SoftTypeSpecifier { soft_type; _ } ->
       Hsoft (pHint soft_type env)
-    | ClosureTypeSpecifier { closure_parameter_types; closure_return_type; _} ->
-      let param_types =
-        List.map ~f:(fun x -> pHint x env)
-          (as_list closure_parameter_types)
+    | ClosureTypeSpecifier {
+        closure_parameter_list;
+        closure_return_type;
+        closure_coroutine; _} ->
+      let make_variadic_hint variadic_type =
+        if is_missing variadic_type
+        then Hvariadic (None)
+        else Hvariadic (Some (pHint variadic_type env))
       in
-      let is_variadic_param x = snd x = Htuple [] in
+      let (param_list, variadic_hints) =
+        List.partition_map ~f:(fun x ->
+          match syntax x with
+          | VariadicParameter { variadic_parameter_type = vtype; _ } ->
+            `Snd (make_variadic_hint vtype)
+          | _ -> `Fst (mpClosureParameter pHint x env))
+        (as_list closure_parameter_list)
+      in
+      let hd_variadic_hint hints =
+        if List.length hints > 1 then begin
+          let msg = Printf.sprintf
+            "%d variadic parameters found. There should be no more than one."
+            (List.length hints)
+          in
+          invariant_failure node msg env
+        end;
+        match List.hd hints with
+        | Some h -> h
+        | None -> Hnon_variadic
+      in
+      let is_coroutine = not (is_missing closure_coroutine) in
+      let param_type_hints = List.map param_list fst in
+      let param_callconvs = List.map param_list snd in
       Hfun
-      ( List.filter ~f:(fun x -> not (is_variadic_param x)) param_types
-      , List.exists ~f:is_variadic_param param_types
+      ( is_coroutine
+      , param_type_hints
+      , param_callconvs
+      , hd_variadic_hint variadic_hints
       , pHint closure_return_type env
       )
     | TypeConstant { type_constant_left_type; type_constant_right_type; _ } ->
-      let child = pos_name type_constant_right_type in
+      let child = pos_name type_constant_right_type env in
       (match pHint_ type_constant_left_type env with
       | Haccess (b, c, cs) -> Haccess (b, c, cs @ [child])
       | Happly (b, []) -> Haccess (b, child, [])
       | _ -> missing_syntax "type constant base" node env
       )
-    | VariadicParameter _ ->
-      (* Clever trick warning: empty tuple types indicating variadic params *)
-      Htuple []
+    | ReifiedTypeArgument _ ->
+      raise_parsing_error env (`Node node) SyntaxError.invalid_reified;
+      missing_syntax "reified type" node env
     | _ -> missing_syntax "type hint" node env
   in
-  get_pos node, pHint_ node env
+  let hint = pPos node env, pHint_ node env in
+  check_valid_reified_hint env node hint;
+  hint
+
+let expand_type_args env ty or_else =
+  match syntax ty with
+  | TypeArguments { type_arguments_types; _ } ->
+    couldMap ~f:pHint type_arguments_types env
+  | _ -> or_else ()
 
 type fun_hdr =
   { fh_suspension_kind : suspension_kind
   ; fh_name            : pstring
+  ; fh_constrs         : (hint * constraint_kind * hint) list
   ; fh_type_parameters : tparam list
   ; fh_parameters      : fun_param list
   ; fh_return_type     : hint option
   ; fh_param_modifiers : fun_param list
-  ; fh_ret_by_ref      : bool
   }
 
 let empty_fun_hdr =
   { fh_suspension_kind = SKSync
   ; fh_name            = Pos.none, "<ANONYMOUS>"
+  ; fh_constrs         = []
   ; fh_type_parameters = []
   ; fh_parameters      = []
   ; fh_return_type     = None
   ; fh_param_modifiers = []
-  ; fh_ret_by_ref      = false
   }
+
+let check_intrinsic_type_arg_varity env node ty =
+  match ty with
+  | [tk;tv] -> Some (CollectionTKV (tk, tv))
+  | [tv] -> Some (CollectionTV tv)
+  | [] -> None
+  | _ -> raise_parsing_error env (`Node node)
+    SyntaxError.collection_intrinsic_many_typeargs;
+    None
+
 
 let rec pSimpleInitializer node env =
   match syntax node with
   | SimpleInitializer { simple_initializer_value; _ } ->
     pExpr simple_initializer_value env
   | _ -> missing_syntax "simple initializer" node env
+
+and pFunParamDefaultValue node env =
+  match syntax node with
+  | SimpleInitializer { simple_initializer_value; _ } ->
+    begin match syntax simple_initializer_value with
+    | ListExpression _ ->
+      raise_parsing_error env (`Node node) (SyntaxError.invalid_default_argument "A list destructuring")
+    | YieldExpression _
+    | YieldFromExpression _ ->
+      raise_parsing_error env (`Node node) (SyntaxError.invalid_default_argument "A yield")
+    | PrefixUnaryExpression {
+      prefix_unary_operator = { syntax = Token t; _ }; _ } when Token.kind t = TK.Await ->
+      raise_parsing_error env (`Node node) (SyntaxError.invalid_default_argument "An await")
+    | _ -> () end;
+    mpOptional pExpr simple_initializer_value env
+  | _ -> None
+
+
 and pFunParam : fun_param parser = fun node env ->
   match syntax node with
   | ParameterDeclaration
     { parameter_attribute
     ; parameter_visibility
+    ; parameter_call_convention
     ; parameter_type
     ; parameter_name
     ; parameter_default_value
@@ -582,11 +1070,11 @@ and pFunParam : fun_param parser = fun node env ->
     { param_hint            = mpOptional pHint parameter_type env
     ; param_is_reference    = is_reference
     ; param_is_variadic     = is_variadic
-    ; param_id              = pos_name name
-    ; param_expr            =
-      mpOptional pSimpleInitializer parameter_default_value env
-    ; param_user_attributes = List.concat @@
-      couldMap ~f:pUserAttribute parameter_attribute env
+    ; param_id              = pos_name name env
+    ; param_expr            = pFunParamDefaultValue parameter_default_value env
+    ; param_user_attributes = pUserAttributes env parameter_attribute
+    ; param_callconv        =
+      mpOptional pParamKind parameter_call_convention env
     (* implicit field via constructor parameter.
      * This is always None except for constructors and the modifier
      * can be only Public or Protected or Private.
@@ -594,97 +1082,147 @@ and pFunParam : fun_param parser = fun node env ->
     ; param_modifier =
       let rec go = function
       | [] -> None
-      | x :: _ when List.mem [Private; Public; Protected] x -> Some x
+      | x :: _ when List.mem [Private; Public; Protected] x ~equal:(=) -> Some x
       | _ :: xs -> go xs
       in
-      go (pKinds parameter_visibility env)
+      go (pKinds (fun _ -> ()) parameter_visibility env)
     }
   | VariadicParameter _
   | Token _ when text node = "..."
-    -> { (param_template node) with param_is_variadic = true }
+    -> { (param_template node env) with param_is_variadic = true }
   | _ -> missing_syntax "function parameter" node env
 and pUserAttribute : user_attribute list parser = fun node env ->
   match syntax node with
-  | AttributeSpecification { attribute_specification_attributes; _ } ->
-    couldMap attribute_specification_attributes env ~f:begin function
-      | { syntax = Attribute { attribute_name; attribute_values; _}; _ } ->
+  | FileAttributeSpecification { file_attribute_specification_attributes = attrs; _ }
+  | AttributeSpecification { attribute_specification_attributes = attrs; _ } ->
+    couldMap attrs env ~f:begin function
+      | { syntax = ConstructorCall { constructor_call_argument_list; constructor_call_type; _ }; _ } ->
         fun env ->
-          { ua_name   = pos_name attribute_name
-          ; ua_params = couldMap ~f:pExpr attribute_values env
-          }
+          let ua_name = pos_name constructor_call_type env in
+          let name = String.lowercase (snd ua_name) in
+          if name = "__reified" || name = "__hasreifiedparent" then
+            raise_parsing_error env (`Node node) SyntaxError.reified_attribute;
+          let ua_params = couldMap constructor_call_argument_list env
+            ~f:(fun p ->
+              begin match syntax p with
+              | ScopeResolutionExpression {
+                  scope_resolution_name = { syntax = Token t; _ }; _
+                } when Token.kind t = TK.Name ->
+                raise_parsing_error env (`Node p) SyntaxError.constants_as_attribute_arguments
+              | Token t when Token.kind t = TK.Name ->
+                raise_parsing_error env (`Node p) SyntaxError.constants_as_attribute_arguments
+              | _ -> () end;
+              pExpr p) in
+          { ua_name; ua_params }
       | node -> missing_syntax "attribute" node
     end
   | _ -> missing_syntax "attribute specification" node env
+
+and pUserAttributes env attrs =
+  List.concat @@ couldMap ~f:pUserAttribute attrs env
 and pAField : afield parser = fun node env ->
   match syntax node with
   | ElementInitializer { element_key; element_value; _ } ->
     AFkvalue (pExpr element_key env, pExpr element_value env)
   | _ -> AFvalue (pExpr node env)
-and pString2: node list -> env -> expr list =
-  let rec aux l env acc =
+and pString2: expr_location -> node list -> env -> expr list =
+  let rec convert_name_to_lvar location env n =
+    match syntax n with
+    | Token token when Token.kind token = TK.Name ->
+      let pos, name = pos_name n env in
+      let id = Lvar (pos, "$" ^ name) in
+      Some (pos, id)
+    | SubscriptExpression { subscript_receiver; subscript_index; _ } ->
+      begin match convert_name_to_lvar location env subscript_receiver with
+      | Some recv ->
+        let index = mpOptional (pExpr ~location) subscript_index env in
+        Some (pPos n env, Array_get (recv, index))
+      | _ -> None
+      end
+    | _ -> None in
+
+  let rec aux loc l env acc =
     (* in PHP "${x}" in strings is treated as if it was written "$x",
        here we recognize pattern: Dollar; EmbeddedBracedExpression { QName (Token.Name) }
        produced by FFP and lower it into Lvar.
     *)
     match l with
     | [] -> List.rev acc
-    | ({ syntax = Token { PT.kind = TK.Dollar; _ }; _ } as l)::
+    | ({ syntax = Token token; _ })::
       ({ syntax = EmbeddedBracedExpression {
-          embedded_braced_expression_expression = {
-            syntax = QualifiedNameExpression {
-              qualified_name_expression = {
-                syntax = Token { PT.kind = TK.Name; _ }
-                ; _ } as name
-              ; _ }
-            ; _ }
-          ; _ }
-       ; _ } as r)
-      ::tl ->
-        let pos, name = pos_name name in
-        let id = Lvar (pos, "$" ^ name) in
-        let left_pos = get_pos l in
-        let right_pos = get_pos r in
-        let pos =
-          if left_pos = Pos.none || right_pos = Pos.none then Pos.none
-          else
-            (* build final position as:
-            start_pos = start position of Dollar token
-            end_pos = end position pof embedded brace expression *)
-            let pos_file = Pos.filename left_pos in
-            let pos_start = Pos.pos_start left_pos in
-            let pos_end = Pos.pos_end right_pos in
-            Pos.make_from_file_pos ~pos_file ~pos_start ~pos_end
-        in
-        aux tl env ((pos, id)::acc)
-    | x::xs -> aux xs env ((pExpr ~top_level:false x env)::acc)
+          embedded_braced_expression_expression = e; _ }; _
+        } as expr_with_braces)::
+      tl when Token.kind token = TK.Dollar ->
+        let e =
+          begin match convert_name_to_lvar loc env e with
+          | Some e -> e
+          | None ->
+            raise_parsing_error env (`Node expr_with_braces)
+              SyntaxError.invalid_variable_variable;
+            pPos expr_with_braces env, Omitted
+          end in
+        aux loc tl env (e::acc)
+    | x::xs -> aux loc xs env ((pExpr ~location:loc x env)::acc)
   in
-  fun l env -> aux l env []
-and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
+  fun loc l env -> aux loc l env []
+and pExprL node env =
+  (pPos node env, Expr_list (couldMap ~f:pExpr node env))
+
+(* TODO: this function is a hotspot, deep recursion on huge files, attempt more optimization *)
+and pMember node env =
+  match syntax node with
+  | ElementInitializer { element_key; element_value; _ } ->
+    (pExpr element_key env, pExpr element_value env)
+  | _ -> missing_syntax "darray intrinsic expression element" node env
+
+and pExpr ?location:(location=TopLevel) : expr parser = fun node env ->
+  let split_args_varargs arg_list =
+    match List.rev (as_list arg_list) with
+    | { syntax = DecoratedExpression
+        { decorated_expression_decorator =
+          { syntax = Token token; _ }
+        ; decorated_expression_expression = e
+        }
+      ; _
+      } :: xs when Token.kind token = TK.DotDotDot ->
+      let args = List.rev_map xs (fun x -> pExpr x env) in
+      let vararg = pExpr e env in
+      args, [vararg]
+    | _ ->
+      let args = couldMap ~f:pExpr arg_list env in
+      args, [] in
   let rec pExpr_ : expr_ parser = fun node env ->
-    let pos = get_pos node in
-    match syntax node with
+    env.recursion_depth := !(env.recursion_depth) + 1;
+    if !(env.recursion_depth) > recursion_limit then
+      failwith "Expression recursion limit reached";
+    let pos = pPos node env in
+    let result = match syntax node with
     | LambdaExpression {
-        lambda_async; lambda_coroutine; lambda_signature; lambda_body; _ } ->
-      let suspension_kind =
-        mk_suspension_kind lambda_async lambda_coroutine in
+        lambda_async; lambda_coroutine; lambda_signature; lambda_body;
+        lambda_attribute_spec; _ } ->
+      let suspension_kind = mk_suspension_kind node env lambda_async lambda_coroutine in
       let f_params, f_ret =
         match syntax lambda_signature with
         | LambdaSignature { lambda_parameters; lambda_type; _ } ->
           ( couldMap ~f:pFunParam lambda_parameters env
           , mpOptional pHint lambda_type env
           )
-        | Token _ -> ([param_template lambda_signature], None)
+        | Token _ -> ([param_template lambda_signature env], None)
         | _ -> missing_syntax "lambda signature" lambda_signature env
       in
-      let pBody node env =
-        try mk_noop (pBlock node env) with
-        | _ ->
-          let (p,r) = pExpr node env in
-          [ Return (p, Some (p, r)) ]
+      let f_body, yield =
+        mpYielding pFunctionBody lambda_body
+          (if not (is_compound_statement lambda_body) then env else non_tls env)
       in
-      let f_body, yield = mpYielding pBody lambda_body env in
+      let f_external = is_semicolon lambda_body in
       Lfun
-      { (fun_template yield node suspension_kind) with f_ret; f_params; f_body }
+      { (fun_template yield node suspension_kind env) with
+        f_ret
+      ; f_params
+      ; f_body
+      ; f_user_attributes = pUserAttributes env lambda_attribute_spec
+      ; f_external
+      }
 
     | BracedExpression        { braced_expression_expression        = expr; _ }
     | EmbeddedBracedExpression
@@ -692,34 +1230,73 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
     | ParenthesizedExpression { parenthesized_expression_expression = expr; _ }
       -> pExpr_ expr env
 
-   | DictionaryIntrinsicExpression
+    | DictionaryIntrinsicExpression
       { dictionary_intrinsic_keyword = kw
+      ; dictionary_intrinsic_explicit_type = ty
       ; dictionary_intrinsic_members = members
       ; _ }
     | KeysetIntrinsicExpression
       { keyset_intrinsic_keyword = kw
+      ; keyset_intrinsic_explicit_type = ty
       ; keyset_intrinsic_members = members
       ; _ }
     | VectorIntrinsicExpression
       { vector_intrinsic_keyword = kw
+      ; vector_intrinsic_explicit_type = ty
       ; vector_intrinsic_members = members
       ; _ }
+      ->
+      if env.is_hh_file || env.enable_hh_syntax then
+        let hints = expand_type_args env ty (fun () -> []) in
+        let hints = check_intrinsic_type_arg_varity env node hints in
+        Collection (pos_name kw env, hints, couldMap ~f:pAField members env)
+      else
+        (* If php, this is a subscript expression, not a collection. *)
+        let subscript_receiver = pExpr kw env in
+        let members = couldMap ~f:pExpr members env in
+        let subscript_index = match members with
+        | [] -> None
+        | [x] -> Some x
+        | _ ->
+          let msg = "Hack keyword " ^ (text kw) ^ " used improperly in php." in
+          invariant_failure node msg env in
+        Array_get (subscript_receiver, subscript_index)
     | CollectionLiteralExpression
-      { collection_literal_name         = kw
+      { collection_literal_name         = collection_name
       ; collection_literal_initializers = members
-      ; _ }
-      -> Collection (pos_name kw, couldMap ~f:pAField members env)
+      ; _ } ->
+      let hints = None in
+      let collection_name, hints =
+        match syntax collection_name with
+        | SimpleTypeSpecifier { simple_type_specifier = class_type } ->
+          (pos_name class_type env), hints
+        | GenericTypeSpecifier { generic_class_type = class_type; generic_argument_list } ->
+          let hints = expand_type_args env generic_argument_list (fun () -> []) in
+          let hints = check_intrinsic_type_arg_varity env node hints in
+          (pos_name class_type env), hints
+        | _ -> (pos_name collection_name env), hints in
+      Collection (collection_name, hints, couldMap ~f:pAField members env)
 
-    | VarrayIntrinsicExpression { varray_intrinsic_members = members; _ } ->
-      Varray (couldMap ~f:pExpr members env)
-    | DarrayIntrinsicExpression { darray_intrinsic_members = members; _ } ->
-      let pMember node env =
-        match syntax node with
-        | ElementInitializer { element_key; element_value; _ } ->
-          (pExpr element_key env, pExpr element_value env)
-        | _ -> missing_syntax "darray intrinsic expression element" node env
-      in
-      Darray (couldMap ~f:pMember members env)
+    | VarrayIntrinsicExpression
+    { varray_intrinsic_members = members
+    ; varray_intrinsic_explicit_type = ty; _ } ->
+      let hints = expand_type_args env ty (fun () -> []) in
+      let hints = check_intrinsic_type_arg_varity env node hints in
+      let targ = match hints with
+        | Some CollectionTV ty -> Some ty
+        | None -> None
+        | _ -> missing_syntax "VarrayIntrinsicExpression type args" node env in
+      Varray (targ, couldMap ~f:pExpr members env)
+    | DarrayIntrinsicExpression
+    { darray_intrinsic_members = members
+    ; darray_intrinsic_explicit_type = ty; _ } ->
+      let hints = expand_type_args env ty (fun () -> []) in
+      let hints = check_intrinsic_type_arg_varity env node hints in
+      begin match hints with
+      | Some CollectionTKV (tk, tv) -> Darray(Some (tk, tv), couldMap ~f:pMember members env)
+      | None -> Darray(None, couldMap ~f:pMember members env)
+      | _ -> missing_syntax "DarrayIntrinsicExpression type args" node env
+      end
     | ArrayIntrinsicExpression { array_intrinsic_members = members; _ }
     | ArrayCreationExpression  { array_creation_members  = members; _ }
     ->
@@ -728,8 +1305,9 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
 
     | ListExpression { list_members = members; _ } ->
       (* TODO: Or tie in with other intrinsics and post-process to List *)
-      let pBinderOrIgnore node env =
-        Option.value ~default:(Pos.none, Omitted) @@ mpOptional pExpr node env
+      let pBinderOrIgnore node env = match syntax node with
+        | Missing -> (Pos.none, Omitted)
+        | _ -> pExpr node env
       in
       List (couldMap ~f:pBinderOrIgnore members env)
 
@@ -740,16 +1318,94 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
       { tuple_expression_keyword = recv
       ; tuple_expression_items   = args
       ; _ }
+      ->
+      let pos_if_has_parens =
+        match syntax recv with
+        | ParenthesizedExpression _ -> Some (pPos recv env)
+        | _ -> None in
+      let recv = pExpr recv env in
+      let recv =
+        match snd recv, pos_if_has_parens with
+        | (Obj_get _ | Class_get _), Some p -> p, ParenthesizedExpr recv
+        | _ -> recv in
+      let args, varargs = split_args_varargs args in
+      Call (recv, [], args, varargs)
+    | FunctionCallExpression
+      { function_call_receiver = recv
+      ; function_call_argument_list =
+        { syntax = SyntaxList
+          [ { syntax = ListItem
+              { list_item =
+                { syntax = LiteralExpression { literal_expression = expr }
+                ; _
+                }
+              ; _
+              }
+            ; _
+          } ]
+        ; _
+        }
+      ; _
+      } when text recv = "__hhas_adata"
+        && token_kind expr = Some TK.NowdocStringLiteral ->
+      let literal_expression_pos = pPos expr env in
+      let s =
+        expr
+          |> source_text
+          |> SourceText.text
+          |> extract_unquoted_string
+              ~start:(start_offset expr)
+              ~len:(width expr) in
+      Call (
+        pExpr recv env,
+        [],
+        [ literal_expression_pos, String s ],
+        []
+      )
     | FunctionCallExpression
       { function_call_receiver      = recv
+      ; function_call_type_args = type_args
       ; function_call_argument_list = args
       ; _ }
-      -> Call (pExpr recv env, [], couldMap ~f:pExpr args  env, [])
+      ->
+      let hints =
+        begin match (syntax recv), (syntax type_args) with
+          | _, TypeArguments { type_arguments_types; _ } ->
+            couldMap ~f:pHint type_arguments_types env
+          (* TODO might not be needed *)
+          | GenericTypeSpecifier { generic_argument_list; _ }, _ ->
+            begin match syntax generic_argument_list with
+              | TypeArguments { type_arguments_types; _ }
+                -> couldMap ~f:pHint type_arguments_types env
+              | _ -> []
+            end
+          | _ -> []
+        end
+      in
+      (* preserve parens on receiver of call expression
+         to allow distinguishing between
+         ($a->b)() // invoke on callable property
+         $a->b()   // method call *)
+      let pos_if_has_parens =
+        match syntax recv with
+        | ParenthesizedExpression _ -> Some (pPos recv env)
+        | _ -> None in
+      let recv = pExpr recv env in
+      let recv =
+        match snd recv, pos_if_has_parens with
+        | (Obj_get _ | Class_get _), Some p -> p, ParenthesizedExpr recv
+        | _ -> recv in
+      let args, varargs = split_args_varargs args in
+      Call (recv, hints, args, varargs)
+    | QualifiedName _ ->
+      if in_string location
+      then
+        let _, n = pos_qualified_name node env in
+        String n
+      else Id (pos_qualified_name node env)
 
-    | QualifiedNameExpression { qualified_name_expression } ->
-      Id (pos_name qualified_name_expression)
     | VariableExpression { variable_expression } ->
-      Lvar (pos_name variable_expression)
+      Lvar (pos_name variable_expression env)
 
     | PipeVariableExpression _ ->
       Lvar (pos, "$$")
@@ -775,7 +1431,13 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
       ; embedded_member_operator = op
       ; embedded_member_name     = name
       }
-      -> Obj_get (pExpr recv env, pExpr name env, pNullFlavor op env)
+      ->
+        if is_object_creation_expression recv && not env.codegen then
+        raise_parsing_error env (`Node recv) SyntaxError.invalid_constructor_method_call;
+        let recv = pExpr recv env in
+        let name = pExpr ~location:MemberSelect name env in
+        let op = pNullFlavor op env in
+        Obj_get (recv, name, op)
 
     | PrefixUnaryExpression
       { prefix_unary_operator = operator
@@ -798,7 +1460,8 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
          * fixities.
          *)
         let postfix = kind node = SyntaxKind.PostfixUnaryExpression in
-        (match token_kind operator with
+        let kind = token_kind operator in
+        (match kind with
         | Some TK.PlusPlus   when postfix -> Unop (Upincr, expr)
         | Some TK.MinusMinus when postfix -> Unop (Updecr, expr)
         | Some TK.PlusPlus                -> Unop (Uincr,  expr)
@@ -808,45 +1471,87 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
         | Some TK.Plus                    -> Unop (Uplus,  expr)
         | Some TK.Minus                   -> Unop (Uminus, expr)
         | Some TK.Ampersand               -> Unop (Uref,   expr)
-        | Some TK.DotDotDot               -> Unop (Usplat, expr)
-        | Some TK.At                      -> Unop (Usilence, expr)
-        | Some TK.Await                   -> Await expr
+        | Some TK.At     when env.codegen -> Unop (Usilence, expr)
+        | Some TK.At                      -> snd expr
+        | Some TK.Inout                   -> Callconv (Pinout, expr)
+        | Some TK.Await                   ->
+            begin match env.lifted_awaits with
+            | Some lifted_awaits ->
+                lift_await expr lifted_awaits ~with_temp_local:(location <> AsStatement)
+            | None -> Await expr
+            end
+        | Some TK.Suspend                 -> Suspend expr
         | Some TK.Clone                   -> Clone expr
         | Some TK.Print                   ->
           Call ((pos, Id (pos, "echo")), [], [expr], [])
         | Some TK.Dollar                  ->
-          (match snd expr with
-          | Lvarvar (n, id) -> Lvarvar (n + 1, id)
-          | Lvar id         -> Lvarvar (1, id)
-          | _ -> BracedExpr expr
+          (match expr with
+          | p, String s
+          | p, Int s
+          | p, Float s ->
+            if not env.codegen
+            then raise_parsing_error env (`Node operator) SyntaxError.invalid_variable_name;
+            Lvar (p, "$" ^ s)
+          | _ ->
+            raise_parsing_error env (`Node operator) SyntaxError.invalid_variable_variable;
+            Omitted
           )
+
         | _ -> missing_syntax "unary operator" node env
         )
     | BinaryExpression
       { binary_left_operand; binary_operator; binary_right_operand }
       ->
-        pBop binary_operator env
-          (pExpr binary_left_operand  env)
-          (pExpr binary_right_operand env)
+        let bop_ast_node =
+          let rlocation =
+            if location = AsStatement && token_kind binary_operator = Some TK.Equal
+            then RightOfAssignment else TopLevel in
+          pBop binary_operator env
+            (pExpr binary_left_operand  env)
+            (pExpr binary_right_operand ~location:rlocation env)
+        in
+        begin match env.inside_declare, bop_ast_node with
+        | false, Binop (Eq _, lhs, _) ->
+          Ast_check.check_lvalue (fun pos error -> raise_parsing_error env (`Pos pos) error) lhs
+        | _ -> ()
+        end;
+        bop_ast_node
 
-    | Token _ when top_level -> Id (pos_name node)
-    | Token _ -> String (pos, unesc_dbl (text node))
+    | Token t ->
+      (match location, Token.kind t with
+      | MemberSelect, TK.Variable -> Lvar (pos_name node env)
+      | InDoubleQuotedString, TK.HeredocStringLiteral
+      | InDoubleQuotedString, TK.HeredocStringLiteralHead
+      | InDoubleQuotedString, TK.HeredocStringLiteralTail ->
+          String (Php_escaping.unescape_heredoc (text node))
+      | InDoubleQuotedString, _ -> String (unesc_dbl (text node))
+      | InBacktickedString, _ -> String (Php_escaping.unescape_backtick (text node))
+      | MemberSelect, _
+      | TopLevel, _
+      | AsStatement, _
+      | RightOfAssignment, _
+      | RightOfReturn, _ -> Id (pos_name node env)
+      )
 
-    | YieldExpression { yield_operand; _ } when text yield_operand = "break" ->
-      env.saw_yield := true;
-      Yield_break
-    | YieldExpression { yield_operand; _ } when is_missing yield_operand ->
-      env.saw_yield := true;
-      Yield (AFvalue (pos, Null))
     | YieldExpression { yield_operand; _ } ->
-      env.saw_yield := true;
-      Yield (pAField yield_operand env)
+      env.saw_yield <- true;
+      if location <> AsStatement && location <> RightOfAssignment
+      then raise_parsing_error env (`Node node) SyntaxError.invalid_yield;
+      if text yield_operand = "break"
+      then Yield_break
+      else
+      if is_missing yield_operand
+      then Yield (AFvalue (pos, Null))
+      else Yield (pAField yield_operand env)
+
     | YieldFromExpression { yield_from_operand; _ } ->
-      env.saw_yield := true;
+      env.saw_yield <- true;
+      if location <> AsStatement && location <> RightOfAssignment && location <> RightOfReturn
+      then raise_parsing_error env (`Node node) SyntaxError.invalid_yield_from;
       Yield_from (pExpr yield_from_operand env)
 
     | DefineExpression { define_keyword; define_argument_list; _ } -> Call
-      ( (let name = pos_name define_keyword in fst name, Id name)
+      ( (let name = pos_name define_keyword env in fst name, Id name)
       , []
       , List.map ~f:(fun x -> pExpr x env) (as_list define_argument_list)
       , []
@@ -854,17 +1559,23 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
 
     | ScopeResolutionExpression
       { scope_resolution_qualifier; scope_resolution_name; _ } ->
-      let qual = pos_name scope_resolution_qualifier in
+      let qual =
+        match pExpr scope_resolution_qualifier env with
+        | p, Lvar v when not env.codegen -> p, Id v
+        | qual -> qual
+      in
       begin match syntax scope_resolution_name with
-      | Token { PositionedToken.kind = TK.Variable; _ } ->
+      | Token token when Token.kind token = TK.Variable ->
         let name =
-          get_pos scope_resolution_name, Lvar (pos_name scope_resolution_name)
+          ( pPos scope_resolution_name env
+          , Lvar (pos_name scope_resolution_name env)
+          )
         in
         Class_get (qual, name)
       | _ ->
         let name = pExpr scope_resolution_name env in
-        begin match snd name with
-        | Id id -> Class_const (qual, id)
+        begin match name with
+        | p, String id | _, Id (p, id) -> Class_const (qual, (p, id))
         | _ -> Class_get (qual, name)
         end
       end
@@ -886,18 +1597,20 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
       { embedded_subscript_receiver; embedded_subscript_index; _ } ->
       Array_get
       ( pExpr embedded_subscript_receiver env
-      , mpOptional pExpr embedded_subscript_index env
+      , mpOptional (pExpr ~location) embedded_subscript_index env
       )
     | ShapeExpression { shape_expression_fields; _ } ->
       Shape (
         couldMap ~f:(mpShapeExpressionField pExpr) shape_expression_fields env
       )
-    | ObjectCreationExpression
-      { object_creation_type; object_creation_argument_list; _ } ->
-      New
-      ( (match syntax object_creation_type with
+    | ObjectCreationExpression { object_creation_object = obj; _ } ->
+      pExpr_ obj env
+    | ConstructorCall
+      { constructor_call_argument_list; constructor_call_type; _ } ->
+      let args, varargs = split_args_varargs constructor_call_argument_list in
+      let e, hl = match syntax constructor_call_type with
         | GenericTypeSpecifier { generic_class_type; generic_argument_list } ->
-          let name = pos_name generic_class_type in
+          let name = pos_name generic_class_type env in
           let hints =
             match syntax generic_argument_list with
             | TypeArguments { type_arguments_types; _ }
@@ -905,138 +1618,211 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
             | _ ->
               missing_syntax "generic type arguments" generic_argument_list env
           in
-          fst name, Id_type_arguments (name, hints)
-        | QualifiedNameExpression _
-        | SimpleTypeSpecifier _
-        | Token _
-          -> let name = pos_name object_creation_type in fst name, Id name
-        | _ -> pExpr object_creation_type env
-        )
-      , couldMap ~f:pExpr object_creation_argument_list env
-      , []
+          (fst name, Id name), hints
+        | SimpleTypeSpecifier _ ->
+          let name = pos_name constructor_call_type env in
+          (fst name, Id name), []
+        | _ -> pExpr constructor_call_type env, [] in
+      (match snd e with
+      | Id name ->
+        fail_if_invalid_reified_generic env node name;
+        fail_if_invalid_class_creation env node name
+      | _ -> ());
+      New
+      ( e
+      , hl
+      , args
+      , varargs
       )
-    | GenericTypeSpecifier
-      { generic_class_type
-      ; generic_argument_list
-      } ->
-        let name = pos_name generic_class_type in
-        let hints =
-          match syntax generic_argument_list with
-          | TypeArguments { type_arguments_types; _ }
-            -> couldMap ~f:pHint type_arguments_types env
-          | _ ->
-            missing_syntax "generic type arguments" generic_argument_list env
-        in
-        Id_type_arguments (name, hints)
+    | GenericTypeSpecifier { generic_class_type; generic_argument_list } ->
+        if not (is_missing generic_argument_list) then
+          raise_parsing_error env (`Node generic_argument_list) SyntaxError.targs_not_allowed;
+        let name = pos_name generic_class_type env in
+        Id name
+    | RecordCreationExpression
+      { record_creation_type = rec_type
+      ; record_creation_members = members
+      ; _ } ->
+      let e = match syntax rec_type with
+      | SimpleTypeSpecifier _ ->
+        let name = pos_name rec_type env in
+        (fst name, Id name)
+      | _ -> pExpr rec_type env in
+      Record (e, couldMap ~f:pMember members env)
     | LiteralExpression { literal_expression = expr } ->
       (match syntax expr with
       | Token _ ->
         let s = text expr in
-        (* We allow underscores while lexing the integer literals. This function gets
-         * rid of them before the literal is created. *)
-        let eliminate_underscores s = s
-                                      |> Str.split (Str.regexp "_")
-                                      |> String.concat "" in
-        (* TODO(17796330): Get rid of linter functionality in the lowerer *)
-        if s <> String.lowercase s then Lint.lowercase_constant pos s;
-        (match token_kind expr with
-        | Some TK.DecimalLiteral
-        | Some TK.OctalLiteral
-        | Some TK.HexadecimalLiteral
-        | Some TK.BinaryLiteral             -> Int    (pos, eliminate_underscores s)
-        | Some TK.FloatingLiteral           -> Float  (pos, s)
-        | Some TK.SingleQuotedStringLiteral -> String (pos, mkStr unesc_sgl s)
-        | Some TK.DoubleQuotedStringLiteral
-        | Some TK.HeredocStringLiteral
-        | Some TK.NowdocStringLiteral       -> String (pos, mkStr unesc_dbl s)
-        | Some TK.NullLiteral               -> Null
-        | Some TK.BooleanLiteral            ->
-          (match String.lowercase_ascii s with
+        (match location, token_kind expr with
+        (* TODO(T21285960): Inside strings, int indices "should" be string indices *)
+        | InDoubleQuotedString, _ when env.codegen -> String (mkStr env expr unesc_dbl s)
+        | InBacktickedString, _ when env.codegen ->
+          String (mkStr env expr Php_escaping.unescape_backtick s)
+        | _, Some TK.OctalLiteral
+          when is_typechecker env &&
+            String_utils.fold_left ~f:(fun b c -> b || c = '8' || c = '9') ~acc:false s ->
+          raise_parsing_error env (`Node node) SyntaxError.invalid_octal_integer;
+          missing_syntax "octal int" expr env (* this should never get hit *)
+        | _, Some TK.DecimalLiteral
+        | _, Some TK.OctalLiteral
+        | _, Some TK.HexadecimalLiteral
+        (* We allow underscores while lexing the integer literals. This gets rid of them before
+         * the literal is created. *)
+        | _, Some TK.BinaryLiteral             -> Int    (Str.global_replace (underscore) "" s)
+        | _, Some TK.FloatingLiteral           -> Float  s
+        | _, Some TK.SingleQuotedStringLiteral ->
+          String (mkStr env expr Php_escaping.unescape_single s)
+        | _, Some TK.DoubleQuotedStringLiteral ->
+          String (mkStr env expr Php_escaping.unescape_double s)
+        | _, Some TK.HeredocStringLiteral      ->
+          String (mkStr env expr Php_escaping.unescape_heredoc s)
+        | _, Some TK.NowdocStringLiteral       ->
+          String (mkStr env expr Php_escaping.unescape_nowdoc s)
+        | _, Some TK.NullLiteral               ->
+          if not env.codegen && s <> String.lowercase s then
+            Lint.lowercase_constant pos s;
+          Null
+        | _, Some TK.BooleanLiteral            ->
+          if not env.codegen && s <> String.lowercase s then
+            Lint.lowercase_constant pos s;
+          (match String.lowercase s with
           | "false" -> False
           | "true"  -> True
           | _       -> missing_syntax ("boolean (not: " ^ s ^ ")") expr env
           )
         | _ -> missing_syntax "literal" expr env
         )
-
-      | SyntaxList ts -> String2 (pString2 (prepString2 ts) env)
+      | SyntaxList ts -> String2 (pString2 InDoubleQuotedString (prepString2 env ts) env)
       | _ -> missing_syntax "literal expression" expr env
       )
-
+    | PrefixedStringExpression
+      { prefixed_string_name = name
+      ; prefixed_string_str = str } ->
+        (* Temporarily allow only`re`- prefixed strings *)
+        let name_text = text name in
+        if name_text <> "re"
+        then raise_parsing_error env (`Node node) SyntaxError.non_re_prefix;
+        PrefixedString (text name, pExpr str env)
     | InstanceofExpression
       { instanceof_left_operand; instanceof_right_operand; _ } ->
       let ty =
         match pExpr instanceof_right_operand env with
-        | p, Class_const (pid, (_, "")) -> p, Id pid
+        | p, Class_const ((_, pid), (_, "")) -> p, pid
         | ty -> ty
       in
+      if ParserOptions.disable_instanceof env.parser_options then
+        raise_parsing_error env (`Node node) SyntaxError.instanceof_disabled;
       InstanceOf (pExpr instanceof_left_operand env, ty)
       (* TODO: Priority fix? *)
       (*match pExpr instanceof_left_operand env with
       | p, Unop (o,e) -> Unop (0, (p, InstanceOf (e, ty)))
       | e -> InstanceOf (e, ty)
       *)
+    | IsExpression
+      { is_left_operand; is_right_operand; _ } ->
+      Is (pExpr is_left_operand env, pHint is_right_operand env)
+    | AsExpression
+      { as_left_operand; as_right_operand; _ } ->
+      As (pExpr as_left_operand env, pHint as_right_operand env, false)
+    | NullableAsExpression
+      { nullable_as_left_operand; nullable_as_right_operand; _ } ->
+      As (pExpr nullable_as_left_operand env,
+          pHint nullable_as_right_operand env,
+          true)
     | AnonymousFunction
-      { anonymous_static_keyword
+      { anonymous_attribute_spec = attribute_spec
+      ; anonymous_static_keyword
       ; anonymous_async_keyword
       ; anonymous_coroutine_keyword
       ; anonymous_parameters
       ; anonymous_type
       ; anonymous_use
       ; anonymous_body
+      ; _ }
+    | Php7AnonymousFunction
+      { php7_anonymous_attribute_spec = attribute_spec
+      ; php7_anonymous_static_keyword = anonymous_static_keyword
+      ; php7_anonymous_async_keyword = anonymous_async_keyword
+      ; php7_anonymous_coroutine_keyword = anonymous_coroutine_keyword
+      ; php7_anonymous_parameters = anonymous_parameters
+      ; php7_anonymous_type = anonymous_type
+      ; php7_anonymous_use = anonymous_use
+      ; php7_anonymous_body = anonymous_body
       ; _ } ->
+        if (ParserOptions.disable_static_closures env.parser_options) &&
+           Some TK.Static = token_kind anonymous_static_keyword then
+        raise_parsing_error env (`Node node) SyntaxError.static_closures_are_disabled;
+        begin match syntax node with
+          | Php7AnonymousFunction _ when is_typechecker env ->
+            raise_parsing_error env (`Node node) SyntaxError.php7_anonymous_function
+          | _ -> ()
+        end;
         let pArg node env =
           match syntax node with
-          | PrefixUnaryExpression
-            { prefix_unary_operator = op; prefix_unary_operand = v } ->
-              pos_name v, token_kind op = Some TK.Ampersand
-          | Token _ -> pos_name node, false
+          | Token _ -> pos_name node env
           | _ -> missing_syntax "use variable" node env
-        in
+          in
         let pUse node =
           match syntax node with
           | AnonymousFunctionUseClause { anonymous_use_variables; _ } ->
             couldMap ~f:pArg anonymous_use_variables
           | _ -> fun _env -> []
-        in
+          in
         let suspension_kind =
           mk_suspension_kind
+            node
+            env
             anonymous_async_keyword
             anonymous_coroutine_keyword in
-        let body, yield = mpYielding pBlock anonymous_body env in
+        let f_body, yield =
+          mpYielding pFunctionBody anonymous_body (non_tls env)
+        in
+        let doc_comment = match extract_docblock node with
+          | Some _ as doc_comment -> doc_comment
+          | None -> top_docblock() in
+        let user_attributes = pUserAttributes env attribute_spec in
+        let f_external = is_semicolon anonymous_body in
         Efun
-        ( { (fun_template yield node suspension_kind) with
-            f_ret    = mpOptional pHint anonymous_type env
-          ; f_params = couldMap ~f:pFunParam anonymous_parameters env
-          ; f_body   = mk_noop body
-          ; f_static = not (is_missing anonymous_static_keyword)
+        ( { (fun_template yield node suspension_kind env) with
+            f_ret         = mpOptional pHint anonymous_type env
+          ; f_params      = couldMap ~f:pFunParam anonymous_parameters env
+          ; f_body
+          ; f_static      = not (is_missing anonymous_static_keyword)
+          ; f_doc_comment = doc_comment
+          ; f_user_attributes = user_attributes
+          ; f_external
           }
         , try pUse anonymous_use env with _ -> []
         )
 
     | AwaitableCreationExpression
-      { awaitable_async; awaitable_coroutine; awaitable_compound_statement } ->
+      { awaitable_async; awaitable_coroutine; awaitable_compound_statement;
+        awaitable_attribute_spec; } ->
       let suspension_kind =
-        mk_suspension_kind awaitable_async awaitable_coroutine in
-      let blk, yld = mpYielding pBlock awaitable_compound_statement env in
+        mk_suspension_kind node env awaitable_async awaitable_coroutine in
+      let blk, yld = mpYielding pFunctionBody awaitable_compound_statement env in
+      let user_attributes = pUserAttributes env awaitable_attribute_spec in
+      let f_external = is_semicolon awaitable_compound_statement in
       let body =
-        { (fun_template yld node suspension_kind) with f_body = mk_noop blk }
+        { (fun_template yld node suspension_kind env) with
+           f_body = mk_noop (pPos awaitable_compound_statement env) blk;
+           f_user_attributes = user_attributes;
+           f_external }
       in
-      Call ((get_pos node, Lfun body), [], [], [])
+      Call ((pPos node env, Lfun body), [], [], [])
     | XHPExpression
       { xhp_open =
         { syntax = XHPOpen { xhp_open_name; xhp_open_attributes; _ }; _ }
       ; xhp_body = body
       ; _ } ->
-      lowerer_state.ignorePos := false;
+      env.ignore_pos <- false;
       let name =
-        let pos, name = pos_name xhp_open_name in
+        let pos, name = pos_name xhp_open_name env in
         (pos, ":" ^ name)
       in
       let combine b e =
-        syntax_of_token PT.(
-          make (kind b) (source_text b) (leading_start_offset b)
-            (start_offset e - start_offset b + width e) (leading b) (trailing e)
+        make_token Token.(
+          concatenate b e
         )
       in
       let aggregate_tokens node =
@@ -1046,125 +1832,335 @@ and pExpr ?top_level:(top_level=true) : expr parser = fun node env ->
         | { syntax = Token b; _ } as t :: xs -> track t b None xs
         | x :: xs -> x :: search xs
         and track t b oe = function (* keep going through consecutive tokens *)
-        | { syntax = Token e; _ } :: xs -> track t b (Some e) xs
+        | { syntax = Token e; _ } :: xs
+          when Token.kind e <> TK.XHPComment -> track t b (Some e) xs
         | xs -> Option.value_map oe ~default:t ~f:(combine b) :: search xs
         in
         search (as_list node)
       in
       let pEmbedded escaper node env =
         match syntax node with
+        | Token token
+          when env.codegen && Token.kind token = TK.XHPStringLiteral ->
+          let p = pPos node env in
+          (* for XHP string literals (attribute values) just extract
+              value from quotes and decode HTML entities  *)
+          let text =
+            Html_entities.decode @@ get_quoted_content (full_text node) in
+          p, String text
+        | Token token
+          when env.codegen && Token.kind token = TK.XHPBody ->
+          let p = pPos node env in
+          (* for XHP body - only decode HTML entities *)
+          let text = Html_entities.decode @@ unesc_xhp (full_text node) in
+          p, String text
         | Token _ ->
-          let p = get_pos node in
-          p, String (p, escaper (full_text node))
-        | _ -> pExpr node env
+          let p = pPos node env in
+          p, String (escaper (full_text node))
+        | _ ->
+          match pExpr node env with
+          | _, BracedExpr e -> e
+          | e -> e
       in
       let pAttr = fun node env ->
         match syntax node with
-        | XHPAttribute { xhp_attribute_name; xhp_attribute_expression; _ } ->
-          ( pos_name xhp_attribute_name
-          , pEmbedded unesc_xhp_attr xhp_attribute_expression env
-          )
+        | XHPSimpleAttribute { xhp_simple_attribute_name; xhp_simple_attribute_expression; _ } ->
+          let name = pos_name xhp_simple_attribute_name env in
+          let expr =
+            if is_braced_expression xhp_simple_attribute_expression
+            && env.fi_mode = FileInfo.Mdecl && not env.codegen
+            then Pos.none, Null
+            else pEmbedded unesc_xhp_attr xhp_simple_attribute_expression env
+          in
+          Xhp_simple (name, expr)
+        | XHPSpreadAttribute { xhp_spread_attribute_expression; _ } ->
+          Xhp_spread ( pEmbedded unesc_xhp_attr xhp_spread_attribute_expression env )
         | _ -> missing_syntax "XHP attribute" node env
       in
-      Xml
-      ( name
-      , couldMap ~f:pAttr xhp_open_attributes env
-      , List.map ~f:(fun x -> pEmbedded unesc_xhp x env)
-          (aggregate_tokens body)
-      )
+      let attrs = couldMap ~f:pAttr xhp_open_attributes env in
+      let exprs =
+        List.map ~f:(fun x -> pEmbedded unesc_xhp x env) (aggregate_tokens body)
+      in
+      Xml (name, attrs, exprs)
+    (* Pocket Universes *)
+    | PocketAtomExpression { pocket_atom_expression; _ } ->
+      PU_atom (pos_name pocket_atom_expression env)
+    | PocketIdentifierExpression { pocket_identifier_qualifier;
+                                   pocket_identifier_field;
+                                   pocket_identifier_name; _ } ->
+      let qual =
+        match pExpr pocket_identifier_qualifier env with
+        | p, Lvar v when not env.codegen -> p, Id v
+        | qual -> qual in
+      let field =
+        let field = pExpr pocket_identifier_field env in
+        begin match field with
+          | p, String id | _, Id (p, id) -> (p, id)
+          | _ -> missing_syntax "PocketIdentifierExpression field" node env
+        end in
+      let name =
+        let name = pExpr pocket_identifier_name env in
+        begin match name with
+          | p, String id | _, Id (p, id) -> (p, id)
+          | _ -> missing_syntax "PocketIdentifierExpression name" node env
+        end in
+      PU_identifier (qual, field, name)
     (* FIXME; should this include Missing? ; "| Missing -> Null" *)
-    | _ -> missing_syntax "expression" node env
+    | _ -> missing_syntax ?fallback:(Some Null) "expression" node env
+    in
+    env.recursion_depth := !(env.recursion_depth) - 1;
+    assert (!(env.recursion_depth) >= 0);
+    result
   in
-  (* Since we need positions in XHP, regardless of the ignorePos flag, we
-   * parenthesise the call to pExpr_ so that the XHP expression case can flip
-   * the switch. The key part is that `get_pos node` happens before the old
-   * setting is restored.
-   *
-   * Evaluation order matters here!
-   *)
-  let local_ignore_pos = !(lowerer_state.ignorePos) in
-  let expr_ = pExpr_ node env in
-  let p = get_pos node in
-  lowerer_state.ignorePos := local_ignore_pos;
-  p, expr_
+  let outer_unsafes = env.unsafes in
+  let is_safe =
+    (* when in codegen ignore UNSAFE_EXPRs *)
+    if env.codegen then true
+    else
+    match leading_token node with
+    | None -> true
+    | Some t ->
+      let us =
+        if Token.has_trivia_kind t TriviaKind.UnsafeExpression
+        then Token.filter_leading_trivia_by_kind t TriviaKind.UnsafeExpression
+        else []
+      in
+      let f acc u = ISet.add (Trivia.start_offset u) acc in
+      let us = List.fold ~f ~init:ISet.empty us in
+      (* Have we already dealt with 'these' UNSAFE_EXPRs? *)
+      let us = ISet.diff us outer_unsafes in
+      let safe = ISet.is_empty us in
+      if not safe then env.unsafes <- ISet.union us outer_unsafes;
+      safe
+  in
+  let result =
+    match syntax node with
+    | BracedExpression        { braced_expression_expression        = expr; _ }
+    | ParenthesizedExpression { parenthesized_expression_expression = expr; _ }
+      -> (**
+          * Peeling off braced or parenthesised expresions. When there is XHP
+          * inside, we want the XHP node to have this own positions, rather than
+          * those of enclosing parenthesised/braced expressions.
+          *)
+         let inner = pExpr ~location expr env in
+         if Syntax.is_braced_expression node
+         then
+           (* We elide the braces in {$x}, as it makes compilation easier *)
+           begin match inner with
+           | _, (Lvar _ | String _ | Int _ | Float _ ) -> inner
+           | p, _ -> p, BracedExpr inner
+           end
+         else inner
+    | _ ->
+      (**
+       * Since we need positions in XHP, regardless of the ignore_pos flag, we
+       * parenthesise the call to pExpr_ so that the XHP expression case can
+       * flip the switch. The key part is that `pPos` happens before the old
+       * setting is restored.
+       *)
+      let local_ignore_pos = env.ignore_pos in
+      let expr_ = pExpr_ node env in
+      let p = pPos node env in
+      env.ignore_pos <- local_ignore_pos;
+      p, expr_
+  in
+  if is_safe then result else fst result, Unsafeexpr result
 and pBlock : block parser = fun node env ->
-   match pStmt node env with
-   | Block block -> List.filter ~f:(fun x -> x <> Noop) block
-   | stmt -> [stmt]
-and pStmt : stmt parser = fun node env ->
+   let rec fix_last acc = function
+   | x :: (_ :: _ as xs) -> fix_last (x::acc) xs
+   | [_, Block block] -> List.rev acc @ block
+   | stmt -> List.rev acc @ stmt
+   in
+   let stmt = pStmtUnsafe node env in
+   fix_last [] stmt
+and pFunctionBody : block parser = fun node env ->
   match syntax node with
-  | SwitchStatement { switch_expression; switch_sections; _ } ->
-    let pSwitchLabel : (block -> case) parser = fun node env cont ->
-      match syntax node with
-      | CaseLabel { case_expression; _ } ->
-        Case (pExpr case_expression env, cont)
-      | DefaultLabel _ -> Default cont
-      | _ -> missing_syntax "pSwitchLabel" node env
-    in
-    let pSwitchSection : case list parser = fun node env ->
-      match syntax node with
-      | SwitchSection { switch_section_labels; switch_section_statements; _ } ->
-        let rec null_out cont = function
-          | [x] -> [x cont]
-          | (x::xs) -> x [] :: null_out cont xs
-          | _ -> raise (Failure "Malformed block result")
-        in
-        let blk = couldMap ~f:pStmt switch_section_statements env in
-        null_out blk (couldMap ~f:pSwitchLabel switch_section_labels env)
-      | _ -> missing_syntax "switch section" node env
-    in
-    Switch
-    ( pExpr switch_expression env
-    , List.concat @@ couldMap ~f:pSwitchSection switch_sections env
-    )
+  | Missing -> []
+  | CompoundStatement
+    { compound_statements = {syntax = Missing; _}
+    ; compound_right_brace = { syntax = Token t; _ }
+    ; _} ->
+      [ Pos.none
+      , if Token.has_trivia_kind t TriviaKind.Unsafe then Unsafe else Noop
+      ]
+  | CompoundStatement {compound_statements = {syntax = SyntaxList [t]; _}; _}
+    when Syntax.is_specific_token TK.Yield t ->
+    env.saw_yield <- true;
+    [ Pos.none, Noop ]
+  | CompoundStatement _ ->
+    let block = with_new_nonconcurrent_scope env (fun () -> pBlock node env) in
+    if not env.top_level_statements
+    && (  env.fi_mode = FileInfo.Mdecl && not env.codegen
+       || env.quick_mode)
+    then [ Pos.none, Noop ]
+    else block
+  | _ ->
+    [lift_awaits_in_statement env Pos.none (fun () ->
+      let p, r = pExpr node env in
+      p, Return (Some (p, r))
+    )]
+and pStmtUnsafe : stmt list parser = fun node env ->
+  let stmt = pStmt node env in
+  match leading_token node with
+  | Some t when Token.has_trivia_kind t TriviaKind.Unsafe -> [Pos.none, Unsafe; stmt]
+  | _ -> [stmt]
+and pStmt : stmt parser = fun node env ->
+  clear_statement_scope env (fun () ->
+  extract_and_push_docblock node;
+  let pos = pPos node env in
+  let result = match syntax node with
+  | AlternateElseClause _ | AlternateIfStatement _ | AlternateElseifClause _
+  | AlternateLoopStatement _  | AlternateSwitchStatement _ when is_typechecker env ->
+    raise_parsing_error env (`Node node) SyntaxError.alternate_control_flow;
+    missing_syntax "alternative control flow" node env (* this should never get hit *)
+  | SwitchStatement { switch_expression=expr; switch_sections=sections; _ }
+  | AlternateSwitchStatement { alternate_switch_expression=expr;
+    alternate_switch_sections=sections; _ } ->
+    lift_awaits_in_statement env pos (fun () ->
+      let pSwitchLabel : (block -> case) parser = fun node env cont ->
+        match syntax node with
+        | CaseLabel { case_expression; _ } ->
+          Case (pExpr case_expression env, cont)
+        | DefaultLabel _ -> Default cont
+        | _ -> missing_syntax "switch label" node env
+      in
+      let pSwitchSection : case list parser = fun node env ->
+        match syntax node with
+        | SwitchSection
+          { switch_section_labels
+          ; switch_section_statements
+          ; switch_section_fallthrough
+          } ->
+          let rec null_out cont = function
+            | [x] -> [x cont]
+            | (x::xs) -> x [] :: null_out cont xs
+            | _ -> raise_parsing_error env (`Node node) "Malformed block result"; []
+          in
+          let blk = List.concat @@
+            couldMap ~f:pStmtUnsafe switch_section_statements env in
+          let blk =
+            if is_missing switch_section_fallthrough
+            then blk
+            else blk @ [Pos.none, Fallthrough]
+          in
+          null_out blk (couldMap ~f:pSwitchLabel switch_section_labels env)
+        | _ -> missing_syntax "switch section" node env
+      in
+      pos,
+      Switch
+      ( pExpr expr env
+      , List.concat @@ couldMap ~f:pSwitchSection sections env
+      ))
   | IfStatement
-    { if_condition; if_statement; if_elseif_clauses; if_else_clause; _ } ->
-    let pElseIf : (block -> block) parser = fun node env ->
-      match syntax node with
-      | ElseifClause { elseif_condition; elseif_statement; _ } ->
-        fun next_clause ->
-          [ If
-            ( pExpr elseif_condition env
-            , [ pStmt elseif_statement env ]
-            , next_clause
+    { if_condition=cond;
+      if_statement=stmt;
+      if_elseif_clauses=elseif_clause;
+      if_else_clause=else_clause; _ }
+  | AlternateIfStatement
+    { alternate_if_condition=cond;
+      alternate_if_statement=stmt;
+      alternate_if_elseif_clauses=elseif_clause;
+      alternate_if_else_clause=else_clause; _ } ->
+    lift_awaits_in_statement env pos (fun () ->
+      (* Because consistency is for the weak-willed, Parser_hack does *not*
+       * produce `Noop`s for compound statements **in if statements**
+       *)
+      let if_condition = pExpr cond env in
+      let if_statement = unwrap_extra_block @@ pStmtUnsafe stmt env in
+      let if_elseif_statement =
+        let pElseIf : (block -> block) parser = fun node env ->
+          match syntax node with
+          | ElseifClause { elseif_condition=ei_cond; elseif_statement=ei_stmt; _ }
+          | AlternateElseifClause { alternate_elseif_condition=ei_cond;
+            alternate_elseif_statement=ei_stmt; _ } ->
+            fun next_clause ->
+              let elseif_condition = pExpr ei_cond env in
+              let elseif_statement = unwrap_extra_block @@ pStmtUnsafe ei_stmt env in
+              [ pos, If (elseif_condition, elseif_statement, next_clause) ]
+          | _ -> missing_syntax "elseif clause" node env
+        in
+        List.fold_right ~f:(@@)
+            (couldMap ~f:pElseIf elseif_clause env)
+            ~init:( match syntax else_clause with
+              | ElseClause { else_statement=e_stmt; _ }
+              | AlternateElseClause { alternate_else_statement=e_stmt; _ } ->
+                unwrap_extra_block @@ pStmtUnsafe e_stmt env
+              | Missing -> [Pos.none, Noop]
+              | _ -> missing_syntax "else clause" else_clause env
             )
-          ]
-      | _ -> missing_syntax "elseif clause" node env
+      in
+      pos, If (if_condition, if_statement, if_elseif_statement))
+  | ExpressionStatement { expression_statement_expression = e; _ } ->
+    let f = fun () ->
+      if is_missing e
+      then pos, Noop
+      else pos, Expr (pExpr ~location:AsStatement e env) in
+    if is_simple_assignment_await_expression e || is_simple_await_expression e
+    then f ()
+    else lift_awaits_in_statement env pos f
+  | CompoundStatement { compound_statements; compound_right_brace; _ } ->
+    let tail =
+      match leading_token compound_right_brace with
+      | Some t when Token.has_trivia_kind t TriviaKind.Unsafe -> [pos, Unsafe]
+      | _ -> []
     in
-    If
-    ( pExpr if_condition env
-    , [ pStmt if_statement env ]
-    , List.fold_right ~f:(@@)
-        (couldMap ~f:pElseIf if_elseif_clauses env)
-        ~init:[ match syntax if_else_clause with
-          | ElseClause { else_statement; _ } -> pStmt else_statement env
-          | Missing -> Noop
-          | _ -> missing_syntax "else clause" if_else_clause env
-        ]
-    )
-  | ExpressionStatement { expression_statement_expression; _ } ->
-    if is_missing expression_statement_expression
-    then Noop
-    else Expr (pExpr expression_statement_expression env)
-  | CompoundStatement { compound_statements; _ } ->
-    Block (List.filter ~f:(fun x -> x <> Noop) @@
-      couldMap ~f:pStmt compound_statements env)
-  | ThrowStatement { throw_expression; _ } -> Throw (pExpr throw_expression env)
+    handle_loop_body pos compound_statements tail env
+  | AlternateLoopStatement { alternate_loop_statements; _ } ->
+    handle_loop_body pos alternate_loop_statements [] env
+  | SyntaxList _ ->
+    handle_loop_body pos node [] env
+  | ThrowStatement { throw_expression; _ } ->
+    lift_awaits_in_statement env pos (fun () ->
+      pos, Throw (pExpr throw_expression env))
   | DoStatement { do_body; do_condition; _ } ->
-    Do ([Block (pBlock do_body env)], pExpr do_condition env)
+    pos, Do (pBlock do_body env, pExpr do_condition env)
   | WhileStatement { while_condition; while_body; _ } ->
-    While (pExpr while_condition env, [ pStmt while_body env ])
+    pos, While (pExpr while_condition env, unwrap_extra_block @@ pStmtUnsafe while_body env)
+  | DeclareDirectiveStatement { declare_directive_expression; _ } ->
+    pos, Declare (false, pExpr declare_directive_expression { env with inside_declare = true }, [])
+  | DeclareBlockStatement { declare_block_expression; declare_block_body; _ } ->
+    let env = { env with inside_declare = true } in
+    pos, Declare (true, pExpr declare_block_expression env,
+             unwrap_extra_block @@ pStmtUnsafe declare_block_body env)
+  | UsingStatementBlockScoped
+    { using_block_await_keyword
+    ; using_block_expressions
+    ; using_block_body
+    ; _ } ->
+    pos, Using {
+      us_is_block_scoped = true;
+      us_has_await = not (is_missing using_block_await_keyword);
+      us_expr = pExprL using_block_expressions env;
+      us_block = pBlock using_block_body env;
+    }
+  | UsingStatementFunctionScoped
+    { using_function_await_keyword
+    ; using_function_expression
+    ; _ } ->
+    (* All regular function scoped using statements should
+     * be rewritten by this point
+     * If this gets run, it means that this using statement is the only one
+     * in the block, hence it is not in a compound statement *)
+     pos, Using {
+       us_is_block_scoped = false;
+       us_has_await = not (is_missing using_function_await_keyword);
+       us_expr = pExpr using_function_expression env;
+       us_block = [Pos.none, Noop];
+     }
+  | LetStatement
+    { let_statement_name; let_statement_type; let_statement_initializer; _ } ->
+    let id = pos_name let_statement_name env in
+    let ty = mpOptional pHint let_statement_type env in
+    let expr = pSimpleInitializer let_statement_initializer env in
+    pos, Let (id, ty, expr)
   | ForStatement
     { for_initializer; for_control; for_end_of_loop; for_body; _ } ->
-    let pExprL node env =
-      (get_pos node, Expr_list (couldMap ~f:pExpr node env))
-    in
-    For
-    ( pExprL for_initializer env
-    , pExprL for_control env
-    , pExprL for_end_of_loop env
-    , [Block (pBlock for_body env)]
-    )
+    lift_awaits_in_statement env pos (fun () ->
+      let ini = pExprL for_initializer env in
+      let ctr = pExprL for_control env in
+      let eol = pExprL for_end_of_loop env in
+      let blk = unwrap_extra_block @@ pStmtUnsafe for_body env in
+      pos, For (ini, ctr, eol, blk))
   | ForeachStatement
     { foreach_collection
     ; foreach_await_keyword
@@ -1172,100 +2168,183 @@ and pStmt : stmt parser = fun node env ->
     ; foreach_value
     ; foreach_body
     ; _ } ->
-      Foreach
-      ( pExpr foreach_collection env
-      , ( if token_kind foreach_await_keyword = Some TK.Await
-          then Some (get_pos foreach_await_keyword)
-          else None
-        )
-      , ( let value = pExpr foreach_value env in
-          Option.value_map (mpOptional pExpr foreach_key env)
-            ~default:(As_v value)
-            ~f:(fun key -> As_kv (key, value))
-        )
-      , [ pStmt foreach_body env ]
-      )
+    lift_awaits_in_statement env pos (fun () ->
+      let col = pExpr foreach_collection env in
+      let akw =
+        match syntax foreach_await_keyword with
+        | Token token when Token.kind token = TK.Await ->
+          Some (pPos foreach_await_keyword env)
+        | _ -> None
+      in
+      let akv =
+        let value = pExpr foreach_value env in
+        match syntax foreach_key with
+          | Missing -> As_v value
+          | _ ->
+            let key = pExpr foreach_key env in
+            As_kv (key, value)
+      in
+      let blk = unwrap_extra_block @@ pStmtUnsafe foreach_body env in
+      pos, Foreach (col, akw, akv, blk)
+    )
   | TryStatement
     { try_compound_statement; try_catch_clauses; try_finally_clause; _ } ->
-    Try
-    ( [ Block (pBlock try_compound_statement env) ]
+    pos, Try
+    ( pBlock try_compound_statement env
     , couldMap try_catch_clauses env ~f:begin fun node env ->
       match syntax node with
       | CatchClause { catch_type; catch_variable; catch_body; _ } ->
-        ( pos_name catch_type
-        , pos_name catch_variable
-        , [ Block (mpStripNoop pBlock catch_body env) ]
+        ( pos_name catch_type env
+        , pos_name catch_variable env
+        , mpStripNoop pBlock catch_body env
         )
       | _ -> missing_syntax "catch clause" node env
       end
     , match syntax try_finally_clause with
-      | FinallyClause { finally_body; _ } -> [ Block (pBlock finally_body env) ]
+      | FinallyClause { finally_body; _ } ->
+        pBlock finally_body env
       | _ -> []
     )
-  | FunctionStaticStatement { static_declarations; _ } ->
-    let pStaticDeclarator node env =
-      match syntax node with
-      | StaticDeclarator { static_name; static_initializer } ->
-        let lhs =
-          match pExpr static_name env with
-          | p, Id (p', s) -> p, Lvar (p', s)
-          | x -> x
-        in
-        (match syntax static_initializer with
-        | SimpleInitializer { simple_initializer_value; _ } ->
-          ( get_pos static_initializer
-          , Binop (Eq None, lhs, pExpr simple_initializer_value env)
-          )
-        | _ -> lhs
-        )
-      | _ -> missing_syntax "static declarator" node env
-    in
-    Static_var (couldMap ~f:pStaticDeclarator static_declarations env)
-  | ReturnStatement { return_expression; _ } -> Return
-      ( get_pos return_expression
-      , mpOptional pExpr return_expression env
-      )
-  | Full_fidelity_positioned_syntax.GotoLabel { goto_label_name; _ } ->
-    let pos = get_pos goto_label_name in
+  | ReturnStatement { return_expression; _ } ->
+    let f = fun () ->
+      let expr = match syntax return_expression with
+        | Missing -> None
+        | _ -> Some (pExpr ~location:RightOfReturn return_expression env)
+      in
+      pos, Return (expr) in
+    if is_simple_await_expression return_expression
+    then f ()
+    else lift_awaits_in_statement env pos f
+  | Syntax.GotoLabel { goto_label_name; _ } ->
+    let pos_label = pPos goto_label_name env in
     let label_name = text goto_label_name in
-    Ast.GotoLabel (pos, label_name)
+    pos, Ast.GotoLabel (pos_label, label_name)
   | GotoStatement { goto_statement_label_name; _ } ->
-    Goto  (pos_name goto_statement_label_name)
+    if is_typechecker env && not (ParserOptions.allow_goto env.parser_options)
+    then raise_parsing_error env (`Node node) SyntaxError.goto;
+    pos, Goto  (pos_name goto_statement_label_name env)
   | EchoStatement  { echo_keyword  = kw; echo_expressions = exprs; _ }
   | UnsetStatement { unset_keyword = kw; unset_variables  = exprs; _ }
-    -> Expr
-      ( get_pos node
+    -> lift_awaits_in_statement env pos (fun () -> pos, Expr
+      ( pPos node env
       , Call
         ( (match syntax kw with
-          | QualifiedNameExpression _
+          | QualifiedName _
           | SimpleTypeSpecifier _
           | Token _
-            -> let name = pos_name kw in fst name, Id name
+            -> let name = pos_name kw env in fst name, Id name
           | _ -> missing_syntax "id" kw env
           )
         , []
         , couldMap ~f:pExpr exprs env
         , []
-      ))
+      )))
   | BreakStatement { break_level=level; _ } ->
-    Break (get_pos node, pBreak_or_continue_level env level)
+    pos, Break (pBreak_or_continue_level env level)
   | ContinueStatement { continue_level=level; _ } ->
-    Continue (get_pos node, pBreak_or_continue_level env level)
-  | GlobalStatement { global_variables; _ } ->
-    Global_var (couldMap ~f:pExpr global_variables env)
+    pos, Continue (pBreak_or_continue_level env level)
+  | ConcurrentStatement { concurrent_statement=concurrent_stmt; _ } ->
+    if not (ParserOptions.enable_concurrent env.parser_options) then
+      raise_parsing_error env (`Node node) SyntaxError.concurrent_is_disabled;
+
+    let (lifted_awaits, stmt) =
+      with_new_concurrent_scope env (fun () -> pStmt concurrent_stmt env) in
+    (* lifted awaits are accumulated in reverse *)
+    let stmt = match stmt with
+    | pos, Block stmts ->
+      let body_stmts, assign_stmts, _ =
+        List.fold_left ~init:([], [], 1)
+          ~f:(fun (body_stmts, assign_stmts, i) n ->
+            match n with
+            | (p1, Expr (p2, Binop ((Eq op), e1, e2))) ->
+              let name = make_tmp_var_name i in
+              let tmp_n = Pos.none, Lvar (Pos.none, name) in
+              let body_stmts =
+                match tmp_n, e2 with
+                | (_, Lvar (_, name1)), (_, Lvar (_, name2))
+                  when name1 = name2 ->
+                  body_stmts
+                | _ ->
+                  let new_n = (p1, Expr (Pos.none, Binop ((Eq None), tmp_n, e2))) in
+                  new_n :: body_stmts in
+
+              let assign_stmt = (p1, Expr (p2, Binop ((Eq op), e1, tmp_n))) in
+              (body_stmts, assign_stmt :: assign_stmts, i + 1)
+            | _ -> (n :: body_stmts, assign_stmts, i)
+          ) stmts in
+      pos, Block (List.concat [List.rev body_stmts; List.rev assign_stmts])
+    | _ -> failwith "Unexpected concurrent stmt structure" in
+
+    pos, Awaitall ((List.rev lifted_awaits.awaits), [stmt])
   | MarkupSection _ -> pMarkup node env
-  | _ when env.max_depth > 0 ->
+  | _ when env.max_depth > 0 && env.codegen ->
     (* OCaml optimisers; Forgive them, for they know not what they do!
      *
      * The max_depth is only there to stop the *optimised* version from an
      * unbounded recursion. Sad times.
+     *
+     * As for the code gen check, we only want to have a blanket assumption that
+     * a statement we don't recognize is an inline definition when we're in
+     * code generation mode, since typechecking runs with env.codegen set to
+     * false, and typechecking needs to support ASTs with missing nodes to
+     * support IDE features, such as autocomplete.
      *)
-    Def_inline (pDef node { env with max_depth = env.max_depth - 1 })
-  | _ -> missing_syntax "statement" node env
+    let outer_max_depth = env.max_depth in
+    let () = env.max_depth <- outer_max_depth - 1 in
+    let result =
+      match pDef node env with
+      | [def] -> pos, Def_inline def
+      | _ -> failwith "This should be impossible; inline definition was list."
+    in
+    let () = env.max_depth <- outer_max_depth in
+    result
+  | _ -> missing_syntax ?fallback:(Some (Pos.none,Noop)) "statement" node env in
+  pop_docblock ();
+  result)
+
+and lift_awaits_in_statement env pos f =
+  let (lifted_awaits, result) =
+    with_new_statement_scope env f in
+
+  match lifted_awaits with
+  | None -> result
+  | Some lifted_awaits ->
+    (* lifted awaits are accumulated in reverse *)
+    pos, Awaitall ((List.rev lifted_awaits.awaits), [result])
+
+and is_simple_await_expression e =
+  match syntax e with
+  | PrefixUnaryExpression { prefix_unary_operator = operator; _ } ->
+    token_kind operator = Some TK.Await
+  | _ ->
+    false
+
+and is_simple_assignment_await_expression e =
+  match syntax e with
+  | BinaryExpression { binary_operator; binary_right_operand; _ } ->
+    is_simple_await_expression binary_right_operand &&
+    token_kind binary_operator = Some TK.Equal
+  | _ ->
+    false
+
+and is_hashbang text =
+  match Syntax.extract_text text with
+  | None -> false
+  | Some text ->
+    let count = List.length @@ String_utils.split_on_newlines text in
+    count = 1 && Str.string_match hashbang text 0 && String.equal (Str.matched_string text) text
 
 and pMarkup node env =
   match syntax node with
-  | MarkupSection { markup_text; markup_expression; _ } ->
+  | MarkupSection { markup_prefix; markup_text; markup_expression; _ } ->
+    let pos = pPos node env in
+    let filename = Pos.filename pos in
+    let has_dot_hack_extension = String_utils.string_ends_with (Relative_path.suffix filename) ".hack" in
+    if env.is_hh_file then
+      if has_dot_hack_extension then
+        raise_parsing_error env (`Node node) SyntaxError.error1060
+      else if is_missing markup_prefix && width markup_text > 0 && not (is_hashbang markup_text) then
+        raise_parsing_error env (`Node node) SyntaxError.error1001;
     let expr =
       match syntax markup_expression with
       | Missing -> None
@@ -1274,13 +2353,11 @@ and pMarkup node env =
         ; _} -> Some (pExpr e env)
       | _ -> failwith "expression expected"
     in
-    Markup ((get_pos node, text markup_text), expr)
+    pos, Markup ((pos, text markup_text), expr)
   | _ -> failwith "invalid node"
 
 and pBreak_or_continue_level env level =
-  match mpOptional pExpr level env with
-  | Some (_, Int(_, s)) -> Some (int_of_string s)
-  | _ -> None
+  mpOptional pExpr level env
 
 and pTConstraintTy : hint parser = fun node ->
   match syntax node with
@@ -1294,24 +2371,34 @@ and pTConstraint : (constraint_kind * hint) parser = fun node env ->
       | Some TK.As    -> Constraint_as
       | Some TK.Super -> Constraint_super
       | Some TK.Equal -> Constraint_eq
+      | Some TK.From  -> Constraint_pu_from
       | _ -> missing_syntax "constraint operator" constraint_keyword env
       )
     , pHint constraint_type env
     )
   | _ -> missing_syntax "type constraint" node env
 
-and pTParaml : tparam list parser = fun node env ->
+and pTParaml ?(is_class=false): tparam list parser = fun node env ->
   let pTParam : tparam parser = fun node env ->
     match syntax node with
-    | TypeParameter { type_variance; type_name; type_constraints } ->
-      ( (match token_kind type_variance with
+    | TypeParameter
+      { type_attribute_spec; type_reified; type_variance; type_name; type_constraints } ->
+      let attributes = pUserAttributes env type_attribute_spec in
+      let is_reified = not @@ is_missing type_reified in
+      if is_class && is_reified then
+        env.cls_reified_generics := SSet.add (text type_name) !(env.cls_reified_generics);
+      let variance = match token_kind type_variance with
         | Some TK.Plus  -> Covariant
         | Some TK.Minus -> Contravariant
-        | _ -> Invariant
-        )
-      , pos_name type_name
-      , couldMap ~f:pTConstraint type_constraints env
-      )
+        | _ -> Invariant in
+      if is_reified && variance <> Invariant then
+        raise_parsing_error env (`Node node) SyntaxError.non_invariant_reified_generic;
+      { tp_variance = variance
+      ; tp_name = pos_name type_name env
+      ; tp_constraints = couldMap ~f:pTConstraint type_constraints env
+      ; tp_reified = is_reified
+      ; tp_user_attributes = attributes
+      }
     | _ -> missing_syntax "type parameter" node env
   in
   match syntax node with
@@ -1320,35 +2407,69 @@ and pTParaml : tparam list parser = fun node env ->
     couldMap ~f:pTParam type_parameters_parameters env
   | _ -> missing_syntax "type parameter list" node env
 
-(* TODO: Translate the where clause *)
-and pFunHdr : fun_hdr parser = fun node env ->
+and pFunHdr check_modifier : fun_hdr parser = fun node env ->
   match syntax node with
   | FunctionDeclarationHeader
-    { function_async
-    ; function_coroutine
-    ; function_ampersand
+    { function_modifiers
     ; function_name
+    ; function_where_clause
     ; function_type_parameter_list
     ; function_parameter_list
     ; function_type
     ; _ } ->
+      let is_autoload =
+        String.lowercase @@ (text function_name)
+          = Naming_special_names.SpecialFunctions.autoload in
+      if is_missing function_name then
+        raise_parsing_error env (`Node function_name) SyntaxError.empty_method_name;
+      let num_params = List.length (syntax_to_list_no_separators function_parameter_list) in
+      if is_autoload && num_params > 1 then
+        raise_parsing_error env (`Node node) SyntaxError.autoload_takes_one_argument;
+      let modifiers = pModifiers check_modifier function_modifiers env in
       let fh_parameters = couldMap ~f:pFunParam function_parameter_list env in
       let fh_return_type = mpOptional pHint function_type env in
       let fh_suspension_kind =
-        mk_suspension_kind function_async function_coroutine in
-      let fh_name = pos_name function_name in
+        mk_suspension_kind_ node env modifiers.has_async modifiers.has_coroutine in
+      let fh_name = pos_name function_name env in
+      let fh_constrs =
+        match syntax function_where_clause with
+        | Missing -> []
+        | WhereClause { where_clause_constraints; _ } ->
+          let rec f node =
+            match syntax node with
+            | ListItem { list_item; _ } -> f list_item
+            | WhereConstraint
+              { where_constraint_left_type
+              ; where_constraint_operator
+              ; where_constraint_right_type
+              } ->
+                let l = pHint where_constraint_left_type env in
+                let o =
+                  match syntax where_constraint_operator with
+                  | Token token when Token.kind token = TK.Equal ->
+                    Constraint_eq
+                  | Token token when Token.kind token = TK.As -> Constraint_as
+                  | Token token when Token.kind token = TK.Super -> Constraint_super
+                  | _ -> missing_syntax "constraint operator" where_constraint_operator env
+                in
+                let r = pHint where_constraint_right_type env in
+                (l,o,r)
+            | _ -> missing_syntax "where constraint" node env
+          in
+          List.map ~f (syntax_node_to_list where_clause_constraints)
+        | _ -> missing_syntax "function header constraints" node env
+      in
       let fh_type_parameters = pTParaml function_type_parameter_list env in
       let fh_param_modifiers =
         List.filter ~f:(fun p -> Option.is_some p.param_modifier) fh_parameters
       in
-      let fh_ret_by_ref = is_ret_by_ref function_ampersand in
       { fh_suspension_kind
       ; fh_name
+      ; fh_constrs
       ; fh_type_parameters
       ; fh_parameters
       ; fh_return_type
       ; fh_param_modifiers
-      ; fh_ret_by_ref
       }
   | LambdaSignature { lambda_parameters; lambda_type; _ } ->
     { empty_fun_hdr with
@@ -1357,6 +2478,8 @@ and pFunHdr : fun_hdr parser = fun node env ->
     }
   | Token _ -> empty_fun_hdr
   | _ -> missing_syntax "function header" node env
+
+and docblock_stack = Caml.Stack.create ()
 
 and extract_docblock = fun node ->
   let source_text = leading_text node in
@@ -1387,7 +2510,9 @@ and extract_docblock = fun node ->
           | `MaybeDoc, '*'              -> go start `MaybeDoc2   next
           | `MaybeDoc, _                -> go start `EmbeddedCmt next
           | `MaybeDoc2, '/'             -> go next  `Free        next
-          | `MaybeDoc2, _               -> go start `DocComment  next
+          (* Doc comments have a space after the second star *)
+          | `MaybeDoc2, (' ' | '\t' | '\n' | '\r') -> go start `DocComment idx
+          | `MaybeDoc2, _               -> go start `EmbeddedCmt  next
           | `DocComment, '*'            -> go start `EndDoc      next
           | `DocComment, _              -> go start `DocComment  next
           | `EndDoc, _                  -> go start `DocComment  next
@@ -1396,7 +2521,7 @@ and extract_docblock = fun node ->
           | `EndEmbedded, '*'           -> go start `EndEmbedded next
           | `EndEmbedded,  _            -> go start `EmbeddedCmt next
           (* Whitespace skips everywhere else *)
-          | _, (' ' | '\t' | '\n')      -> go start state        next
+          | _, (' ' | '\t' | '\n' | '\r')      -> go start state        next
           (* When scanning comments, anything else is accepted *)
           | `LineCmt,     _             -> go start state        next
           | `EmbeddedCmt, _             -> go start state        next
@@ -1408,9 +2533,51 @@ and extract_docblock = fun node ->
   in (* Now that we have a parser *)
   parse (leading_text node)
 
+and extract_and_push_docblock node =
+  let docblock = extract_docblock node in
+  Caml.Stack.push docblock docblock_stack
+
+and handle_loop_body pos stmts tail env =
+  let rec conv acc stmts =
+    match stmts with
+    | [] -> List.concat @@ List.rev acc
+    | { syntax = UsingStatementFunctionScoped
+        { using_function_await_keyword = await_kw
+        ; using_function_expression = expression
+        ; _ }
+      ; _ } :: rest ->
+      let body = conv [] rest in
+      let using = Using {
+        us_is_block_scoped = false;
+        us_has_await = not (is_missing await_kw);
+        us_expr = pExprL expression env;
+        us_block = body; } in
+      List.concat @@ List.rev ([pos, using] :: acc)
+    | h :: rest ->
+      let h = pStmtUnsafe h env in
+      conv (h :: acc) rest
+  in
+  let blk = conv [] (as_list stmts) in
+  begin match List.filter ~f:(fun (_, x) -> x <> Noop) blk @ tail with
+  | [] -> pos, Block [Pos.none, Noop]
+  | blk -> pos, Block blk
+  end
+
+and pop_docblock () =
+  try
+    let _ = Caml.Stack.pop docblock_stack in ()
+  with
+  | Caml.Stack.Empty -> ()
+
+and top_docblock () =
+  try
+    Caml.Stack.top docblock_stack
+  with
+  | Caml.Stack.Empty -> None
+
 and pClassElt : class_elt list parser = fun node env ->
-  let opt_doc_comment = extract_docblock node in
-  match syntax node with
+  let doc_comment_opt = extract_docblock node in
+  let pClassElt_ = function
   | ConstDeclaration
     { const_abstract; const_type_specifier; const_declarators; _ } ->
       let ty = mpOptional pHint const_type_specifier env in
@@ -1419,7 +2586,7 @@ and pClassElt : class_elt list parser = fun node env ->
           | { syntax = ConstantDeclarator
               { constant_declarator_name; constant_declarator_initializer }
             ; _ } -> fun env ->
-              ( pos_name constant_declarator_name
+              ( pos_name constant_declarator_name env
               (* TODO: Parse error when const is abstract and has inits *)
               , if is_missing const_abstract
                 then mpOptional pSimpleInitializer constant_declarator_initializer env
@@ -1436,30 +2603,52 @@ and pClassElt : class_elt list parser = fun node env ->
     in
     aux [] [] res
   | TypeConstDeclaration
-    { type_const_abstract
+    { type_const_attribute_spec
+    ; type_const_abstract
     ; type_const_name
+    ; type_const_type_parameters
     ; type_const_type_constraint
     ; type_const_type_specifier
     ; _ } ->
+      if not @@ is_missing (type_const_type_parameters)
+      then raise_parsing_error env (`Node node) SyntaxError.tparams_in_tconst;
       [ TypeConst
-        { tconst_abstract   = not (is_missing type_const_abstract)
-        ; tconst_name       = pos_name type_const_name
+        { tconst_user_attributes = pUserAttributes env type_const_attribute_spec
+        ; tconst_abstract   = not (is_missing type_const_abstract)
+        ; tconst_name       = pos_name type_const_name env
         ; tconst_constraint = mpOptional pTConstraintTy type_const_type_constraint env
         ; tconst_type       = mpOptional pHint type_const_type_specifier env
-        ; tconst_span       = get_pos node
+        ; tconst_span       = pPos node env
         }
       ]
   | PropertyDeclaration
-    { property_modifiers; property_type; property_declarators; _ } ->
+    { property_attribute_spec
+    ; property_modifiers
+    ; property_type
+    ; property_declarators
+    ; _
+    } ->
+      (* TODO: doc comments do not have to be at the beginning, they can go in
+       * the middle of the declaration, to be associated with individual
+       * properties, right now we don't handle this *)
+      let doc_comment_opt = extract_docblock node in
+      let typecheck = is_typechecker env in (* so we don't capture the env in the closure *)
+      let check_modifier node =
+        if is_final node
+        then raise_parsing_error env (`Node node) SyntaxError.final_property;
+        if typecheck && is_var node
+        then raise_parsing_error env (`Node node) SyntaxError.var_property in
+
       [ ClassVars
-        ( pKinds property_modifiers env
-        , mpOptional pHint property_type env
-        , couldMap property_declarators env ~f:begin fun node env ->
+        { cv_kinds = pKinds check_modifier property_modifiers env
+        ; cv_hint = mpOptional pHint property_type env
+        ; cv_is_promoted_variadic = false
+        ; cv_names = couldMap property_declarators env ~f:begin fun node env ->
           match syntax node with
           | PropertyDeclarator { property_name; property_initializer } ->
-            ( let _, n as name = pos_name property_name in
-              ( get_pos node
-              , ( if n.[0] = '$'
+            ( let _, n as name = pos_name property_name env in
+              ( pPos node env
+              , ( if String.length n > 0 && n.[0] = '$'
                   then drop_pstr 1 name
                   else name
                 )
@@ -1468,12 +2657,16 @@ and pClassElt : class_elt list parser = fun node env ->
             )
           | _ -> missing_syntax "property declarator" node env
           end
-        )
+        ; cv_doc_comment = if env.quick_mode then None else doc_comment_opt
+        ; cv_user_attributes = List.concat @@
+          couldMap ~f:pUserAttribute property_attribute_spec env
+        }
       ]
   | MethodishDeclaration
     { methodish_attribute
-    ; methodish_modifiers
-    ; methodish_function_decl_header
+    ; methodish_function_decl_header = {
+        syntax = FunctionDeclarationHeader h; _
+      } as header
     ; methodish_function_body
     ; _ } ->
       let classvar_init : fun_param -> stmt * class_elt = fun param ->
@@ -1483,18 +2676,23 @@ and pClassElt : class_elt list parser = fun node env ->
           | Some (pos_end, _) -> Pos.btw p pos_end
           | None -> p
         in
-        ( Expr (p, Binop (Eq None,
+        ( (p, Expr (p, Binop (Eq None,
             (p, Obj_get((p, Lvar (p, "$this")), (p, Id cvname), OG_nullthrows)),
-            (p, Lvar param.param_id)
+            (p, Lvar param.param_id))
           ))
         , ClassVars
-          ( Option.to_list param.param_modifier
-          , param.param_hint
-          , [span, cvname, None]
-          )
+          { cv_kinds = Option.to_list param.param_modifier
+          ; cv_hint = param.param_hint
+          ; cv_is_promoted_variadic = param.param_is_variadic
+          ; cv_names = [span, cvname, None]
+          ; cv_doc_comment = None
+          ; cv_user_attributes = param.param_user_attributes
+          }
         )
       in
-      let hdr = pFunHdr methodish_function_decl_header env in
+      let hdr = pFunHdr (fun _ -> ()) header env in
+      if snd hdr.fh_name = "__construct" && not (List.is_empty hdr.fh_type_parameters) then
+        raise_parsing_error env (`Node header) SyntaxError.no_generics_on_constructors;
       let member_init, member_def =
         List.unzip @@
           List.filter_map hdr.fh_parameters ~f:(fun p ->
@@ -1502,39 +2700,63 @@ and pClassElt : class_elt list parser = fun node env ->
           )
       in
       let pBody = fun node env ->
-        if is_missing node then [] else
-          (* TODO: Give parse error when not abstract, but body is missing *)
-          List.rev member_init @
-          match pStmt node env with
-          | Block []    -> [Noop]
-          | Block stmtl -> stmtl
-          | stmt        -> [stmt]
+        let body = pFunctionBody node env in
+        let member_init =
+          if env.codegen
+          then List.rev member_init
+          else member_init
+        in
+        member_init @ body
       in
+      let kind = pKinds (fun _ -> ()) h.function_modifiers env in
+      env.in_static_method := (List.exists kind ~f:(function Static -> true | _ -> false));
       let body, body_has_yield = mpYielding pBody methodish_function_body env in
-      let body =
-        (* Drop it on the floor in quickMode; we still need to process the body
-         * to know, e.g. whether it contains a yield.
-         *)
-        if !(lowerer_state.quickMode)
-        then [Noop]
-        else body
-      in
-      let kind = pKinds methodish_modifiers env in
+      env.in_static_method := false;
+      let is_external = is_semicolon methodish_function_body in
+      let user_attributes = pUserAttributes env methodish_attribute in
       member_def @ [Method
       { m_kind            = kind
       ; m_tparams         = hdr.fh_type_parameters
-      ; m_constrs         = []
+      ; m_constrs         = hdr.fh_constrs
       ; m_name            = hdr.fh_name
       ; m_params          = hdr.fh_parameters
       ; m_body            = body
-      ; m_user_attributes = List.concat @@
-        couldMap ~f:pUserAttribute methodish_attribute env
+      ; m_user_attributes = user_attributes
       ; m_ret             = hdr.fh_return_type
-      ; m_ret_by_ref      = hdr.fh_ret_by_ref
-      ; m_span            = get_pos node
+      ; m_span            = pFunction node env
       ; m_fun_kind        = mk_fun_kind hdr.fh_suspension_kind body_has_yield
-      ; m_doc_comment     = opt_doc_comment
+      ; m_doc_comment     = doc_comment_opt
+      ; m_external        = is_external  (* see f_external above for context *)
       }]
+  | MethodishTraitResolution
+    { methodish_trait_attribute
+    ; methodish_trait_function_decl_header = {
+        syntax = FunctionDeclarationHeader h; _
+      } as header
+    ; methodish_trait_name; _
+    } ->
+    let hdr = pFunHdr (fun _ -> ()) header env in
+    let kind = pKinds (fun _ -> ()) h.function_modifiers env in
+    let qualifier, name =
+      match syntax methodish_trait_name with
+      | ScopeResolutionExpression
+        { scope_resolution_qualifier; scope_resolution_name; _ } ->
+        pHint scope_resolution_qualifier env,
+        pos_name scope_resolution_name env
+      | _ -> missing_syntax "trait method redeclaration item" node env
+    in
+    [MethodTraitResolution
+    { mt_kind            = kind
+    ; mt_tparams         = hdr.fh_type_parameters
+    ; mt_constrs         = hdr.fh_constrs
+    ; mt_name            = hdr.fh_name
+    ; mt_params          = hdr.fh_parameters
+    ; mt_user_attributes = pUserAttributes env methodish_trait_attribute
+    ; mt_ret             = hdr.fh_return_type
+    ; mt_fun_kind        = mk_fun_kind hdr.fh_suspension_kind false
+    ; mt_trait           = qualifier
+    ; mt_method          = name
+    }]
   | TraitUseConflictResolution
     { trait_use_conflict_resolution_names
     ; trait_use_conflict_resolution_clauses
@@ -1551,17 +2773,17 @@ and pClassElt : class_elt list parser = fun node env ->
           match syntax name with
           | ScopeResolutionExpression
             { scope_resolution_qualifier; scope_resolution_name; _ } ->
-            pos_name scope_resolution_qualifier,
-            pos_name scope_resolution_name
+            pos_name scope_resolution_qualifier env,
+            pos_name scope_resolution_name env
           | _ -> missing_syntax "trait use precedence item" node env
         in
         let removed_names =
-          couldMap ~f:(fun n _e -> pos_name n) removed_names env
+          couldMap ~f:(fun n _e -> pos_name n env) removed_names env
         in
         ClassUsePrecedence (qualifier, name, removed_names)
       | TraitUseAliasItem
         { trait_use_alias_item_aliasing_name = aliasing_name
-        ; trait_use_alias_item_visibility = visibility
+        ; trait_use_alias_item_modifiers = modifiers
         ; trait_use_alias_item_aliased_name = aliased_name
         ; _
         } ->
@@ -1569,22 +2791,30 @@ and pClassElt : class_elt list parser = fun node env ->
           match syntax aliasing_name with
           | ScopeResolutionExpression
             { scope_resolution_qualifier; scope_resolution_name; _ } ->
-            Some (pos_name scope_resolution_qualifier),
-            pos_name scope_resolution_name
-          | _ -> None, pos_name aliasing_name
+            Some (pos_name scope_resolution_qualifier env),
+            pos_name scope_resolution_name env
+          | _ -> None, pos_name aliasing_name env
         in
-        let visibility = Option.map (token_kind visibility)
-          ~f:begin function
-          | TK.Private   -> Private
-          | TK.Public    -> Public
-          | TK.Protected -> Protected
-          | _ -> missing_syntax "trait use alias item" node env end
-        in
+        let modifiers = pKinds (fun _ -> ()) modifiers env in
+        List.iter modifiers ~f:(fun modifier ->
+          match modifier with
+          | Public | Private | Protected | Final ->  ();
+          | _ ->
+            raise_parsing_error env (`Node node)
+              SyntaxError.trait_alias_rule_allows_only_final_and_visibility_modifiers
+        );
+        let is_visibility = function
+        | Public | Private | Protected -> true
+        | _ -> false in
+        let modifiers =
+          if List.is_empty modifiers || List.exists modifiers ~f:is_visibility
+          then modifiers
+          else Public :: modifiers in
         let aliased_name =
-          if is_missing aliased_name then None else Some (pos_name aliased_name)
+          Option.some_if (not (is_missing aliased_name)) (pos_name aliased_name env)
         in
-        ClassUseAlias (qualifier, name, aliased_name, visibility)
-      | _ -> missing_syntax "trait use conflict resolution item" node env
+        ClassUseAlias (qualifier, name, aliased_name, modifiers)
+     | _ -> missing_syntax "trait use conflict resolution item" node env
     in
     (couldMap ~f:(fun n e ->
         ClassUse (pHint n e)) trait_use_conflict_resolution_names env)
@@ -1611,33 +2841,63 @@ and pClassElt : class_elt list parser = fun node env ->
         ; xhp_attribute_decl_initializer = init
         ; xhp_attribute_decl_required    = req
         } ->
-          let (p, name) = pos_name name in
+          let (p, name) = pos_name name env in
+          begin match syntax ty with
+          | TypeConstant _ when is_typechecker env ->
+            raise_parsing_error env (`Node ty) (SyntaxError.xhp_class_attribute_type_constant)
+          | _ -> ()
+          end;
+          let pos = if is_missing init then p else Pos.btw p (pPos init env) in
+          (* we can either have a typehint or an xhp enum *)
+          let hint, enum = match syntax ty with
+            | XHPEnumType { xhp_enum_optional; xhp_enum_values; _ } ->
+              let p = pPos ty env in
+              let opt = not (is_missing xhp_enum_optional) in
+              let vals = couldMap ~f:pExpr xhp_enum_values env in
+              None, Some (p, opt, vals)
+            | _ -> Some (pHint ty env), None
+          in
           XhpAttr
-          ( mpOptional pHint ty env
-          , (Pos.none, (p, ":" ^ name), mpOptional pSimpleInitializer init env)
+          ( hint
+          , (pos, (p, ":" ^ name), mpOptional pSimpleInitializer init env)
           , not (is_missing req)
-          , match syntax ty with
-            | XHPEnumType { xhp_enum_values; _ } ->
-              Some (get_pos ty, couldMap ~f:pExpr xhp_enum_values env)
-            | _ -> None
+          , enum
           )
       | XHPSimpleClassAttribute { xhp_simple_class_attribute_type = attr } ->
-        XhpAttrUse (get_pos attr, Happly (pos_name attr, []))
+        XhpAttrUse (pPos attr env, Happly (pos_name attr env, []))
       | Token _ ->
-        XhpAttrUse (get_pos node, Happly (pos_name node, []))
+        XhpAttrUse (pPos node env, Happly (pos_name node env, []))
       | _ -> missing_syntax "XHP attribute" node env
     in
     couldMap ~f:pXHPAttr xhp_attribute_attributes env
   | XHPChildrenDeclaration { xhp_children_expression; _; } ->
-    [ XhpChild (pXhpChild xhp_children_expression env) ]
+    let p = pPos node env in
+    [ XhpChild (p, pXhpChild xhp_children_expression env) ]
   | XHPCategoryDeclaration { xhp_category_categories = cats; _ } ->
-    let pNameSansPercent node _env = drop_pstr 1 (pos_name node) in
-    [ XhpCategory (couldMap ~f:pNameSansPercent cats env) ]
-  | _ -> missing_syntax "expression" node env
-
+    let p = pPos node env in
+    let pNameSansPercent node _env = drop_pstr 1 (pos_name node env) in
+    [ XhpCategory (p, couldMap ~f:pNameSansPercent cats env) ]
+  (* Pocket Universe *)
+  | PocketEnumDeclaration
+    { pocket_enum_modifiers = mods
+    ; pocket_enum_name      = name
+    ; pocket_enum_fields    = fields
+    ; _
+    } ->
+      let kinds = pKinds (fun _ -> ()) mods env in
+      let final = List.mem kinds Final ~equal:(=) in
+      let id = pos_name name env in
+      let flds = List.map ~f:(fun x -> pPUField x env) (as_list fields) in
+      [ ClassEnum (final, id, flds) ]
+  | _ -> missing_syntax "class element" node env
+  in
+  try pClassElt_ (syntax node) with
+  | API_Missing_syntax (expecting, env, node) when env.fail_open ->
+    let () = log_missing ~caught:true ~env ~expecting node in
+    []
 and pXhpChild : xhp_child parser = fun node env ->
   match syntax node with
-  | Token t -> ChildName (pos_name node)
+  | Token _ -> ChildName (pos_name node env)
   | PostfixUnaryExpression { postfix_unary_operand; postfix_unary_operator;} ->
     let operand = pXhpChild postfix_unary_operand env in
     let operator =
@@ -1660,6 +2920,30 @@ and pXhpChild : xhp_child parser = fun node env ->
     ChildList children
   | _ -> missing_syntax "xhp children" node env
 
+and pPUField: pufield parser = fun node env ->
+  match syntax node with
+  | PocketAtomMappingDeclaration
+    { pocket_atom_mapping_name = expr
+    ; pocket_atom_mapping_mappings   = mappings
+    ; _
+    } -> let id = pos_name expr env in
+    let maps = List.map ~f:(fun x -> pPUMapping x env) (as_list mappings) in
+    PUAtomDecl (id, maps)
+  | PocketFieldTypeExprDeclaration
+    { pocket_field_type_expr_type = ty
+    ; pocket_field_type_expr_name = name
+    ; _
+    } -> let typ = pHint ty env in
+    let id = pos_name name env in
+    PUCaseTypeExpr (typ, id)
+  | PocketFieldTypeDeclaration
+    { pocket_field_type_name = name
+    ; _
+    } -> let id = pos_name name env in
+    PUCaseType id
+  | _ -> missing_syntax "pufield" node env
+
+
 
 (*****************************************************************************(
  * Parsing definitions (AST's `def`)
@@ -1669,65 +2953,69 @@ and pNamespaceUseClause ~prefix env kind node =
   | NamespaceUseClause
     { namespace_use_name  = name
     ; namespace_use_alias = alias
+    ; namespace_use_clause_kind = clause_kind
     ; _ } ->
     let p, n as name =
-      match prefix, pos_name name with
+      match prefix, pos_name name env with
       | None, (p, n) -> (p, n)
-      | Some prefix, (p, n) -> p, (snd @@ pos_name prefix) ^ n
+      | Some prefix, (p, n) -> p, (snd @@ pos_name prefix env) ^ n
     in
-    let x = Str.search_forward (Str.regexp "[^\\\\]*$") n 0 in
+    let x = Str.search_forward (namespace_use) n 0 in
     let key = drop_pstr x name in
+    let kind = if is_missing clause_kind then kind else clause_kind in
+    let alias = if is_missing alias then key else pos_name alias env in
     let kind =
       match syntax kind with
-      | Token { PT.kind = TK.Namespace; _ } -> NSNamespace
-      | Token { PT.kind = TK.Type     ; _ } -> NSClass
-      | Token { PT.kind = TK.Function ; _ } -> NSFun
-      | Token { PT.kind = TK.Const    ; _ } -> NSConst
+      | Token token when Token.kind token = TK.Namespace -> NSNamespace
+      | Token token when Token.kind token = TK.Type      -> NSClass
+      | Token token when Token.kind token = TK.Function  -> NSFun
+      | Token token when Token.kind token = TK.Const     -> NSConst
       | Missing                             -> NSClassAndNamespace
       | _ -> missing_syntax "namespace use kind" kind env
     in
     ( kind
-    , (p, if n.[0] = '\\' then n else "\\" ^ n)
-    , if is_missing alias
-      then key
-      else pos_name alias
+    , (p, if String.length n > 0 && n.[0] = '\\' then n else "\\" ^ n)
+    , alias
     )
   | _ -> missing_syntax "namespace use clause" node env
 
-and pDef : def parser = fun node env ->
-  let opt_doc_comment = extract_docblock node in
+and pDef : def list parser = fun node env ->
+  let doc_comment_opt = extract_docblock node in
   match syntax node with
   | FunctionDeclaration
     { function_attribute_spec; function_declaration_header; function_body } ->
-      let hdr = pFunHdr function_declaration_header env in
-      let block, yield = mpYielding (mpOptional pBlock) function_body env in
-      Fun
-      { (fun_template yield node hdr.fh_suspension_kind) with
+      let env = non_tls env in
+      let check_modifier node =
+        raise_parsing_error env (`Node node) (SyntaxError.function_modifier (text node)) in
+      let hdr = pFunHdr check_modifier function_declaration_header env in
+      let is_external = is_semicolon function_body in
+      let block, yield =
+        if is_external then [], false else
+          mpYielding pFunctionBody function_body env
+      in
+      let user_attributes = pUserAttributes env function_attribute_spec in
+      [ Fun
+      { (fun_template yield node hdr.fh_suspension_kind env) with
         f_tparams         = hdr.fh_type_parameters
       ; f_ret             = hdr.fh_return_type
+      ; f_constrs         = hdr.fh_constrs
       ; f_name            = hdr.fh_name
       ; f_params          = hdr.fh_parameters
-      ; f_ret_by_ref      = hdr.fh_ret_by_ref
       ; f_body            =
-        if !(lowerer_state.quickMode)
-        then [Noop]
-        else begin
-          (* FIXME: Filthy hack to catch UNSAFE *)
-          let containsUNSAFE =
-            let re = Str.regexp_string "UNSAFE" in
-            try Str.search_forward re (full_text function_body) 0 >= 0 with
-            | Not_found -> false
+        begin
+          let containsUNSAFE node =
+            let tokens = all_tokens node in
+            let has_unsafe t = Token.has_trivia_kind t TriviaKind.Unsafe in
+            List.exists ~f:has_unsafe tokens
           in
           match block with
-          | Some [Noop] when containsUNSAFE -> [Unsafe]
-          | Some [] -> [Noop]
-          | None -> []
-          | Some b -> b
+          | [p, Noop] when containsUNSAFE function_body -> [p, Unsafe]
+          | b -> b
         end
-      ; f_user_attributes =
-        List.concat @@ couldMap ~f:pUserAttribute function_attribute_spec env
-      ; f_doc_comment = opt_doc_comment
-      }
+      ; f_user_attributes = user_attributes
+      ; f_doc_comment = doc_comment_opt
+      ; f_external = is_external
+      }]
   | ClassishDeclaration
     { classish_attribute       = attr
     ; classish_modifiers       = mods
@@ -1739,25 +3027,40 @@ and pDef : def parser = fun node env ->
     ; classish_body            =
       { syntax = ClassishBody { classish_body_elements = elts; _ }; _ }
     ; _ } ->
-      Class
-      { c_mode            = !(lowerer_state.mode)
-      ; c_user_attributes = List.concat @@ couldMap ~f:pUserAttribute attr env
-      ; c_final           = List.mem (pKinds mods env) Final
-      ; c_is_xhp          =
-        (match token_kind name with
-        | Some TK.XHPElementName | Some TK.XHPClassName -> true
+      let env = non_tls env in
+      let c_mode = mode_annotation env.fi_mode in
+      let c_user_attributes = pUserAttributes env attr in
+      let c_file_attributes = [] in
+      let kinds = pKinds (fun _ -> ()) mods env in
+      let c_final = List.mem kinds Final ~equal:(=) in
+      let c_is_xhp =
+        match token_kind name with
+        | Some (TK.XHPElementName | TK.XHPClassName) -> true
         | _ -> false
-        )
-      ; c_name            = pos_name name
-      ; c_tparams         = pTParaml tparaml env
-      ; c_extends         = couldMap ~f:pHint exts env
-      ; c_implements      = couldMap ~f:pHint impls env
-      ; c_body            = List.concat (couldMap ~f:pClassElt elts env)
-      ; c_namespace       = Namespace_env.empty !(lowerer_state.popt)
-      ; c_enum            = None
-      ; c_span            = get_pos node
-      ; c_kind            = begin
-        let is_abs = Str.(string_match (regexp ".*abstract.*") (text mods) 0) in
+      in
+      let c_name = pos_name name env in
+      env.cls_reified_generics := SSet.empty;
+      let c_tparams = pTParaml ~is_class:true tparaml env in
+      let c_extends = couldMap ~f:pHint exts env in
+      env.parent_maybe_reified := (match c_extends with
+        | (_, Happly (_, hl)) :: _ -> not @@ List.is_empty hl
+        | _ -> false);
+      let c_implements = couldMap ~f:pHint impls env in
+      let c_body =
+        let rec aux acc ns =
+          match ns with
+          | [] -> acc
+          | n :: ns ->
+            let elt = pClassElt n env in
+            aux (elt :: acc) ns
+        in
+        List.concat @@ List.rev (aux [] (as_list elts))
+      in
+      let c_namespace = Namespace_env.empty env.parser_options in
+      let c_enum = None in
+      let c_span = pPos node env in
+      let c_kind =
+        let is_abs = List.mem kinds Abstract ~equal:(=) in
         match token_kind kw with
         | Some TK.Class when is_abs -> Cabstract
         | Some TK.Class             -> Cnormal
@@ -1765,28 +3068,46 @@ and pDef : def parser = fun node env ->
         | Some TK.Trait             -> Ctrait
         | Some TK.Enum              -> Cenum
         | _ -> missing_syntax "class kind" kw env
-        end
-      ; c_doc_comment = opt_doc_comment
-      }
+      in
+      let c_doc_comment = doc_comment_opt in
+      [ Class
+      { c_mode
+      ; c_user_attributes
+      ; c_file_attributes
+      ; c_final
+      ; c_is_xhp
+      ; c_name
+      ; c_tparams
+      ; c_extends
+      ; c_implements
+      ; c_body
+      ; c_namespace
+      ; c_enum
+      ; c_span
+      ; c_kind
+      ; c_doc_comment
+      }]
   | ConstDeclaration
     { const_type_specifier = ty
     ; const_declarators    = decls
     ; _ } ->
-      (match List.map ~f:syntax (as_list decls) with
-      | [ ConstantDeclarator
-          { constant_declarator_name        = name
-          ; constant_declarator_initializer = init
-          }
-        ] -> Constant
-          { cst_mode      = !(lowerer_state.mode)
-          ; cst_kind      = Cst_const
-          ; cst_name      = pos_name name
-          ; cst_type      = mpOptional pHint ty env
-          ; cst_value     = pSimpleInitializer init env
-          ; cst_namespace = Namespace_env.empty !(lowerer_state.popt)
-          }
-      | _ -> missing_syntax "constant declaration" decls env
-      )
+      let declarations = List.map ~f:syntax (as_list decls) in
+      let f = function
+        | ConstantDeclarator
+            { constant_declarator_name        = name
+            ; constant_declarator_initializer = init
+            }
+          -> Constant
+            { cst_mode      = mode_annotation env.fi_mode
+            ; cst_name      = pos_name name env
+            ; cst_type      = mpOptional pHint ty env
+            ; cst_value     = pSimpleInitializer init env
+            ; cst_namespace = Namespace_env.empty env.parser_options
+            ; cst_span      = pPos node env
+            }
+        | _ -> missing_syntax "constant declaration" decls env
+      in
+      List.map ~f declarations
   | AliasDeclaration
     { alias_attribute_spec    = attr
     ; alias_keyword           = kw
@@ -1794,21 +3115,22 @@ and pDef : def parser = fun node env ->
     ; alias_generic_parameter = tparams
     ; alias_constraint        = constr
     ; alias_type              = hint
-    ; _ } -> Typedef
-      { t_id              = pos_name name
+    ; _ } ->
+      [ Typedef
+      { t_id              = pos_name name env
       ; t_tparams         = pTParaml tparams env
       ; t_constraint      = Option.map ~f:snd @@
           mpOptional pTConstraint constr env
       ; t_user_attributes = List.concat @@
           List.map ~f:(fun x -> pUserAttribute x env) (as_list attr)
-      ; t_namespace       = Namespace_env.empty !(lowerer_state.popt)
-      ; t_mode            = !(lowerer_state.mode)
+      ; t_namespace       = Namespace_env.empty env.parser_options
+      ; t_mode            = mode_annotation env.fi_mode
       ; t_kind            =
         match token_kind kw with
         | Some TK.Newtype -> NewType (pHint hint env)
         | Some TK.Type    -> Alias   (pHint hint env)
         | _ -> missing_syntax "kind" kw env
-      }
+      }]
   | EnumDeclaration
     { enum_attribute_spec = attrs
     ; enum_name           = name
@@ -1819,69 +3141,130 @@ and pDef : def parser = fun node env ->
       let pEnumerator node =
         match syntax node with
         | Enumerator { enumerator_name = name; enumerator_value = value; _ } ->
-          fun env -> Const (None, [pos_name name, pExpr value env])
+          fun env -> Const (None, [pos_name name env, pExpr value env])
         | _ -> missing_syntax "enumerator" node
       in
-      Class
-      { c_mode            = !(lowerer_state.mode)
-      ; c_user_attributes = List.concat @@ couldMap ~f:pUserAttribute attrs env
+      [ Class
+      { c_mode            = mode_annotation env.fi_mode
+      ; c_user_attributes = pUserAttributes env attrs
+      ; c_file_attributes = []
       ; c_final           = false
       ; c_kind            = Cenum
       ; c_is_xhp          = false
-      ; c_name            = pos_name name
+      ; c_name            = pos_name name env
       ; c_tparams         = []
       ; c_extends         = []
       ; c_implements      = []
       ; c_body            = couldMap enums env ~f:pEnumerator
-      ; c_namespace       = Namespace_env.empty !(lowerer_state.popt)
-      ; c_span            = get_pos node
+      ; c_namespace       = Namespace_env.empty env.parser_options
+      ; c_span            = pPos node env
       ; c_enum            = Some
         { e_base       = pHint base env
         ; e_constraint = mpOptional pTConstraintTy constr env
         }
-      ; c_doc_comment = opt_doc_comment
-      }
+      ; c_doc_comment = doc_comment_opt
+      }]
+  | RecordDeclaration
+    { record_attribute_spec = attrs
+    ; record_name           = name
+    ; record_fields         = fields
+    ; _ } ->
+      let pFields node =
+        match syntax node with
+        | RecordField {
+          record_field_name = name;
+          record_field_type = ftype;
+          record_field_init = init; _ } ->
+            fun env -> ClassVars
+            { cv_kinds = []
+            ; cv_hint = Some (pHint ftype env)
+            ; cv_is_promoted_variadic = false
+            ; cv_names = [
+              (pPos node env,
+              pos_name name env,
+              mpOptional pSimpleInitializer init env)]
+            ; cv_doc_comment = None
+            ; cv_user_attributes = []
+            }
+        | _ -> missing_syntax "record_field" node env
+      in
+      [ Class
+      { c_mode            = mode_annotation env.fi_mode
+      ; c_user_attributes = pUserAttributes env attrs
+      ; c_file_attributes = []
+      ; c_final           = false
+      ; c_kind            = Crecord
+      ; c_is_xhp          = false
+      ; c_name            = pos_name name env
+      ; c_tparams         = []
+      ; c_extends         = []
+      ; c_implements      = []
+      ; c_body            = couldMap fields env ~f:pFields
+      ; c_namespace       = Namespace_env.empty env.parser_options
+      ; c_span            = pPos node env
+      ; c_enum            = None
+      ; c_doc_comment = doc_comment_opt
+      }]
   | InclusionDirective
-    { inclusion_expression =
-      { syntax = InclusionExpression
-        { inclusion_require  = req
-        ; inclusion_filename = file
-        }
-      ; _ }
-    ; inclusion_semicolon  = _
-    } ->
-      let flavor = pImportFlavor req env in
-      Stmt (Expr (get_pos node, Import (flavor, pExpr file env)))
+    { inclusion_expression
+    ; inclusion_semicolon = _
+    } when env.fi_mode <> FileInfo.Mdecl && env.fi_mode <> FileInfo.Mphp
+        || env.codegen ->
+      let expr = pExpr inclusion_expression env in
+      [ Stmt (pPos node env, Expr expr) ]
   | NamespaceDeclaration
     { namespace_name = name
     ; namespace_body =
       { syntax = NamespaceBody { namespace_declarations = decls; _ }; _ }
-    ; _ } -> Namespace
-      ( pos_name name
-      , List.map ~f:(fun x -> pDef x env) (as_list decls)
-      )
+    ; _ } ->
+      let env = non_tls env in
+      [ Namespace
+      ( pos_name name env
+      , List.concat_map ~f:(fun x -> pDef x env) (as_list decls)
+      )]
   | NamespaceDeclaration { namespace_name = name; _ } ->
-    Namespace (pos_name name, [])
+    [ Namespace (pos_name name env, []) ]
   | NamespaceGroupUseDeclaration
     { namespace_group_use_kind = kind
     ; namespace_group_use_prefix = prefix
     ; namespace_group_use_clauses = clauses
     ; _ } ->
       let f = pNamespaceUseClause env kind ~prefix:(Some prefix) in
-      NamespaceUse (List.map ~f (as_list clauses))
+      [ NamespaceUse (List.map ~f (as_list clauses)) ]
   | NamespaceUseDeclaration
     { namespace_use_kind    = kind
     ; namespace_use_clauses = clauses
     ; _ } ->
       let f = pNamespaceUseClause env kind ~prefix:None in
-      NamespaceUse (List.map ~f (as_list clauses))
-  (* Fail open, assume top-level statement. Not too nice when reporting bugs,
-   * but if this turns out prohibitive, just `try` this and catch-and-correct
-   * the raised exception.
-   *)
-  | _ -> Stmt (pStmt node env)
-let pProgram : program parser = fun node env ->
-  let rec post_process program =
+      [ NamespaceUse (List.map ~f (as_list clauses)) ]
+  | FileAttributeSpecification _ ->
+    [ FileAttributes
+    { fa_user_attributes = pUserAttribute node env
+    ; fa_namespace = Namespace_env.empty env.parser_options
+    }]
+  | _ when env.fi_mode = FileInfo.Mdecl || env.fi_mode = FileInfo.Mphp
+        && not env.codegen -> []
+  | _ -> [ Stmt (pStmt node env) ]
+
+and pPUMapping : pumapping parser = fun node env ->
+  match syntax node with
+  | PocketMappingIdDeclaration
+    { pocket_mapping_id_name        = name
+    ; pocket_mapping_id_initializer = init
+    } -> let id = pos_name name env in
+    let init_val = pSimpleInitializer init env in
+    PUMappingID (id, init_val)
+  | PocketMappingTypeDeclaration
+    { pocket_mapping_type_name = name
+    ; pocket_mapping_type_type = ty
+    ; _
+    } -> let id = pos_name name env in
+    let hint = pHint ty env in
+    PUMappingType (id, hint)
+  | _ -> missing_syntax "pumapping" node env
+
+let pProgram : program parser = fun node env  ->
+  let rec post_process program acc =
     let span (p : 'a -> bool) =
       let rec go yes = function
       | (x::xs) when p x -> go (x::yes) xs
@@ -1893,66 +3276,66 @@ let pProgram : program parser = fun node env ->
     | _ -> true
     in
     match program with
-    | [] -> []
+    | [] -> List.rev acc
     | (Namespace (n, [])::el) ->
       let body, remainder = span not_namespace el in
-      Namespace (n, body) :: post_process remainder
+      let body = post_process body [] in
+       post_process remainder (Namespace (n, body) :: acc)
     | (Namespace (n, il)::el) ->
-      Namespace (n, post_process il) :: post_process el
-    | (Stmt Noop::el) -> post_process el
-    | ((Stmt (Expr (_, (Call
-        ( (_, (Id (_, "define")))
-        , []
-        , [ (_, (String name))
-          ; value
-          ]
-        , []
-        )
-      )))) :: el) -> Constant
-        { cst_mode      = !(lowerer_state.mode)
-        ; cst_kind      = Cst_define
-        ; cst_name      = name
-        ; cst_type      = None
-        ; cst_value     = value
-        ; cst_namespace = Namespace_env.empty !(lowerer_state.popt)
-        } :: post_process el
-    | (e::el) -> e :: post_process el
+      let result = post_process il [] in
+      post_process el (Namespace (n, result) :: acc)
+    | (Stmt (_, Noop) :: el) -> post_process el acc
+    | (Stmt (_, Markup _) as e)::el
+    | (Stmt (_, Expr (_, Import _)) as e)::el ->
+      post_process el (e :: acc)
+    (* Toplevel statements not allowed in strict mode *)
+    | (Stmt (p, _) as e)::el
+      when (env.keep_errors) && (not env.codegen) &&
+           FileInfo.is_strict env.fi_mode ->
+      (* We've already lowered at this point, so raise_parsing_error doesn't
+        really fit. This is only a typechecker error anyway, so do it anyway *)
+      raise_parsing_error env (`Pos p) SyntaxError.toplevel_statements;
+      post_process el (e :: acc)
+    | (e::el) -> post_process el (e :: acc)
   in
 
   (* The list of top-level things in a file is somewhat special. *)
-  let rec aux env = function
-  | [] -> []
+  let rec aux env acc = function
+  | []
   (* EOF happens only as the last token in the list. *)
-  | [{ syntax = EndOfFile _; _ }] -> []
-  (* There's an incompatibility between the Full-Fidelity (FF) and the AST view
-   * of the world; `define` is an *expression* in FF, but a *definition* in AST.
-   * Luckily, `define` only happens at the level of definitions.
-   *)
+  | [{ syntax = EndOfFile _; _ }]
+    -> List.concat (List.rev acc)
+  (* HaltCompiler stops processing the list *)
   | { syntax = ExpressionStatement
       { expression_statement_expression =
-        { syntax = DefineExpression
-          { define_keyword; define_argument_list = args; _ }
-        ; _ }
-      ; _ }
-    ; _ } :: nodel ->
-      ( match List.map ~f:(fun x -> pExpr x env) (as_list args) with
-      | [ _, String name; e ] -> Constant
-        { cst_mode      = !(lowerer_state.mode)
-        ; cst_kind      = Cst_define
-        ; cst_name      = name
-        ; cst_type      = None
-        ; cst_value     = e
-        ; cst_namespace = Namespace_env.empty !(lowerer_state.popt)
-        }
-      | args ->
-        let name = pos_name define_keyword in
-        Stmt (Expr (fst name, Call ((fst name, Id name), [], args, [])))
-      ) :: aux env nodel
-  | node :: nodel -> pDef node env :: aux env nodel
+        { syntax = HaltCompilerExpression _ ; _ } ; _ } ; _ } as cur_node :: nodel
+    ->
+    (* If we saw COMPILER_HALT_OFFSET, calculate the position of HALT_COMPILER *)
+    if !(env.saw_compiler_halt_offset) <> None then
+      begin
+      let local_ignore_pos = env.ignore_pos in
+      let () = env.ignore_pos <- false in
+      let pos = pPos cur_node env in
+      (* __COMPILER_HALT_OFFSET__ takes value equal to halt_compiler's end position *)
+      let s = Pos.end_cnum pos in
+      let () = env.saw_compiler_halt_offset := Some s in
+      env.ignore_pos <- local_ignore_pos
+      end;
+    aux env acc nodel
+  | node :: nodel ->
+    let acc =
+      match pDef node env with
+      | exception API_Missing_syntax (expecting, env, node)
+        when env.fail_open ->
+          let () = log_missing ~caught:true ~env ~expecting node in
+          acc
+      | def -> def :: acc
+    in
+    aux env acc nodel
   in
   let nodes = as_list node in
-  let nodes = aux env nodes in
-  post_process nodes
+  let nodes = aux env [] nodes in
+  post_process nodes []
 
 let pScript node env =
   match syntax node with
@@ -1968,290 +3351,430 @@ let pScript node env =
  * complicated, but a separate pass is fine.
  *)
 
-exception Malformed_trivia of int
-
+type fixmes = Pos.t IMap.t IMap.t
 type scoured_comment = Pos.t * comment
 type scoured_comments = scoured_comment list
+type accumulator = scoured_comments * fixmes
 
 let scour_comments
   (path        : Relative_path.t)
-  (source_text : Full_fidelity_source_text.t)
+  (source_text : SourceText.t)
+  ~(collect_fixmes: bool)
+  ~(include_line_comments: bool)
   (tree        : node)
-  : scoured_comments =
-    let pos_of_offset =
-      Full_fidelity_source_text.relative_pos path source_text
+  (env         : env)
+  : accumulator =
+    let pos_of_offset = SourceText.relative_pos path source_text in
+    let go (node : node) (cmts, fm as acc : accumulator) (t : Trivia.t)
+        : accumulator =
+      match Trivia.kind t with
+      | TriviaKind.WhiteSpace
+      | TriviaKind.EndOfLine
+      | TriviaKind.Unsafe
+      | TriviaKind.UnsafeExpression
+      | TriviaKind.FallThrough
+      | TriviaKind.ExtraTokenError
+      | TriviaKind.AfterHaltCompiler
+        -> acc
+      | TriviaKind.DelimitedComment ->
+        (* For legacy compliance, block comments should have the position of
+         * their end
+         *)
+        let start = Trivia.start_offset t + 2 (* for the '/*' *) in
+        let end_  = Trivia.end_offset t in
+        let len   = end_ - start - 1 in
+        let p = pos_of_offset (end_ - 1) end_ in
+        let t = String.sub (Trivia.text t) 2 len in
+        (p, CmtBlock t) :: cmts, fm
+      | TriviaKind.SingleLineComment ->
+        if not include_line_comments then cmts, fm
+        else
+        let text = SourceText.text (Trivia.source_text t) in
+        let start = Trivia.start_offset t in
+        let start = start + if text.[start] = '#' then 1 else 2 in
+        let end_  = Trivia.end_offset t in
+        let len   = end_ - start + 1 in
+        let p = pos_of_offset start end_ in
+        let t = String.sub text start len in
+        (p, CmtLine (t ^ "\n")) :: cmts, fm
+      | TriviaKind.FixMe
+      | TriviaKind.IgnoreError
+        -> if not collect_fixmes then cmts, fm
+           else
+           let open Str in
+           let txt = Trivia.text t in
+           let ignore_fixme =
+             match GlobalOptions.ignored_fixme_regex env.parser_options with
+             | Some s -> string_match (Str.regexp s) txt 0
+             | None -> false in
+           if ignore_fixme
+           then cmts, fm
+           else
+             let pos = pPos node env in
+             let line = Pos.line pos in
+             let ignores = try IMap.find line fm with Caml.Not_found -> IMap.empty in
+             try
+               ignore (search_forward ignore_error txt 0);
+               let p = pos_of_offset (Trivia.start_offset t) (Trivia.end_offset t) in
+               let code = int_of_string (matched_group 2 txt) in
+               let ignores = IMap.add code p ignores in
+               cmts, IMap.add line ignores fm
+             with
+             | Not_found_s _
+             | Caml.Not_found ->
+               Errors.fixme_format pos;
+               cmts, fm
     in
-    let parse
-      (acc : scoured_comments)
-      (offset : int)
-      (str : string)
-      : scoured_comments =
-        let fail state n =
-          let state =
-            match state with
-            | `Free        -> "Free"
-            | `LineCmt     -> "LineCmt"
-            | `SawSlash    -> "SawSlash"
-            | `EmbeddedCmt -> "EmbeddedCmt"
-            | `EndEmbedded -> "EndEmbedded"
-          in
-          if not !(lowerer_state.suppress_output) then
-            Printf.eprintf "Error parsing trivia in state %s: '%s'\n" state str;
-          raise (Malformed_trivia n)
-        in
-        let length = String.length str in
-        let mk tag (start : int) (end_plus_one : int) acc : scoured_comments =
-          match tag with
-          | `Line ->
-            (* Correct for the offset of the comment in the file *)
-            let start = offset + start in
-            let end_ = offset + end_plus_one in
-            let (p, c) as result =
-              Full_fidelity_source_text.
-              ( pos_of_offset start end_
-              , CmtLine (sub source_text start (end_ - start))
-              )
-            in
-            result :: acc
-          | `Block ->
-            (* Correct for the offset of the comment in the file *)
-            let start = offset + start in
-            let end_ = offset + end_plus_one - 1 in
-            let (p, c) as result =
-              Full_fidelity_source_text.
-              (* Should be 'start end_', but keeping broken for fidelity. *)
-              ( pos_of_offset (end_) (end_ + 1)
-              , CmtBlock (sub source_text start (end_ - start))
-              )
-            in
-            result :: acc
-        in
-        let rec go start state idx : scoured_comments =
-          if idx = length (* finished? *)
-          then begin
-            match state with
-            | `Free -> acc
-            | `LineCmt -> mk `Line start length acc
-            | _        -> fail state start
-          end else begin
-            let next = idx + 1 in
-            match state, str.[idx] with
-            (* Ending comments produces the comment just scanned *)
-            | `LineCmt,     '\n' -> mk `Line  start idx @@ go next `Free next
-            | `EndEmbedded, '/'  -> mk `Block start idx @@ go next `Free next
-            (* PHP has line comments delimited by a # *)
-            | `Free,     '#'              -> go next `LineCmt      next
-            (* All other comment delimiters start with a / *)
-            | `Free,     '/'              -> go start `SawSlash    next
-            (* After a / in trivia, we must see either another / or a * *)
-            | `SawSlash, '/'              -> go next  `LineCmt     next
-            | `SawSlash, '*'              -> go next  `EmbeddedCmt next
-            (* A * without a / does not end an embedded comment *)
-            | `EmbeddedCmt, '*'           -> go start `EndEmbedded next
-            | `EndEmbedded, '*'           -> go start `EndEmbedded next
-            | `EndEmbedded,  _            -> go start `EmbeddedCmt next
-            (* Whitespace skips everywhere else *)
-            | _, (' ' | '\t' | '\n')      -> go start state        next
-            (* When scanning comments, anything else is accepted *)
-            | `LineCmt,     _             -> go start state        next
-            | `EmbeddedCmt, _             -> go start state        next
-            (* Anything else; bail *)
-            | _ -> fail state start
-          end
-        in
-        go 0 `Free 0
-    in (* Now that we have a parser *)
-    let rec aux (acc : scoured_comments) node : scoured_comments =
+    let rec aux (_cmts, _fm as acc : accumulator) (node : node) : accumulator =
+      let recurse () = List.fold_left ~f:aux ~init:acc (children node) in
       match syntax node with
-      | Token _ ->
-        let acc = parse acc (leading_start_offset node) (leading_text node) in
-        parse acc (trailing_start_offset node) (trailing_text node)
-      | _ -> List.fold_left ~f:aux ~init:acc (children node)
+      | Token t ->
+        if Token.has_trivia_kind t TriviaKind.DelimitedComment
+        || (include_line_comments && Token.has_trivia_kind t TriviaKind.SingleLineComment)
+        || (collect_fixmes && (
+            Token.has_trivia_kind t TriviaKind.FixMe ||
+            Token.has_trivia_kind t TriviaKind.IgnoreError))
+        then
+          let f = go node in
+          let trivia = Token.leading t in
+          let acc = List.fold_left ~f ~init:acc trivia in
+          let trivia = Token.trailing t in
+          List.fold_left ~f ~init:acc trivia
+        else recurse ()
+      | _ -> recurse ()
     in
-    aux [] tree
+    aux ([], IMap.empty) tree
 
 (*****************************************************************************(
  * Front-end matter
 )*****************************************************************************)
 
-type result =
-  { fi_mode  : FileInfo.mode
-  ; ast      : Ast.program
-  ; content  : string
-  ; file     : Relative_path.t
-  ; comments : (Pos.t * comment) list
+let elaborate_halt_compiler ast env source_text  =
+  match !(env.saw_compiler_halt_offset) with
+    | Some x ->
+    let elaborate_halt_compiler_const defs =
+      let visitor = object
+        inherit [_] endo as super
+        method! on_expr env expr =
+          match expr with
+          | p, Id (_, "__COMPILER_HALT_OFFSET__") ->
+            let start_offset = Pos.start_cnum p in
+            (* Construct a new position and id *)
+            let id = string_of_int x in
+            let end_offset = start_offset + (String.length id) in
+            let pos_file = Pos.filename p in
+            let pos = SourceText.relative_pos pos_file source_text start_offset end_offset in
+            pos, Ast.Int id
+          | _ -> super#on_expr env expr
+      end in
+      visitor#on_program () defs in
+    elaborate_halt_compiler_const ast
+  | None -> ast
+
+
+let lower env ~source_text ~script comments : result =
+  let ast = runP pScript script env in
+  let ast =
+    let autoimport =
+      env.is_hh_file ||
+      ParserOptions.enable_hh_syntax_for_hhvm env.parser_options
+    in
+    if env.elaborate_namespaces
+    then Namespaces.elaborate_toplevel_defs ~autoimport env.parser_options ast
+    else ast
+  in
+  let ast = elaborate_halt_compiler ast env source_text in
+  let content = if env.codegen then "" else SourceText.text source_text in
+  { fi_mode = env.fi_mode
+  ; is_hh_file = env.is_hh_file
+  ; ast
+  ; content
+  ; comments
+  ; file = env.file
   }
+end (* WithPositionedSyntax *)
 
-let lower
-  ?(elaborate_namespaces  = true)
-  ?(include_line_comments = false)
-  ?(keep_errors           = true)
-  ?(ignore_pos            = false)
-  ?(quick                 = false)
-  ?(suppress_output       = false)
-  ?(parser_options        = ParserOptions.default)
-  ~content
-  ~language
-  ~file
-  ~fi_mode
-  ~source_text
-  ~script
-  : result =
-    lowerer_state.language  := language;
-    lowerer_state.filePath  := file;
-    lowerer_state.mode      := fi_mode;
-    lowerer_state.popt      := parser_options;
-    lowerer_state.ignorePos := ignore_pos;
-    lowerer_state.quickMode := quick;
-    lowerer_state.suppress_output := suppress_output;
-    let saw_yield = ref false in
-    let errors = ref [] in (* The top-level error list. *)
-    let max_depth = 42 in (* Filthy hack around OCaml bug *)
-    let ast = runP pScript script { saw_yield; errors; max_depth } in
-    let ast =
-      if elaborate_namespaces
-      then Namespaces.elaborate_defs parser_options ast
-      else ast
-    in
-    let comments, fixmes =
-      if not include_line_comments
-      then [], IMap.empty
-      else
-        let comments = scour_comments file source_text script in
-        let fixmes = IMap.empty (*TODO*) in
-        comments, fixmes
-    in
-    if keep_errors then begin
-      Fixmes.HH_FIXMES.add file fixmes;
-      Option.iter (Core.List.last !errors) Errors.parsing_error
-    end;
-    { fi_mode; ast; content; comments; file }
+(* TODO: Make these not default to positioned_syntax *)
+include Full_fidelity_ast_types
+module ParserErrors_ = Full_fidelity_parser_errors.WithSyntax(PositionedSyntax)
+module ParserErrors = ParserErrors_.WithSmartConstructors(CoroutineSC)
 
-let from_text
-  ?(elaborate_namespaces  = true)
-  ?(include_line_comments = false)
-  ?(keep_errors           = true)
-  ?(ignore_pos            = false)
-  ?(quick                 = false)
-  ?(suppress_output       = false)
-  ?(lower_coroutines      = true)
-  ?(parser_options        = ParserOptions.default)
-  (file        : Relative_path.t)
-  (source_text : Full_fidelity_source_text.t)
-  : result =
-    let open Full_fidelity_syntax_tree in
-    let tree   = make source_text in
-    let tree =
-      if lower_coroutines then
-        Coroutine_lowerer.lower_coroutines tree
-      else
-        tree in
-    let script = Full_fidelity_positioned_syntax.from_tree tree in
-    let fi_mode = if is_php tree then FileInfo.Mphp else
-      let mode_string = String.trim (mode tree) in
-      let mode_word =
-        try List.hd (Str.split (Str.regexp " +") mode_string) with
-        | _ -> None
+module SourceText = Full_fidelity_source_text
+module DeclModeSC = DeclModeSmartConstructors.WithSyntax(PositionedSyntax)
+module DeclModeParser_ = Full_fidelity_parser.WithSyntax(PositionedSyntax)
+module DeclModeParser = DeclModeParser_.WithSmartConstructors(DeclModeSC)
+module FromPositionedSyntax = WithPositionedSyntax(PositionedSyntax)
+module FromEditablePositionedSyntax =
+  WithPositionedSyntax(Full_fidelity_editable_positioned_syntax)
+
+(* Creates a relative position out of the error and the given path and source text. *)
+let pos_of_error path source_text error =
+  SourceText.relative_pos path source_text
+    (SyntaxError.start_offset error)
+    (SyntaxError.end_offset error)
+
+let parse_text
+  (env : env)
+  (source_text : SourceText.t)
+: (FileInfo.mode option * PositionedSyntaxTree.t) =
+  let mode = Full_fidelity_parser.parse_mode source_text in
+  let quick_mode = not env.codegen && (
+    match mode with
+    | None
+    | Some FileInfo.Mdecl
+    | Some FileInfo.Mphp -> true
+    | _ -> env.quick_mode
+  ) in
+  if mode = Some FileInfo.Mexperimental && env.codegen && (not env.hacksperimental) then begin
+    let e = SyntaxError.make 0 0 SyntaxError.experimental_in_codegen_without_hacksperimental in
+    let p = pos_of_error env.file source_text e in
+    raise @@ SyntaxError.ParserFatal (e, p)
+  end;
+  let tree =
+    let env' =
+      Full_fidelity_parser_env.make
+        ~hhvm_compat_mode:env.codegen
+        ~codegen:env.codegen
+        ~force_hh:env.enable_hh_syntax
+        ~enable_xhp:env.enable_xhp
+        ~php5_compat_mode:env.php5_compat_mode
+        ~enable_stronger_await_binding:
+          (GlobalOptions.po_enable_stronger_await_binding env.parser_options)
+        ~disable_nontoplevel_declarations:
+          (GlobalOptions.po_disable_nontoplevel_declarations env.parser_options)
+        ~disable_unsafe_expr:
+          (GlobalOptions.po_disable_unsafe_expr env.parser_options)
+        ~disable_unsafe_block:
+          (GlobalOptions.po_disable_unsafe_block env.parser_options)
+        ?mode
+        ()
+    in
+    if quick_mode then
+      let parser = DeclModeParser.make env' source_text in
+      let (parser, root) = DeclModeParser.parse_script parser in
+      let errors = DeclModeParser.errors parser in
+      PositionedSyntaxTree.create source_text root errors mode false
+    else
+      PositionedSyntaxTree.make ~env:env' source_text
+  in
+  (mode, tree)
+
+let scour_comments_and_add_fixmes (env : env) source_text script =
+  let comments, fixmes =
+    FromPositionedSyntax.scour_comments env.file source_text script env
+      ~collect_fixmes:env.keep_errors
+      ~include_line_comments:env.include_line_comments
       in
-      Option.value_map mode_word ~default:FileInfo.Mpartial ~f:(function
-        | "decl"           -> FileInfo.Mdecl
-        | "strict"         -> FileInfo.Mstrict
-        | ("partial" | "") -> FileInfo.Mpartial
-        (* TODO: Come up with better mode detection *)
-        | _                -> FileInfo.Mpartial
+  let () = if env.keep_errors then
+    if env.quick_mode then
+      Fixmes.DECL_HH_FIXMES.add env.file fixmes
+    else
+      Fixmes.HH_FIXMES.add env.file fixmes in
+  comments
+
+let flush_parsing_errors env =
+  let lowpri_errors = List.rev !(env.lowpri_errors) in
+  env.lowpri_errors := [];
+  if not env.quick_mode && env.keep_errors then
+    List.iter ~f:Errors.parsing_error lowpri_errors
+  else if env.codegen && not env.lower_coroutines then
+    match lowpri_errors with
+    | (p, msg) :: _ ->
+      let (s, e) = Pos.info_raw p in
+      let e = SyntaxError.make ~error_type:SyntaxError.ParseError s e msg in
+      raise @@ SyntaxError.ParserFatal (e, p)
+    | _ -> ()
+
+let lower_tree
+  (env : env)
+  (source_text : SourceText.t)
+  (mode : FileInfo.mode option)
+  (tree : PositionedSyntaxTree.t)
+: result =
+  let env =
+    { env with lower_coroutines =
+        env.lower_coroutines &&
+        PositionedSyntaxTree.sc_state tree &&
+        env.codegen
+    } in
+  let script = PositionedSyntaxTree.root tree in
+  let comments = scour_comments_and_add_fixmes env source_text script in
+  let relative_pos = pos_of_error env.file source_text in
+  let check_for_syntax_errors ast_opt =
+    let find_errors error_env =
+      let is_hh_file = ParserErrors.is_hh_file error_env in
+      ParserErrors.parse_errors error_env
+      @
+      (match ast_opt with
+      | Some ast -> Ast_check.check_program ast ~is_hh_file
+      | _ -> []
       )
     in
-    lower
-      ~elaborate_namespaces
-      ~include_line_comments
-      ~keep_errors
-      ~ignore_pos
-      ~quick
-      ~suppress_output
-      ~parser_options
-      ~content:(Full_fidelity_source_text.text source_text)
-      ~language:(language tree)
-      ~file
-      ~fi_mode
-      ~source_text
-      ~script
+    if env.codegen && not env.lower_coroutines then
+      let hhvm_compat_mode = if env.systemlib_compat_mode
+        then ParserErrors.SystemLibCompat
+        else ParserErrors.HHVMCompat in
+      let error_env = ParserErrors.make_env tree
+        ~hhvm_compat_mode
+        ~enable_hh_syntax:env.enable_hh_syntax
+        ~codegen:env.codegen
+        ~parser_options:env.parser_options
+      in
+      let errors = find_errors error_env in
+      (* Prioritize runtime errors *)
+      let runtime_errors =
+        List.filter errors ~f:SyntaxError.(fun e -> error_type e = RuntimeError)
+      in
+      match errors, runtime_errors with
+      | [], [] -> ()
+      | _, e :: _
+      | e :: _, _
+        ->
+        raise @@ SyntaxError.ParserFatal (e, relative_pos e)
+    else if env.keep_errors then
+      let report_error e =
+        Errors.parsing_error (relative_pos e, SyntaxError.message e)
+      in
+      let is_hhi =
+        String_utils.string_ends_with Relative_path.(suffix env.file) "hhi"
+      in
+      match PositionedSyntaxTree.errors tree with
+      | [] when env.quick_mode -> ()
+      | [] ->
+        let error_env = ParserErrors.make_env tree
+          ~hhvm_compat_mode:ParserErrors.HHVMCompat
+          ~enable_hh_syntax:env.enable_hh_syntax
+          ~codegen:env.codegen
+          ~hhi_mode:is_hhi
+          ~parser_options:env.parser_options
+        in
+        let errors = find_errors error_env in
+        List.iter ~f:report_error errors
+      | error :: _ -> report_error error
+  in (* check_for_syntax_errors *)
+  let mode = Option.value mode ~default:(FileInfo.Mpartial) in
+  let env = { env with fi_mode = mode; is_hh_file = mode <> FileInfo.Mphp } in
+  let popt = env.parser_options in
+  (* If we are generating code and this is an hh file or hh syntax is enabled,
+   * then we want to inject auto import types into HH namespace during namespace
+   * resolution.
+   *)
+  let popt = ParserOptions.with_hh_syntax_for_hhvm popt
+    (env.codegen && (ParserOptions.enable_hh_syntax_for_hhvm popt || env.is_hh_file)) in
+  let env = { env with parser_options = popt } in
+  let lower =
+    if env.lower_coroutines
+    then
+      let script =
+        Full_fidelity_editable_positioned_syntax.from_positioned_syntax script
+        |> Ppl_class_rewriter.rewrite_ppl_classes
+        |> Coroutine_lowerer.lower_coroutines in
+      FromEditablePositionedSyntax.lower ~script
+    else
+      FromPositionedSyntax.lower ~script
+  in
+  let ast_opt = ref None in
+  Utils.try_finally ~f:(fun () ->
+    let ret = lower env ~source_text comments in
+    ast_opt := Some ret.ast;
+    ret
+  ) ~finally:(fun () ->
+    check_for_syntax_errors !ast_opt;
+    flush_parsing_errors env
+  )
 
-let from_file
-  ?(elaborate_namespaces  = true)
-  ?(include_line_comments = false)
-  ?(keep_errors           = true)
-  ?(ignore_pos            = false)
-  ?(quick                 = false)
-  ?(suppress_output       = false)
-  ?lower_coroutines
-  ?(parser_options        = ParserOptions.default)
-  (path : Relative_path.t)
-  : result =
-    from_text
-      ~elaborate_namespaces
-      ~include_line_comments
-      ~keep_errors
-      ~ignore_pos
-      ~quick
-      ~suppress_output
-      ?lower_coroutines
-      ~parser_options
-      path
-      (Full_fidelity_source_text.from_file path)
+let from_text (env : env) (source_text : SourceText.t) : result =
+  let (mode, tree) = parse_text env source_text in
+  lower_tree env source_text mode tree
+
+let from_file (env : env) : result =
+  let source_text = SourceText.from_file env.file in
+  from_text env source_text
 
 (*****************************************************************************(
  * Backward compatibility matter (should be short-lived)
 )*****************************************************************************)
 
-let legacy (x : result) : Parser_hack.parser_return =
-  { Parser_hack.file_mode = Some x.fi_mode
-  ; Parser_hack.comments  = x.comments
-  ; Parser_hack.ast       = x.ast
-  ; Parser_hack.content   = x.content
+let legacy (x : result) : Parser_return.t =
+  { Parser_return.file_mode = Option.some_if (x.fi_mode <> FileInfo.Mphp) x.fi_mode
+  ; Parser_return.is_hh_file = x.is_hh_file
+  ; Parser_return.comments  = x.comments
+  ; Parser_return.ast       = x.ast
+  ; Parser_return.content   = x.content
   }
 
-let from_text_with_legacy
-  ?(elaborate_namespaces  = true)
-  ?(include_line_comments = false)
-  ?(keep_errors           = true)
-  ?(ignore_pos            = false)
-  ?(quick                 = false)
-  ?(suppress_output       = false)
-  ?lower_coroutines
-  ?(parser_options        = ParserOptions.default)
-  (file    : Relative_path.t)
-  (content : string)
-  : Parser_hack.parser_return =
-    legacy @@ from_text
-      ~elaborate_namespaces
-      ~include_line_comments
-      ~keep_errors
-      ~ignore_pos
-      ~quick
-      ~suppress_output
-      ?lower_coroutines
-      ~parser_options
-      file
-      (Full_fidelity_source_text.make content)
+let from_text_with_legacy (env : env) (content : string)
+  : Parser_return.t =
+    let source_text = SourceText.make env.file content in
+    legacy @@ from_text env source_text
 
-let from_file_with_legacy
-  ?(elaborate_namespaces  = true)
-  ?(include_line_comments = false)
-  ?(keep_errors           = true)
-  ?(ignore_pos            = false)
-  ?(quick                 = false)
-  ?(suppress_output       = false)
-  ?lower_coroutines
-  ?(parser_options        = ParserOptions.default)
-  (file : Relative_path.t)
-  : Parser_hack.parser_return =
-    legacy @@ from_file
+let from_file_with_legacy env = legacy (from_file env)
+
+
+(******************************************************************************(
+ * For cut-over purposes only; this should be removed as soon as Parser_hack
+ * is removed.
+)******************************************************************************)
+
+let defensive_program
+  ?(hacksperimental=false)
+  ?(quick=false)
+  ?(fail_open=false)
+  ?(keep_errors=false)
+  ?(elaborate_namespaces=true)
+  ?(include_line_comments=false)
+  parser_options fn content =
+  try begin
+    let source = Full_fidelity_source_text.make fn content in
+    (* If we fail open, we don't want errors. *)
+    let env = make_env
+      ~fail_open
+      ~quick_mode:quick
       ~elaborate_namespaces
-      ~include_line_comments
-      ~keep_errors
-      ~ignore_pos
-      ~quick
-      ~suppress_output
-      ?lower_coroutines
+      ~keep_errors:(keep_errors || (not fail_open))
       ~parser_options
-      file
+      ~hacksperimental
+      ~include_line_comments
+      fn
+    in
+    legacy @@ from_text env source
+  end with e ->
+    (* If we fail to lower, try to just make a source text and get the file mode *)
+    (* If even THAT fails, we just have to give up and return an empty php file*)
+    let mode =
+    try
+      let source = Full_fidelity_source_text.make fn content in
+      Full_fidelity_parser.parse_mode source
+    with _ -> None in
+    let err = Exn.to_string e in
+    let fn = Relative_path.suffix fn in
+    (* If we've already found a parsing error, it's okay for lowering to fail *)
+    if not (Errors.currently_has_errors ()) then
+      Hh_logger.log "Warning, lowering failed for %s\n  - error: %s\n" fn err;
+
+    { Parser_return.file_mode = mode
+    ; Parser_return.comments = []
+    ; Parser_return.ast = []
+    ; Parser_return.content = content
+    ; Parser_return.is_hh_file = mode <> None
+    }
+
+let defensive_from_file ?quick popt fn =
+  let content = try Sys_utils.cat (Relative_path.to_absolute fn) with _ -> "" in
+  defensive_program ?quick popt fn content
+
+let defensive_from_file_with_default_popt ?quick fn =
+  defensive_from_file ?quick ParserOptions.default fn
+
+let defensive_program_with_default_popt
+  ?hacksperimental
+  ?quick
+  ?fail_open
+  ?elaborate_namespaces
+  fn content =
+  defensive_program
+    ?hacksperimental
+    ?quick
+    ?fail_open
+    ?elaborate_namespaces
+    (ParserOptions.default) fn content

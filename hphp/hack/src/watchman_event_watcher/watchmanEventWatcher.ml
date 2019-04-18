@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -12,7 +11,7 @@
            ("Who watches the Watchmen?")
 ****************************************************)
 
-open Core
+open Core_kernel
 
 (**
  * Watches a repo and logs state-leave and state-enter
@@ -72,22 +71,23 @@ open Core
  * Watcher.
  *)
 
-module J = Hh_json_helpers
+module J = Hh_json_helpers.AdhocJsonHelpers
 module Config = WatchmanEventWatcherConfig
 module Responses = Config.Responses
 
 type state =
   | Unknown
   (** State_enter heading towards. *)
-  | Entering_to of string
+  | Entering
   (** State_leave left at. *)
-  | Left_at of string
+  | Left
 
 type env = {
   watchman : Watchman.watchman_instance;
   (** Directory we are watching. *)
   root : Path.t;
-  state : state;
+  update_state : state;
+  transaction_state : state;
   socket : Unix.file_descr;
   waiting_clients : Unix.file_descr Queue.t;
 }
@@ -130,7 +130,7 @@ let send_to_fd env v fd =
   | Responses.Settled ->
     Unix.close fd
   | Responses.Unknown | Responses.Mid_update ->
-    Queue.add fd env.waiting_clients
+    Queue.enqueue env.waiting_clients fd
 
 let watchman_expression_terms = [
   J.strlist ["type"; "f"];
@@ -152,31 +152,50 @@ let process_changes changes env =
   in
   let notify_waiting_clients env =
     let clients = Queue.create () in
-    let () = Queue.transfer env.waiting_clients clients in
-    Queue.fold (fun () client -> notify_client client) () clients
+    let () = Queue.blit_transfer ~src:env.waiting_clients ~dst:clients () in
+    Queue.fold ~f:(fun () client -> notify_client client) ~init:() clients
   in
   let open Watchman in
   match changes with
   | Watchman_unavailable ->
     Hh_logger.log "Watchman unavailable. Exiting";
     exit 1
-  | Watchman_pushed (State_enter (name, json)) ->
+  | Watchman_pushed (Changed_merge_base (mergebase, changes, _)) ->
+    Hh_logger.log "changed mergebase: %s" mergebase;
+    let changes = String.concat ~sep:"\n" (SSet.elements changes) in
+    Hh_logger.log "changes: %s" changes;
+    let env = { env with update_state = Left; } in
+    let () = notify_waiting_clients env in
+    env
+  | Watchman_pushed (State_enter (name, json)) when name = "hg.update" ->
     Hh_logger.log "State_enter %s" name;
     let (>>=) = Option.(>>=) in
     let (>>|) = Option.(>>|) in
     ignore (json >>= Watchman_utils.rev_in_state_change >>| fun hg_rev -> begin
       Hh_logger.log "Revision: %s" hg_rev
     end);
-    { env with state = Entering_to name; }
-  | Watchman_pushed (State_leave (name, json)) ->
+    { env with update_state = Entering; }
+  | Watchman_pushed (State_enter (name, _json)) when name = "hg.transaction" ->
+    Hh_logger.log "State_enter hg.transaction";
+    { env with transaction_state = Entering; }
+  | Watchman_pushed (State_enter (name, _json))  ->
+    Hh_logger.log "Ignoring State_enter %s" name;
+    env
+  | Watchman_pushed (State_leave (name, json)) when name = "hg.update" ->
     Hh_logger.log "State_leave %s" name;
     let (>>=) = Option.(>>=) in
     let (>>|) = Option.(>>|) in
     ignore (json >>= Watchman_utils.rev_in_state_change >>| fun hg_rev -> begin
       Hh_logger.log "Revision: %s" hg_rev
     end);
-    let env = { env with state = Left_at name; } in
+    let env = { env with update_state = Left } in
     let () = notify_waiting_clients env in
+    env
+  | Watchman_pushed (State_leave (name, _json)) when name = "hg.transaction" ->
+    Hh_logger.log "State_leave hg.transaction";
+    { env with transaction_state = Left; }
+  | Watchman_pushed (State_leave (name, _json))  ->
+    Hh_logger.log "Ignoring State_leave %s" name;
     env
   | Watchman_pushed (Files_changed set) when (SSet.is_empty set)->
     env
@@ -225,12 +244,14 @@ let get_new_clients socket =
 let process_client_ env client =
   (** We allow this to throw Unix_error - this lets us ignore broken
    * clients instead of adding them to the waiting_clients queue. *)
-  (match env.state with
-  | Unknown ->
+  (match env.update_state, env.transaction_state with
+  | Unknown, _ | _, Unknown ->
     send_to_fd env Responses.Unknown client
-  | Entering_to _ ->
+  | Entering, Entering
+  | Entering, Left
+  | Left, Entering ->
     send_to_fd env Responses.Mid_update client
-  | Left_at _ ->
+  | Left, Left ->
     send_to_fd env Responses.Settled client);
   env
 
@@ -243,7 +264,8 @@ let check_new_connections env =
   let new_clients = get_new_clients env.socket in
   let env = List.fold_left new_clients ~init:env
     ~f:process_client in
-  HackEventLogger.processed_clients (List.length new_clients);
+  let count = List.length new_clients in
+  if count > 0 then HackEventLogger.processed_clients count;
   env
 
 let rec serve env =
@@ -255,10 +277,11 @@ let init_watchman root =
   Watchman.init {
     Watchman.subscribe_mode = Some Watchman.All_changes;
     init_timeout = 30;
-    sync_directory = "";
+    debug_logging = false;
     expression_terms = watchman_expression_terms;
-    root;
-  }
+    subscription_prefix = "hh_event_watcher";
+    roots = [root];
+  } ()
 
 let init root =
   let init_id = Random_id.short_string () in
@@ -267,43 +290,49 @@ let init root =
   if not (Lock.grab lock_file) then begin
     Hh_logger.log "Can't grab lock; terminating.\n%!";
     HackEventLogger.lock_stolen lock_file;
-    Result.Error Failure_daemon_already_running
+    Error Failure_daemon_already_running
   end else
   let watchman = init_watchman root in
   match watchman with
   | None ->
     Hh_logger.log "Error failed to initialize watchman";
-    Result.Error Failure_watchman_init
+    Error Failure_watchman_init
   | Some wenv ->
     let socket = Socket.init_unix_socket (Config.socket_file root) in
     Hh_logger.log "initialized and listening on %s"
       (Config.socket_file root);
-    Result.Ok {
+    Ok {
       watchman = Watchman.Watchman_alive wenv;
-      state = Unknown;
+      update_state = Unknown;
+      transaction_state = Unknown;
       socket;
       root;
       waiting_clients = Queue.create ();
     }
 
 let to_channel_no_exn oc data =
-  try Daemon.to_channel oc ~flush:true data with
-  | e ->
-    Hh_logger.exc ~prefix:"Warning: writing to channel failed" e
+  try
+    Daemon.to_channel oc ~flush:true data
+  with e ->
+    let stack = Printexc.get_backtrace () in
+    Hh_logger.exc ~prefix:"Warning: writing to channel failed" ~stack e
 
 let main root =
   Sys_utils.set_signal Sys.sigpipe Sys.Signal_ignore;
   let result = init root in
   match result with
-  | Result.Ok env -> begin
-      try serve env with
-      | e ->
+  | Ok env -> begin
+      try
+        serve env
+      with e ->
+        let raw_stack = Caml.Printexc.get_raw_backtrace () in
+        let stack = Caml.Printexc.raw_backtrace_to_string raw_stack in
         let () = Hh_logger.exc
-          ~prefix:"WatchmanEventWatcheer uncaught exception. exiting." e in
-        raise e
+          ~prefix:"WatchmanEventWatcher uncaught exception. exiting." ~stack e in
+        Caml.Printexc.raise_with_backtrace e raw_stack
     end
-  | Result.Error Failure_daemon_already_running
-  | Result.Error Failure_watchman_init ->
+  | Error Failure_daemon_already_running
+  | Error Failure_watchman_init ->
     exit 1
 
 let log_file root =
@@ -314,15 +343,15 @@ let log_file root =
 
 let daemon_main_ root oc =
   match init root with
-  | Result.Ok env ->
+  | Ok env ->
     to_channel_no_exn oc Init_success;
     serve env
-  | Result.Error Failure_watchman_init ->
+  | Error Failure_watchman_init ->
     to_channel_no_exn oc (Init_failure Failure_watchman_init);
     Hh_logger.log "Watchman init failed. Exiting.";
     HackEventLogger.init_watchman_failed ();
     exit 1;
-  | Result.Error Failure_daemon_already_running ->
+  | Error Failure_daemon_already_running ->
     Hh_logger.log "Daemon already running. Exiting.";
     exit 1
 

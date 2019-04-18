@@ -1,8 +1,10 @@
 .main {
   .try {
+    NullUninit
+    NullUninit
+    NullUninit
     FPushFuncD 0 "main"
-    FCall 0
-    UnboxR
+    FCall <> 0 1 "" - "" ""
     RetC
   } .catch {
     PopC
@@ -19,11 +21,14 @@
     PopC
 
     .try {
-      FPushCtorD 1 "Exception"
+      NewObjD "Exception"
+      Dup
+      NullUninit
+      NullUninit
       String "ex"
-      FPassC 0
-      FCall 1
-      PopR
+      FPushCtor 1
+      FCall <> 1 1 "" - "" ""
+      PopC
       Throw
     } .catch {
       String "handler2\n"

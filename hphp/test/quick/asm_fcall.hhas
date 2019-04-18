@@ -3,27 +3,35 @@
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
   Null
   RetC
 }
 
 .function caller($who, $arg) {
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $arg
   CGetL $who
   FPushFunc 1
-  FPassL 0 $arg
-  FCall 1
-  UnboxR
+  FCall <> 1 1 "" - "" ""
 
   SetL $ret
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $ret
   FPushFunc 0
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   True
   RetC
@@ -56,21 +64,25 @@
 }
 
 .function main() {
-  FPushFuncD 2 "caller"
+  NullUninit
+  NullUninit
+  NullUninit
   String "a"
-  FPassC 0
   String "b"
-  FPassC 1
-  FCall 2
-  PopR
+  FPushFuncD 2 "caller"
+  FCall <> 2 1 "" - "" ""
+  PopC
 
   String "strval"
   SetL $funk
   PopC
+  NullUninit
+  NullUninit
+  NullUninit
+  VGetL $funk
   FPushFuncD 1 "byref"
-  FPassL 0 $funk
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
   CGetL $funk
   Print
   PopC

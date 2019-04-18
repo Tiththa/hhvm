@@ -1,0 +1,5 @@
+-vEval.HHIREnableGenTimeInlining=0
+--count 3
+-vEval.HackArrCompatTypeHintNotices=1
+-vEval.EnableHipHopSyntax=1
+-vEval.EnablePHP=1

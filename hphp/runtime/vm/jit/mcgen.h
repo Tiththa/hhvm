@@ -47,6 +47,10 @@ struct TransArgs {
   Annotations annotations;
   TransFlags flags{0};
   TransID transId{kInvalidTransID};
+  // A sequential per function index to identify optimized
+  // translations in TRACE and StructuredLog output (in particular to
+  // make it possible to cross reference between the two).
+  int optIndex{0};
   TransKind kind{TransKind::Invalid};
   RegionDescPtr region{nullptr};
 };
@@ -110,10 +114,13 @@ TCA retranslate(TransArgs args, const RegionContext& ctx);
 bool retranslateOpt(FuncId funcId);
 
 /*
- * In JitPGO mode, check whether enough profile data has been collected and,
- * if we haven't retranslated
+ * In JitPGO mode, run retranslateAll if its enabled, we haven't already run it,
+ * and either force is true, or we've collected "enough" profile data.
+ *
+ * In CLI mode, or when force is true, wait for retranslateAll to
+ * finish; otherwise let it run in parallel.
  */
-void checkRetranslateAll();
+void checkRetranslateAll(bool force = false);
 
 /*
  * Called once when the JIT is activated to initialize internal mcgen structures
@@ -137,15 +144,9 @@ bool initialized();
 int64_t jitInitTime();
 
 /*
- * Whether we should dump TC annotations for translations of `func' of
- * `transKind'.
+ * Whether we should dump TC annotations for translations of `transKind'.
  */
-bool dumpTCAnnotation(const Func& func, TransKind transKind);
-
-/*
- * Is still a pending call to retranslateAll()
- */
-bool retranslateAllPending();
+bool dumpTCAnnotation(TransKind transKind);
 
 /*
  * How many JIT worker threads are active.

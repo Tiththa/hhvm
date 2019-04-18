@@ -7,7 +7,7 @@
 */
 
 /* creating directories, symbolic links and files */
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 mkdir("$file_path/readlink_realpath_basic1/home/test/", 0777, true);
 
 $file_handle1 = fopen("$file_path/readlink_realpath_basic1/home/test/readlink_realpath_basic1.tmp", "w");
@@ -48,10 +48,9 @@ foreach($linknames as $link) {
 }
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
-$name_prefix = dirname(__FILE__)."/readlink_realpath_basic1";
+error_reporting(0);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+$name_prefix = $file_path."/readlink_realpath_basic1";
 unlink("$name_prefix/home/test/readlink_realpath_basic1.tmp");
 unlink("$name_prefix/home/readlink_realpath_basic1.tmp");
 unlink("$name_prefix/readlink_realpath_basic1.tmp");
@@ -60,4 +59,3 @@ unlink("$name_prefix/home/readlink_realpath_basic1_link.tmp");
 rmdir("$name_prefix/home/test/");
 rmdir("$name_prefix/home/");
 rmdir("$name_prefix/");
-?>

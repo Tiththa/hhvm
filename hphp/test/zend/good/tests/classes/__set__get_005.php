@@ -1,13 +1,13 @@
 <?php
 class Test
 {
-	protected $x;
+	protected $x = array();
 
 	function __get($name) {
 		echo __METHOD__ . "\n";
 		if (isset($this->x[$name])) {
 			return $this->x[$name];
-		} 
+		}
 		else
 		{
 			return NULL;
@@ -22,7 +22,7 @@ class Test
 
 class AutoGen
 {
-	protected $x;
+	protected $x = array();
 
 	function __get($name) {
 		echo __METHOD__ . "\n";
@@ -44,5 +44,4 @@ $foo->bar->baz = "Check";
 var_dump($foo->bar);
 var_dump($foo->bar->baz);
 
-?>
-===DONE===
+echo "===DONE===\n";

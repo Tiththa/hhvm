@@ -118,11 +118,10 @@ $needles =  array (
 $count = 1;
 for($index = 0; $index < count($haystacks); $index++) {
   echo "-- Iteration $count --\n";
-  var_dump( strrchr($haystacks[$index], $needles[$index]) );
+  try { var_dump( strrchr($haystacks[$index], $needles[$index]) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $count ++;
 }
 
 fclose($file_handle);  //closing the file handle
 
 echo "*** Done ***";
-?>

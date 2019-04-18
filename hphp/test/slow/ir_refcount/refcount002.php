@@ -2,11 +2,14 @@
 
 function foo() { mt_rand(); mt_rand(); mt_rand(); return new stdclass(); }
 
-function bar() {
-  $k = "asd";
-  $z =& $k;
+function bar(&$k, &$z) {
   $y = foo();
   echo $z;
 }
 
-bar();
+
+<<__EntryPoint>>
+function main_refcount002() {
+  $k = "asd";
+  bar(&$k, &$k);
+}

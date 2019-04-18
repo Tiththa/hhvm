@@ -1,9 +1,6 @@
 """
 Helpers for accessing C++ STL containers in GDB.
 """
-# @lint-avoid-python-3-compatibility-imports
-# @lint-avoid-pyflakes3
-# @lint-avoid-pyflakes2
 
 from compatibility import *
 
@@ -215,6 +212,20 @@ def tread_hash_map_at(thm, key, hasher=None):
             idx = 0
 
 
+def compact_vector_at(vec, idx, hasher=None):
+    if vec['m_data'] == nullptr():
+        return None
+
+    sz = vec['m_data']['m_len']
+    if idx >= sz:
+        return None
+
+    inner = vec.type.template_argument(0)
+    elems = (vec['m_data'].cast(T('char').pointer()) +
+             vec['elems_offset']).cast(inner.pointer())
+    return elems[idx]
+
+
 #------------------------------------------------------------------------------
 # PHP value accessors.
 
@@ -223,15 +234,17 @@ def _object_data_prop_vec(obj):
     return prop_vec.cast(T('HPHP::TypedValue').pointer())
 
 
-def object_data_at(obj, prop_name, hasher=None):
-    cls = rawptr(obj['m_cls'])
-
-    prop_vec = _object_data_prop_vec(obj)
-    prop_ind = _ism_index(cls['m_declProperties'], prop_name)
+def object_data_at(obj, prop_name_or_idx, hasher=None):
+    sinfo = strinfo(prop_name_or_idx)
+    if sinfo is None:
+        prop_ind = prop_name_or_idx
+    else:
+        prop_ind = _ism_index(cls['m_declProperties'], prop_name_or_idx)
 
     if prop_ind is None:
         return None
 
+    prop_vec = _object_data_prop_vec(obj)
     return prop_vec[prop_ind]
 
 
@@ -255,6 +268,7 @@ def idx_accessors():
         'HPHP::IndexedStringMap':   indexed_string_map_at,
         'HPHP::TreadHashMap':       tread_hash_map_at,
         'HPHP::ObjectData':         object_data_at,
+        'HPHP::CompactVector':      compact_vector_at,
     }
 
 
@@ -277,7 +291,11 @@ def idx(container, index, hasher=None):
         try:
             value = container[index]
         except:
-            print('idx: Unrecognized container.')
+            print(
+                'idx: Unrecognized container (%s - %s).' % (
+                    container_type, true_type
+                )
+            )
             return None
 
     return value
@@ -320,7 +338,10 @@ hash, if valid, will be used instead of the default hash for the key type.
             return None
 
         ty = str(value.type.pointer())
-        ty_parts = re.split('([*&])', ty, 1)
+        ty_parts = [
+            x for x in
+            re.split('(\s*(?:const\s*)?[*&](?!\s*[>,]))', ty, 1) if x
+        ]
         ty_parts[0] = "'%s'" % ty_parts[0]
 
         gdb.execute('print *(%s)%s' % (

@@ -1,7 +1,10 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_1415() {
 $arr = array('one', 'two', 'three', 'four', 'stop', 'five');
-while (list(, $val) = each($arr)) {
+while (list(, $val) = each(&$arr)) {
   if ($val == 'stop') {
     break;
   }
@@ -19,4 +22,5 @@ while (++$i) {
     default:
       break;
     }
+}
 }

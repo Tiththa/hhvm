@@ -18,7 +18,7 @@
 
 #include <folly/Likely.h> // defining LIKELY/UNLIKELY is part of this header
 #include <folly/Portability.h>
-#include <folly/CPortability.h> // defining FOLLY_DISABLE_ADDRESS_SANITIZER
+#include <folly/CPortability.h> // FOLLY_DISABLE_ADDRESS_SANITIZER, FOLLY_EXPORT
 
 //////////////////////////////////////////////////////////////////////
 
@@ -72,10 +72,15 @@
   __attribute__((__format__ (__printf__, a1, a2)))
 #define ATTRIBUTE_UNUSED   __attribute__((__unused__))
 #define ATTRIBUTE_USED     __attribute__((__used__))
-#define ALWAYS_INLINE      inline __attribute__((__always_inline__))
-#define EXTERNALLY_VISIBLE __attribute__((__externally_visible__))
-#define FLATTEN            __attribute__((__flatten__))
-#define INLINE_FLATTEN     inline __attribute__((__always_inline__,__flatten__))
+#ifndef NDEBUG
+# define FLATTEN           /*nop*/
+# define ALWAYS_INLINE     inline
+# define INLINE_FLATTEN    inline
+#else
+# define FLATTEN           __attribute__((__flatten__))
+# define ALWAYS_INLINE     inline __attribute__((__always_inline__))
+# define INLINE_FLATTEN    inline __attribute__((__always_inline__,__flatten__))
+#endif
 #define NEVER_INLINE       __attribute__((__noinline__))
 #define UNUSED             __attribute__((__unused__))
 
@@ -83,8 +88,10 @@
 
 #ifdef __clang__
 #define NO_OPT [[clang::optnone]]
+#define EXTERNALLY_VISIBLE ATTRIBUTE_USED FOLLY_EXPORT
 #else
 #define NO_OPT __attribute__((__optimize__("O0")))
+#define EXTERNALLY_VISIBLE __attribute__((__externally_visible__))
 #endif
 
 #if defined(__GNUC__)
@@ -95,11 +102,23 @@
 # define HHVM_ATTRIBUTE_WEAK
 #endif
 
-#ifdef DEBUG
+#ifndef NDEBUG
 # define DEBUG_ONLY /* nop */
 #else
 # define DEBUG_ONLY UNUSED
 #endif
+
+
+/*
+ * AARCH64 needs to create a walkable stack frame for
+ * getFrameRegs() when a FixupEntry isIndirect()
+ */
+#ifdef __aarch64__
+#define AARCH64_WALKABLE_FRAME() asm("" ::: "memory");
+#else
+#define AARCH64_WALKABLE_FRAME()
+#endif
+
 
 /*
  * We need to keep some unreferenced functions from being removed by
@@ -152,9 +171,11 @@
 #elif defined(__AARCH64EL__)
 
 # if defined(__clang__)
-#  error Clang implementation not done for ARM
-# endif
+# define DECLARE_FRAME_POINTER(fp) register ActRec* fp = (ActRec*) \
+  __builtin_frame_address(0)
+#else
 # define DECLARE_FRAME_POINTER(fp) register ActRec* fp asm("x29")
+#endif
 
 #elif defined(__powerpc64__)
 
@@ -202,7 +223,8 @@
 #elif defined (__AARCH64EL__)
   #define CALLEE_SAVED_BARRIER()\
     asm volatile("" : : : "x19", "x20", "x21", "x22", "x23", "x24", "x25",\
-                 "x26", "x27", "x28")
+                 "x26", "x27", "x28", \
+                 "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15")
 #else
   #define CALLEE_SAVED_BARRIER()\
     asm volatile("" : : : "rbx", "r12", "r13", "r14", "r15");
@@ -251,6 +273,12 @@
 // 2015 RTM doesn't like it when you try to add via a double duration.
 // Bug Report: https://connect.microsoft.com/VisualStudio/feedback/details/1839243
 # define MSVC_NO_STD_CHRONO_DURATION_DOUBLE_ADD 1
+#endif
+
+#ifdef __APPLE__
+#define ASM_LOCAL_LABEL(x) "L" x
+#else
+#define ASM_LOCAL_LABEL(x) ".L" x
 #endif
 
 #endif

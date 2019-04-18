@@ -26,16 +26,6 @@ function base_define($ks, $k) {
   var_dump($ks);
 }
 
-function base_define_reffy($ks, $k) {
-  $str = 'abc';
-  try {
-    $ks[$k][0] = &$str;
-  } catch (Exception $e) {
-    echo "Exception: \"" . $e->getMessage() . "\"\n";
-  }
-  var_dump($ks);
-}
-
 function base_unset($ks, $k) {
   try {
     unset($ks[$k][0]);
@@ -66,13 +56,6 @@ function base($ks) {
   base_define($ks, '1');
   base_define($ks, 'foo');
   base_define($ks, true);
-
-  echo "======= base_define_reffy ==========================\n";
-  base_define_reffy($ks, 1);
-  base_define_reffy($ks, 3);
-  base_define_reffy($ks, '1');
-  base_define_reffy($ks, 'foo');
-  base_define_reffy($ks, true);
 
   echo "======= base_unset =================================\n";
   base_unset($ks, 1);
@@ -109,7 +92,7 @@ function base($ks) {
   echo "======= base_prop_set ==============================\n";
   try {
     $copy = $ks;
-    $copy->foobaz[0] = 123;
+    $copy->foobaz = [123];
     var_dump($copy);
   } catch (Exception $e) {
     echo "Exception: \"" . $e->getMessage() . "\"\n";
@@ -135,16 +118,6 @@ function dim_elem($a, $k) {
 function dim_define($a, $k) {
   try {
     $a[1][$k][0] = 200;
-  } catch (Exception $e) {
-    echo "Exception: \"" . $e->getMessage() . "\"\n";
-  }
-  var_dump($a);
-}
-
-function dim_define_reffy($a, $k) {
-  $str = 'abc';
-  try {
-    $a[1][$k][0] = &$str;
   } catch (Exception $e) {
     echo "Exception: \"" . $e->getMessage() . "\"\n";
   }
@@ -182,13 +155,6 @@ function dim($a) {
   dim_define($a, 'foo');
   dim_define($a, true);
 
-  echo "======= dim_define_reffy ===========================\n";
-  dim_define_reffy($a, 1);
-  dim_define_reffy($a, 3);
-  dim_define_reffy($a, '1');
-  dim_define_reffy($a, 'foo');
-  dim_define_reffy($a, true);
-
   echo "======= dim_unset ==================================\n";
   dim_unset($a, 1);
   dim_unset($a, 3);
@@ -224,7 +190,7 @@ function dim($a) {
   echo "======= dim_prop_set ===============================\n";
   try {
     $copy = $a;
-    $copy[1]->foobaz[0] = 123;
+    $copy[1]->foobaz = [123];
     var_dump($copy);
   } catch (Exception $e) {
     echo "Exception: \"" . $e->getMessage() . "\"\n";
@@ -263,16 +229,6 @@ function fini_isset($a, $k) {
   }
 }
 
-function fini_vget($a, $k) {
-  try {
-    $v = &$a[1][$k];
-    var_dump($v);
-  } catch (Exception $e) {
-    echo "Exception: \"" . $e->getMessage() . "\"\n";
-  }
-  var_dump($a);
-}
-
 function fini_set($a, $k) {
   try {
     $a[1][$k] = 123;
@@ -309,16 +265,6 @@ function fini_unset($a, $k) {
   var_dump($a);
 }
 
-function fini_bind($a, $k) {
-  $str = "some-str";
-  try {
-    $a[1][$k] = &$str;
-  } catch (Exception $e) {
-    echo "Exception: \"" . $e->getMessage() . "\"\n";
-  }
-  var_dump($a);
-}
-
 function fini($a) {
   echo "======= fini_cget_warn =============================\n";
   fini_cget_warn($a, 1);
@@ -347,23 +293,6 @@ function fini($a) {
   fini_isset($a, '1');
   fini_isset($a, 'foo');
   fini_isset($a, true);
-
-  echo "======= fini_vget ==================================\n";
-  fini_vget($a, 1);
-  fini_vget($a, 3);
-  fini_vget($a, '1');
-  fini_vget($a, 'foo');
-  fini_vget($a, true);
-
-  echo "======= fini_vget_new_elem =========================\n";
-  try {
-    $copy = $a;
-    $v = &$copy[1][];
-    var_dump($v);
-    var_dump($copy);
-  } catch (Exception $e) {
-    echo "Exception: \"" . $e->getMessage() . "\"\n";
-  }
 
   echo "======= fini_set ===================================\n";
   fini_set($a, 1);
@@ -419,23 +348,6 @@ function fini($a) {
   fini_unset($a, '1');
   fini_unset($a, 'foo');
   fini_unset($a, true);
-
-  echo "======= fini_bind ==================================\n";
-  fini_bind($a, 1);
-  fini_bind($a, 3);
-  fini_bind($a, '1');
-  fini_bind($a, 'foo');
-  fini_bind($a, true);
-
-  echo "======= fini_bind_new_elem =========================\n";
-  try {
-    $copy = $a;
-    $str = "some-str";
-    $copy[1][] = &$str;
-    var_dump($copy);
-  } catch (Exception $e) {
-    echo "Exception: \"" . $e->getMessage() . "\"\n";
-  }
 
   echo "======= fini_str_to_arr ============================\n";
   try {

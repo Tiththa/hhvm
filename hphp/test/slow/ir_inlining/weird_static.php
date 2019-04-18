@@ -6,9 +6,9 @@ final class Constants {
   }
 }
 
+<<__EntryPoint>>
 function main() {
   $g = Constants::gen();
+  $g->next();
   var_dump($g->current());
 }
-
-main();

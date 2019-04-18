@@ -32,17 +32,12 @@ class C extends Base {
 class CMagic {
   public function __call($name, $args) {
     echo $name, ' called on instance', "\n";
-    return intval(reset($args));
+    return intval(reset(&$args));
   }
   public static function __callStatic($name, $args) {
     echo $name, ' called statically', "\n";
-    return intval(reset($args));
+    return intval(reset(&$args));
   }
-}
-
-class Dtor {
-  public function __destruct() { echo __METHOD__, "\n"; }
-  public function f() { echo __METHOD__, "\n"; }
 }
 
 
@@ -53,13 +48,6 @@ class Foo extends Base {
 function invoker($x) {
   call_user_func($x);
   $x();
-}
-
-function test_destructor() {
-  echo ' = ', __FUNCTION__, " =\n";
-
-  invoker(array(new Dtor(), 'f'));
-  echo "done: test_destructor\n";
 }
 
 function test_inheritance() {
@@ -117,7 +105,6 @@ function test_invocation_syntaxes() {
 }
 
 function main() {
-  test_destructor();
   test_inheritance();
   test_invocation_syntaxes();
 }

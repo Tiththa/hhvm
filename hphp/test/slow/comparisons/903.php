@@ -1,5 +1,9 @@
 <?php
 
+
+
+<<__EntryPoint>>
+function main_903() {
 $i = 0;
  print ++$i;
  print "\t";
@@ -153,18 +157,18 @@ $i = 0;
  print "\n";
  print ++$i;
  print "\t";
- print (array('0' => '1')!=array(1)) ? 'Y' : 'N';
+ print (array(0 => '1')!=array(1)) ? 'Y' : 'N';
  $a = 1;
  $a = 't';
- $a = array('0' => '1');
+ $a = array(0 => '1');
  print ($a !=array(1)) ? 'Y' : 'N';
  $b = 1;
  $b = 't';
  $b = array(1);
- print (array('0' => '1')!=$b) ? 'Y' : 'N';
+ print (array(0 => '1')!=$b) ? 'Y' : 'N';
  print ($a !=$b) ? 'Y' : 'N';
  print "\t";
- print "array('0' => '1') != array(1)	";
+ print "array(0 => '1') != array(1)	";
  print "\n";
  print ++$i;
  print "\t";
@@ -179,19 +183,19 @@ $i = 0;
  print (array('0' => '1')!=$b) ? 'Y' : 'N';
  print ($a !=$b) ? 'Y' : 'N';
  print "\t";
- print "array('0' => '1') != array(2)	";
+ print "array(0 => '1') != array(2)	";
  print "\n";
  print ++$i;
  print "\t";
- print (array('0' => '1')!=array('1')) ? 'Y' : 'N';
+ print (array(0 => '1')!=array('1')) ? 'Y' : 'N';
  $a = 1;
  $a = 't';
- $a = array('0' => '1');
+ $a = array(0 => '1');
  print ($a !=array('1')) ? 'Y' : 'N';
  $b = 1;
  $b = 't';
  $b = array('1');
- print (array('0' => '1')!=$b) ? 'Y' : 'N';
+ print (array(0 => '1')!=$b) ? 'Y' : 'N';
  print ($a !=$b) ? 'Y' : 'N';
  print "\t";
  print "array('0' => '1') != array('1')	";
@@ -331,4 +335,4 @@ $i = 0;
  print "\t";
  print "array('0' => '1') != ''	";
  print "\n";
-
+}

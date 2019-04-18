@@ -18,12 +18,13 @@
 
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/base/tv-type.h"
-#include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
+#include "hphp/runtime/vm/jit/ir-opcode.h"
+#include "hphp/runtime/vm/jit/minstr-effects.h"
 #include "hphp/runtime/vm/jit/print.h"
+#include "hphp/runtime/vm/jit/prof-data-serialize.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
 #include "hphp/runtime/vm/jit/translator.h"
-#include "hphp/runtime/vm/jit/minstr-effects.h"
 
 #include "hphp/util/abi-cxx.h"
 #include "hphp/util/text-util.h"
@@ -42,6 +43,36 @@
 namespace HPHP { namespace jit {
 
 TRACE_SET_MOD(hhir);
+
+///////////////////////////////////////////////////////////////////////////////
+
+// Static member definitions.
+// This section can be safely deleted in C++17.
+constexpr Type::bits_t Type::kBottom;
+constexpr Type::bits_t Type::kTop;
+
+#define IRT(name, bits)       constexpr Type::bits_t Type::k##name;
+#define IRTP(name, ptr, bits)
+#define IRTL(name, ptr, bits)
+#define IRTM(name, ptr, bits)
+#define IRTX(name, ptr, bits)
+  IR_TYPES
+#undef IRT
+#undef IRTP
+#undef IRTL
+#undef IRTM
+#undef IRTX
+
+constexpr Type::bits_t Type::kAnyArr;
+constexpr Type::bits_t Type::kAnyVec;
+constexpr Type::bits_t Type::kAnyDict;
+constexpr Type::bits_t Type::kAnyKeyset;
+constexpr Type::bits_t Type::kAnyArrLike;
+constexpr Type::bits_t Type::kArrSpecBits;
+constexpr Type::bits_t Type::kAnyObj;
+constexpr Type::bits_t Type::kClsSpecBits;
+
+///////////////////////////////////////////////////////////////////////////////
 
 std::string Type::constValString() const {
   if (*this <= TBottom)   return "Bottom";
@@ -88,6 +119,12 @@ std::string Type::constValString() const {
     }
     return folly::format("Dict({})", m_dictVal).str();
   }
+  if (*this <= TPersistentShape) {
+    if (m_shapeVal->empty()) {
+      return "shape()";
+    }
+    return folly::format("Shape({})", m_shapeVal).str();
+  }
   if (*this <= TStaticKeyset) {
     if (m_keysetVal->empty()) {
       return "keyset()";
@@ -101,6 +138,14 @@ std::string Type::constValString() const {
   if (*this <= TCls) {
     return folly::format("Cls({})", m_clsVal ? m_clsVal->name()->data()
                                              : "nullptr").str();
+  }
+  if (*this <= TClsMeth) {
+    return folly::format("ClsMeth({},{})",
+      m_clsmethVal->getCls() ?
+      m_clsmethVal->getCls()->name()->data() : "nullptr",
+      m_clsmethVal->getFunc() ?
+      m_clsmethVal->getFunc()->fullName()->data() : "nullptr"
+    ).str();
   }
   if (*this <= TCctx) {
     if (!m_intVal) {
@@ -128,19 +173,26 @@ std::string Type::constValString() const {
   if (*this <= TPtrToGen) {
     return folly::sformat("TV: {}", m_ptrVal);
   }
+  if (*this <= TLvalToGen) {
+    return folly::sformat("Lval: {}", m_ptrVal);
+  }
+  if (*this <= TMemToGen) {
+    return folly::sformat("Mem: {}", m_ptrVal);
+  }
 
   always_assert_flog(
     false,
-    "Bad type in constValString(): {:#16x}:{}:{}:{:#16x}",
-    m_bits,
-    static_cast<ptr_t>(m_ptrKind),
+    "Bad type in constValString(): {}:{}:{}:{}:{:#16x}",
+    m_bits.hexStr(),
+    static_cast<ptr_t>(m_ptr),
+    static_cast<ptr_t>(m_mem),
     m_hasConstVal,
     m_extra
   );
 }
 
 static std::string show(Ptr ptr) {
-  always_assert(ptrSubsetOf(ptr, Ptr::Ptr));
+  always_assert(ptr <= Ptr::Ptr);
 
   switch (ptr) {
     case Ptr::Bottom:
@@ -155,18 +207,24 @@ static std::string show(Ptr ptr) {
 
   std::vector<const char*> parts;
 #define PTRT(name, ...) \
-  if (ptrSubsetOf(Ptr::name, ptr)) parts.emplace_back(#name);
+  if (Ptr::name <= ptr) parts.emplace_back(#name);
   PTR_PRIMITIVE(PTRT, PTR_NO_R)
 #undef PTRT
   return folly::sformat("{{{}}}", folly::join('|', parts));
 }
 
-static const std::unordered_map<Type, const char*> s_typeNames{
+static const jit::fast_map<Type, const char*> s_typeNames{
 #define IRT(x, ...) {T##x, #x},
 #define IRTP IRT
+#define IRTL IRT
+#define IRTM IRT
+#define IRTX IRT
   IR_TYPES
 #undef IRT
 #undef IRTP
+#undef IRTL
+#undef IRTM
+#undef IRTX
 };
 
 std::string Type::toString() const {
@@ -206,12 +264,24 @@ std::string Type::toString() const {
     return ret;
   }
 
-  assertx(ptrSubsetOf(t.ptrKind(), Ptr::NotPtr));
+  if (t.maybe(TLvalToGen)) {
+    assertx(!t.m_hasConstVal);
+    auto ret = "LvalTo" +
+      show(t.ptrKind() & Ptr::Ptr) +
+      (t & TLvalToGen).deref().toString();
+
+    t -= TLvalToGen;
+    if (t != TBottom) ret += "|" + t.toString();
+    return ret;
+  }
+
+  assertx(t.ptrKind() <= Ptr::NotPtr);
+  assertx(t.memKind() <= Mem::NotMem);
 
   std::vector<std::string> parts;
   if (isSpecialized()) {
     if (auto clsSpec = t.clsSpec()) {
-      auto const base = Type(m_bits & kClsSpecBits, t.ptrKind());
+      auto const base = Type{m_bits & kClsSpecBits, t.ptrKind(), t.memKind()};
       auto const exact = clsSpec.exact() ? "=" : "<=";
       auto const name = clsSpec.cls()->name()->data();
       auto const partStr = folly::to<std::string>(base.toString(), exact, name);
@@ -219,7 +289,12 @@ std::string Type::toString() const {
       parts.push_back(partStr);
       t -= TAnyObj;
     } else if (auto arrSpec = t.arrSpec()) {
-      auto str = Type(m_bits & kArrSpecBits, t.ptrKind()).toString();
+      auto str = Type{
+        m_bits & kArrSpecBits,
+        t.ptrKind(),
+        t.memKind()
+      }.toString();
+
       if (auto const kind = arrSpec.kind()) {
         str += "=";
         str += ArrayData::kindToString(*kind);
@@ -234,12 +309,47 @@ std::string Type::toString() const {
     }
   }
 
-  // Concat all of the primitive types in the custom union type
-# define IRT(name, ...) if (T##name <= t) parts.push_back(#name);
-# define IRTP(name, ...)
-  IRT_PRIMITIVE
-# undef IRT
-# undef IRTP
+  // Sort all types by decreasing number of bits in their representation. This
+  // ensures that larger unions come first.
+  static auto const sortedTypes = []{
+    std::vector<std::pair<Type, const char*>> types{
+#define IRT(x, ...) {T##x, #x},
+#define IRTP IRT
+#define IRTL IRT
+#define IRTM IRT
+#define IRTX IRT
+      IR_TYPES
+#undef IRT
+#undef IRTP
+#undef IRTL
+#undef IRTM
+#undef IRTX
+    };
+    std::sort(
+      types.begin(), types.end(),
+      [](const std::pair<Type, const char*>& a,
+         const std::pair<Type, const char*>& b) {
+        auto const pop1 = a.first.m_bits.count();
+        auto const pop2 = b.first.m_bits.count();
+        if (pop1 != pop2) return pop1 > pop2;
+        return std::strcmp(a.second, b.second) < 0;
+      }
+    );
+    // Remove Bottom
+    while (types.back().first.m_bits == kBottom) types.pop_back();
+    return types;
+  }();
+
+  // Decompose the type into a union of pre-defined types. Since we've sorted
+  // the type list in decreasing size, this means the decomposition will be
+  // minimal.
+  for (auto const& t2 : sortedTypes) {
+    if (t <= TBottom) break;
+    if (t2.first <= t) {
+      parts.push_back(t2.second);
+      t -= t2.first;
+    }
+  }
 
   assertx(!parts.empty());
   if (parts.size() == 1) return parts.front();
@@ -250,29 +360,146 @@ std::string Type::debugString(Type t) {
   return t.toString();
 }
 
+namespace {
+enum TypeKey : uint8_t {
+  None,
+  Const,
+  ClsSub,
+  ClsExact,
+  ArrSpec
+};
+}
+
+void Type::serialize(ProfDataSerializer& ser) const {
+  SCOPE_EXIT {
+    ITRACE_MOD(Trace::hhbc, 2, "Type: {}\n", toString());
+  };
+  ITRACE_MOD(Trace::hhbc, 2, "Type>\n");
+  Trace::Indent _;
+
+  write_raw(ser, m_bits);
+  write_raw(ser, m_ptr);
+  write_raw(ser, m_mem);
+
+  Type t = *this;
+  if (t.maybe(TNullptr)) t = t - TNullptr;
+  if (t <= TBoxedCell) t = inner();
+
+  auto const key = m_hasConstVal ? TypeKey::Const :
+    t.clsSpec() ? (t.clsSpec().exact() ? TypeKey::ClsExact : TypeKey::ClsSub) :
+    t.arrSpec() ? TypeKey::ArrSpec : TypeKey::None;
+
+  write_raw(ser, key);
+
+  if (key == TypeKey::Const) {
+    if (t <= TCls)       return write_class(ser, t.m_clsVal);
+    if (t <= TFunc)      return write_func(ser, t.m_funcVal);
+    if (t <= TStaticStr) return write_string(ser, t.m_strVal);
+    if (t < TArrLike) {
+      return write_array(ser, t.m_arrVal);
+    }
+    if (t <= TCctx)      return write_class(ser, t.m_cctxVal.cls());
+    assertx(t.subtypeOfAny(TBool, TInt, TDbl));
+    return write_raw(ser, t.m_extra);
+  }
+
+  if (key == TypeKey::ClsSub || key == TypeKey::ClsExact) {
+    return write_class(ser, t.clsSpec().cls());
+  }
+  if (key == TypeKey::ArrSpec) {
+    return write_raw(ser, t.m_extra);
+  }
+}
+
+Type Type::deserialize(ProfDataDeserializer& ser) {
+  ITRACE_MOD(Trace::hhbc, 2, "Type>\n");
+  auto const ret = [&] {
+    Trace::Indent _;
+    Type t{};
+
+    read_raw(ser, t.m_bits);
+    read_raw(ser, t.m_ptr);
+    read_raw(ser, t.m_mem);
+    auto const key = read_raw<TypeKey>(ser);
+    if (key == TypeKey::Const) {
+      t.m_hasConstVal = true;
+      if (t <= TCls) {
+        t.m_clsVal = read_class(ser);
+        return t;
+      }
+      if (t <= TFunc) {
+        t.m_funcVal = read_func(ser);
+        return t;
+      }
+      if (t <= TStaticStr) {
+        t.m_strVal = read_string(ser);
+        return t;
+      }
+      if (t < TArrLike) {
+        t.m_arrVal = read_array(ser);
+        return t;
+      }
+      if (t <= TCctx) {
+        t.m_cctxVal = ConstCctx::cctx(read_class(ser));
+        return t;
+      }
+      read_raw(ser, t.m_extra);
+      return t;
+    }
+
+    t.m_hasConstVal = false;
+    if (key == TypeKey::None) return t;
+    if (key == TypeKey::ClsSub || key == TypeKey::ClsExact) {
+      auto const cls = read_class(ser);
+      if (key == TypeKey::ClsExact) {
+        t.m_clsSpec = ClassSpec{cls, ClassSpec::ExactTag{}};
+      } else {
+        t.m_clsSpec = ClassSpec{cls, ClassSpec::SubTag{}};
+      }
+    } else {
+      assertx(key == TypeKey::ArrSpec);
+      read_raw(ser, t.m_extra);
+      if (auto const arr = t.m_arrSpec.type()) {
+        t.m_arrSpec.adjust(ser.remap(arr));
+      }
+    }
+    return t;
+  }();
+  ITRACE_MOD(Trace::hhbc, 2, "Type: {}\n", ret.toString());
+  return ret;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 bool Type::checkValid() const {
   // Note: be careful, the TFoo objects aren't all constructed yet in this
   // function.
   if (m_extra) {
-    assertx(((m_bits & kClsSpecBits) == 0 || (m_bits & kArrSpecBits) == 0) &&
+    assertx(((m_bits & kClsSpecBits) == kBottom ||
+             (m_bits & kArrSpecBits) == kBottom) &&
             "Conflicting specialization");
   }
 
   // We should have one canonical representation of Bottom.
   if (m_bits == kBottom) {
     assert_flog(*this == TBottom,
-                "Bottom m_bits but nonzero others in {:#16x}:{}:{}:{:#16x}",
-                m_bits, m_ptrVal, m_hasConstVal, m_extra);
+                "Bottom m_bits but nonzero others in {}:{}:{}:{:#16x}",
+                m_bits.hexStr(), m_ptrVal, m_hasConstVal, m_extra);
   }
+
+  // m_ptr and m_mem should be Bottom iff we have no kGen bits.
+  assertx(((m_bits & kGen) == kBottom) == (m_ptr == Ptr::Bottom));
+  assertx(((m_bits & kGen) == kBottom) == (m_mem == Mem::Bottom));
+
+  // Ptr::NotPtr and Mem::NotMem should imply one another.
+  assertx((m_ptr == Ptr::NotPtr) == (m_mem == Mem::NotMem));
 
   return true;
 }
 
 Type::bits_t Type::bitsFromDataType(DataType outer, DataType inner) {
-  assertx(inner != KindOfRef);
-  assertx(inner == KindOfUninit || outer == KindOfRef);
+  assertx(!isRefType(inner));
+  assertx(inner == KindOfUninit || isRefType(outer));
 
   switch (outer) {
     case KindOfUninit           : return kUninit;
@@ -285,13 +512,19 @@ Type::bits_t Type::bitsFromDataType(DataType outer, DataType inner) {
     case KindOfPersistentVec    : return kPersistentVec;
     case KindOfPersistentDict   : return kPersistentDict;
     case KindOfPersistentKeyset : return kPersistentKeyset;
+    case KindOfPersistentShape  : return kPersistentShape;
     case KindOfPersistentArray  : return kPersistentArr;
     case KindOfVec              : return kVec;
     case KindOfDict             : return kDict;
     case KindOfKeyset           : return kKeyset;
+    case KindOfShape            : return kShape;
     case KindOfArray            : return kArr;
     case KindOfResource         : return kRes;
     case KindOfObject           : return kObj;
+    case KindOfFunc             : return kFunc;
+    case KindOfClass            : return kCls;
+    case KindOfClsMeth          : return kClsMeth;
+    case KindOfRecord           : return kRecord;
     case KindOfRef:
       assertx(inner != KindOfUninit);
       return bitsFromDataType(inner, KindOfUninit) << kBoxShift;
@@ -300,7 +533,7 @@ Type::bits_t Type::bitsFromDataType(DataType outer, DataType inner) {
 }
 
 DataType Type::toDataType() const {
-  assertx(!maybe(TPtrToGen) || m_bits == kBottom);
+  assertx(!maybe(TMemToGen) || m_bits == kBottom);
   assertx(isKnownDataType());
 
   // Order is important here: types must progress from more specific
@@ -314,6 +547,8 @@ DataType Type::toDataType() const {
   if (*this <= TStr)         return KindOfString;
   if (*this <= TPersistentArr) return KindOfPersistentArray;
   if (*this <= TArr)         return KindOfArray;
+  if (*this <= TPersistentShape) return KindOfPersistentShape;
+  if (*this <= TShape)       return KindOfShape;
   if (*this <= TPersistentVec) return KindOfPersistentVec;
   if (*this <= TVec)         return KindOfVec;
   if (*this <= TPersistentDict) return KindOfPersistentDict;
@@ -322,6 +557,10 @@ DataType Type::toDataType() const {
   if (*this <= TKeyset)      return KindOfKeyset;
   if (*this <= TObj)         return KindOfObject;
   if (*this <= TRes)         return KindOfResource;
+  if (*this <= TFunc)        return KindOfFunc;
+  if (*this <= TCls)         return KindOfClass;
+  if (*this <= TClsMeth)     return KindOfClsMeth;
+  if (*this <= TRecord)      return KindOfRecord;
   if (*this <= TBoxedCell)   return KindOfRef;
   always_assert_flog(false,
                      "Bad Type {} in Type::toDataType()", *this);
@@ -359,10 +598,10 @@ Type Type::modified() const {
   return t;
 }
 
-// Return true if the array satisfies requirement on the ArraySpec.
+/*
+ * Return true if the array satisfies requirement on the ArraySpec.
+ */
 static bool arrayFitsSpec(const ArrayData* arr, const ArraySpec spec) {
-  assertx(arr->isPHPArray());
-
   if (spec == ArraySpec::Top) return true;
 
   if (auto const spec_kind = spec.kind()) {
@@ -383,8 +622,7 @@ static bool arrayFitsSpec(const ArrayData* arr, const ArraySpec spec) {
             auto const specElemType =
               rat_type->tag() == A::Tag::Packed ? rat_type->packedElem(k)
                                                 : rat_type->elemType();
-            if (!tvMatchesRepoAuthType(*(arr->get(k).asTypedValue()),
-                                       specElemType)) {
+            if (!tvMatchesRepoAuthType(arr->get(k).tv(), specElemType)) {
               break;
             }
           }
@@ -415,21 +653,22 @@ bool Type::operator<=(Type rhs) const {
     return lhs.m_hasConstVal && lhs.m_extra == rhs.m_extra;
   }
 
-  // Make sure lhs's ptr kind is a subtype of rhs's.
-  if (!ptrSubsetOf(lhs.ptrKind(), rhs.ptrKind())) {
+  // Make sure lhs's ptr and mem kinds are subtypes of rhs's.
+  if (!(lhs.ptrKind() <= rhs.ptrKind()) ||
+      !(lhs.memKind() <= rhs.memKind())) {
     return false;
   }
 
-  // If rhs isn't specialized no further checking is needed.
+  // If `rhs' isn't specialized no further checking is needed.
   if (!rhs.isSpecialized()) {
     return true;
   }
 
-  if (lhs.hasConstVal(TArr)) {
-    // Arrays can be specialized in different ways, here we check if the
-    // constant array fits the kind()/type() of the specialization of rhs, if
+  if (lhs.hasConstVal(TArrLike)) {
+    // Arrays can be specialized in different ways.  Here, we check if the
+    // constant array fits the kind()/type() of the specialization of `rhs', if
     // any.
-    auto const lhs_arr = lhs.arrVal();
+    auto const lhs_arr = lhs.m_arrVal;
     auto const rhs_as = rhs.arrSpec();
     return arrayFitsSpec(lhs_arr, rhs_as);
   }
@@ -452,9 +691,10 @@ Type Type::operator|(Type rhs) const {
 
   auto const bits = lhs.m_bits | rhs.m_bits;
   auto const ptr = lhs.ptrKind() | rhs.ptrKind();
+  auto const mem = lhs.memKind() | rhs.memKind();
   auto const spec = lhs.spec() | rhs.spec();
 
-  return Type{bits, ptr}.specialize(spec);
+  return Type{bits, ptr, mem}.specialize(spec);
 }
 
 Type Type::operator&(Type rhs) const {
@@ -468,23 +708,39 @@ Type Type::operator&(Type rhs) const {
 
   auto bits = lhs.m_bits & rhs.m_bits;
   auto ptr = lhs.ptrKind() & rhs.ptrKind();
+  auto mem = lhs.memKind() & rhs.memKind();
   auto arrSpec = lhs.arrSpec() & rhs.arrSpec();
   auto clsSpec = lhs.clsSpec() & rhs.clsSpec();
 
-  // Filter out bits and pieces that no longer exist due to other components
-  // going to Bottom, starting with bits.
-  if (ptr == Ptr::Bottom) bits &= ~kGen;
+  // Certain component sublattices of Type are dependent on one another.  For
+  // each set of such "interfering" components, if any component goes to
+  // Bottom, we have to Bottom out the other components in the set as well.
+
+  // Gen bits depend on both Ptr and Mem.
+  if (ptr == Ptr::Bottom || mem == Mem::Bottom) bits &= ~kGen;
+
+  // Arr/Cls bits and specs.
   if (arrSpec == ArraySpec::Bottom) bits &= ~kArrSpecBits;
   if (clsSpec == ClassSpec::Bottom) bits &= ~kClsSpecBits;
-
-  // ptr
-  if ((bits & kGen) == 0) ptr = Ptr::Bottom;
-
-  // specs
   if (!supports(bits, SpecKind::Array)) arrSpec = ArraySpec::Bottom;
   if (!supports(bits, SpecKind::Class)) clsSpec = ClassSpec::Bottom;
 
-  return Type{bits, ptr}.specialize({arrSpec, clsSpec});
+  // Ptr and Mem also depend on Gen bits. This must come after all possible
+  // fixups of bits.
+  if ((bits & kGen) == kBottom) {
+    ptr = Ptr::Bottom;
+    mem = Mem::Bottom;
+  } else {
+    if ((ptr & Ptr::Ptr) == Ptr::Bottom)    mem &= ~Mem::Mem;
+    if ((mem & Mem::Mem) == Mem::Bottom)    ptr &= ~Ptr::Ptr;
+    if ((ptr & Ptr::NotPtr) == Ptr::Bottom) mem &= ~Mem::NotMem;
+    if ((mem & Mem::NotMem) == Mem::Bottom) ptr &= ~Ptr::NotPtr;
+
+    static_assert(Ptr::Top == (Ptr::Ptr | Ptr::NotPtr), "");
+    static_assert(Mem::Top == (Mem::Mem | Mem::NotMem), "");
+  }
+
+  return Type{bits, ptr, mem}.specialize({arrSpec, clsSpec});
 }
 
 Type Type::operator-(Type rhs) const {
@@ -524,45 +780,70 @@ Type Type::operator-(Type rhs) const {
   // original value.
   auto bits = lhs.m_bits & ~rhs.m_bits;
   auto ptr = lhs.ptrKind() - rhs.ptrKind();
+  auto mem = lhs.memKind() - rhs.memKind();
   auto arrSpec = lhs.arrSpec() - rhs.arrSpec();
   auto clsSpec = lhs.clsSpec() - rhs.clsSpec();
 
-  auto const have_gen_bits = (bits & kGen) != 0;
+  auto const have_gen_bits = (bits & kGen) != kBottom;
+
+  auto const have_ptr     = (ptr & Ptr::Ptr) != Ptr::Bottom;
+  auto const have_not_ptr = (ptr & Ptr::NotPtr) != Ptr::Bottom;
+  auto const have_any_ptr = have_ptr || have_not_ptr;
+  auto const have_mem     = (mem & Mem::Mem) != Mem::Bottom;
+  auto const have_not_mem = (mem & Mem::NotMem) != Mem::Bottom;
+  auto const have_any_mem = have_mem || have_not_mem;
+  auto const have_memness = have_any_ptr || have_any_mem;
+
   auto const have_arr_bits = supports(bits, SpecKind::Array);
   auto const have_cls_bits = supports(bits, SpecKind::Class);
-  auto const have_ptr      = ptr != Ptr::Bottom;
   auto const have_arr_spec = arrSpec != ArraySpec::Bottom;
   auto const have_cls_spec = clsSpec != ClassSpec::Bottom;
 
-  // ptr can only interact with clsSpec if lhs.m_bits has at least one kGen
-  // member of kClsSpecBits.
+  // ptr and mem can only interact with clsSpec if lhs.m_bits has at least one
+  // kGen member of kClsSpecBits.
   auto const have_ptr_cls = supports(lhs.m_bits & kGen, SpecKind::Class);
 
-  // bits
-  if (have_ptr) bits |= lhs.m_bits & kGen;
+  // bits, ptr, and mem
+  if (have_any_ptr) {
+    bits |= lhs.m_bits & kGen;
+    // The Not{Ptr,Mem} and {Ptr,Mem} components of Ptr and Mem don't interfere
+    // with one another, so keep them separate.
+    if (have_ptr)     mem |= (lhs.memKind() & Mem::Mem);
+    if (have_not_ptr) mem |= (lhs.memKind() & Mem::NotMem);
+  }
+  if (have_any_mem) {
+    bits |= lhs.m_bits & kGen;
+    if (have_mem)     ptr |= (lhs.ptrKind() & Ptr::Ptr);
+    if (have_not_mem) ptr |= (lhs.ptrKind() & Ptr::NotPtr);
+  }
   if (have_arr_spec) bits |= lhs.m_bits & kArrSpecBits;
   if (have_cls_spec) bits |= lhs.m_bits & kClsSpecBits;
 
-  // ptr
+  // ptr and mem
   if (have_gen_bits || have_arr_spec || (have_cls_spec && have_ptr_cls)) {
     ptr = lhs.ptrKind();
+    mem = lhs.memKind();
   }
 
   // specs
-  if (have_ptr || have_arr_bits) arrSpec = lhs.arrSpec();
-  if ((have_ptr && have_ptr_cls) || have_cls_bits) clsSpec = lhs.clsSpec();
+  if (have_memness || have_arr_bits) {
+    arrSpec = lhs.arrSpec();
+  }
+  if ((have_memness && have_ptr_cls) || have_cls_bits) {
+    clsSpec = lhs.clsSpec();
+  }
 
-  return Type{bits, ptr}.specialize({arrSpec, clsSpec});
+  return Type{bits, ptr, mem}.specialize({arrSpec, clsSpec});
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Conversions.
 
-Type typeFromTV(const TypedValue* tv, const Class* ctx) {
+Type typeFromTV(tv_rval tv, const Class* ctx) {
   assertx(tvIsPlausible(*tv));
 
-  if (tv->m_type == KindOfObject) {
-    auto const cls = tv->m_data.pobj->getVMClass();
+  if (type(tv) == KindOfObject) {
+    auto const cls = val(tv).pobj->getVMClass();
 
     // We only allow specialization on classes that can't be overridden for
     // now.  If this changes, then this will need to specialize on sub object
@@ -575,22 +856,24 @@ Type typeFromTV(const TypedValue* tv, const Class* ctx) {
     return Type::ExactObj(cls);
   }
 
-  if (tvIsArray(tv)) return Type::Array(tv->m_data.parr->kind());
+  if (tvIsArray(tv)) return Type::Array(val(tv).parr->kind());
 
-  auto outer = tv->m_type;
+  auto outer = type(tv);
   auto inner = KindOfUninit;
 
   if (outer == KindOfPersistentString) outer = KindOfString;
   else if (outer == KindOfPersistentVec) outer = KindOfVec;
   else if (outer == KindOfPersistentDict) outer = KindOfDict;
+  else if (outer == KindOfPersistentShape) outer = KindOfShape;
   else if (outer == KindOfPersistentKeyset) outer = KindOfKeyset;
 
-  if (outer == KindOfRef) {
-    inner = tv->m_data.pref->tv()->m_type;
+  if (isRefType(outer)) {
+    inner = val(tv).pref->cell()->m_type;
     if (inner == KindOfPersistentString) inner = KindOfString;
     else if (inner == KindOfPersistentArray) inner = KindOfArray;
     else if (inner == KindOfPersistentVec) inner = KindOfVec;
     else if (inner == KindOfPersistentDict) inner = KindOfDict;
+    else if (inner == KindOfPersistentShape) inner = KindOfShape;
     else if (inner == KindOfPersistentKeyset) inner = KindOfKeyset;
   }
   return Type(outer, inner);
@@ -606,8 +889,13 @@ Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
     case T::OptDbl:         return TDbl        | TInitNull;
     case T::OptRes:         return TRes        | TInitNull;
     case T::OptObj:         return TObj        | TInitNull;
+    case T::OptFunc:        return TFunc       | TInitNull;
+    case T::OptCls:         return TCls        | TInitNull;
+    case T::OptClsMeth:     return TClsMeth    | TInitNull;
     case T::OptArrKey:      return TInt | TStr | TInitNull;
     case T::OptUncArrKey:   return TInt | TPersistentStr | TInitNull;
+    case T::OptStrLike:     return TFunc | TStr | TInitNull;
+    case T::OptUncStrLike:  return TFunc | TPersistentStr | TInitNull;
 
     case T::Uninit:         return TUninit;
     case T::InitNull:       return TInitNull;
@@ -619,40 +907,69 @@ Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
     case T::SStr:           return TStaticStr;
     case T::Str:            return TStr;
     case T::Obj:            return TObj;
+    case T::Func:           return TFunc;
+    case T::Cls:            return TCls;
+    case T::ClsMeth:        return TClsMeth;
 
     case T::Cell:           return TCell;
     case T::Ref:            return TBoxedInitCell;
     case T::UncArrKey:      return TInt | TPersistentStr;
     case T::ArrKey:         return TInt | TStr;
+    case T::UncStrLike:     return TFunc | TPersistentStr;
+    case T::StrLike:        return TFunc | TStr;
     case T::InitUnc:        return TUncountedInit;
     case T::Unc:            return TUncounted;
     case T::InitCell:       return TInitCell;
     case T::InitGen:        return TInitGen;
     case T::Gen:            return TGen;
 
-    // TODO(#4205897): option specialized array types
-    case T::OptArr:         return TArr          | TInitNull;
-    case T::OptSArr:        return TStaticArr    | TInitNull;
-    case T::OptVec:         return TVec          | TInitNull;
-    case T::OptSVec:        return TStaticVec    | TInitNull;
-    case T::OptDict:        return TDict         | TInitNull;
-    case T::OptSDict:       return TStaticDict   | TInitNull;
-    case T::OptKeyset:      return TKeyset       | TInitNull;
-    case T::OptSKeyset:     return TStaticKeyset | TInitNull;
+#define X(A, B) \
+      [&]{                                                              \
+        if (auto const arr = ty.array()) return Type::B(arr);           \
+        else return A;                                                  \
+      }()
 
-    case T::SArr:
-      if (auto const ar = ty.array()) return Type::StaticArray(ar);
-      return TStaticArr;
-    case T::Arr:
-      if (auto const ar = ty.array()) return Type::Array(ar);
-      return TArr;
+    case T::SArr:           return X(TStaticArr, StaticArray);
+    case T::Arr:            return X(TArr, Array);
+    case T::SVec:           return X(TStaticVec, StaticVec);
+    case T::Vec:            return X(TVec, Vec);
+    case T::SDict:          return X(TStaticDict, StaticDict);
+    case T::Dict:           return X(TDict, Dict);
+    case T::SKeyset:        return X(TStaticKeyset, StaticKeyset);
+    case T::Keyset:         return X(TKeyset, Keyset);
 
-    case T::SVec:           return TStaticVec;
-    case T::Vec:            return TVec;
-    case T::SDict:          return TStaticDict;
-    case T::Dict:           return TDict;
-    case T::SKeyset:        return TStaticKeyset;
-    case T::Keyset:         return TKeyset;
+    case T::OptSArr:        return X(TStaticArr, StaticArray) | TInitNull;
+    case T::OptArr:         return X(TArr, Array)             | TInitNull;
+    case T::OptSVec:        return X(TStaticVec, StaticVec)   | TInitNull;
+    case T::OptVec:         return X(TVec, Vec)               | TInitNull;
+    case T::OptSDict:       return X(TStaticDict, StaticDict) | TInitNull;
+    case T::OptDict:        return X(TDict, Dict)             | TInitNull;
+    case T::OptSKeyset:     return X(TStaticKeyset, StaticKeyset) | TInitNull;
+    case T::OptKeyset:      return X(TKeyset, Keyset)         | TInitNull;
+#undef X
+
+#define X(A, B)                                                         \
+      [&]{                                                              \
+        if (auto const arr = ty.array()) return Type::B(A, arr);        \
+        else return Type::B(A);                                         \
+      }()
+
+    case T::SVArr:          return X(ArrayData::kPackedKind, StaticArray);
+    case T::VArr:           return X(ArrayData::kPackedKind, Array);
+
+    case T::OptSVArr:       return X(ArrayData::kPackedKind, StaticArray)
+                                   | TInitNull;
+    case T::OptVArr:        return X(ArrayData::kPackedKind, Array)
+                                   | TInitNull;
+
+    case T::SDArr:          return X(ArrayData::kMixedKind, StaticArray);
+    case T::DArr:           return X(ArrayData::kMixedKind, Array);
+
+    case T::OptSDArr:       return X(ArrayData::kMixedKind, StaticArray)
+                                   | TInitNull;
+    case T::OptDArr:        return X(ArrayData::kMixedKind, Array)
+                                   | TInitNull;
+#undef X
 
     case T::SubObj:
     case T::ExactObj:
@@ -679,6 +996,94 @@ Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
 
 //////////////////////////////////////////////////////////////////////
 
+Type typeFromPropTC(const HPHP::TypeConstraint& tc,
+                    const Class* propCls,
+                    const Class* ctx,
+                    bool isSProp) {
+  assertx(tc.validForProp());
+
+  if (!tc.isCheckable() || tc.isSoft()) return TGen;
+
+  using A = AnnotType;
+  auto const atToType = [&](AnnotType at) {
+    switch (at) {
+      case A::Null:       return TNull;
+      case A::Bool:       return TBool;
+      case A::Int:        return TInt;
+      case A::Float:      return TDbl;
+      case A::String:     return TStr;
+      case A::Array:      return TArr;
+      // We only call this once we've attempted resolving the
+      // type-constraint. If we successfully resolved it, we'll never get here,
+      // So if we're here and we have AnnotType::Object, we don't know what the
+      // type-hint is, so be conservative.
+      case A::Object:
+      case A::Mixed:      return TGen;
+      case A::Resource:   return TRes;
+      case A::Dict:       return TDict;
+      case A::Vec:        return TVec;
+      case A::Keyset:     return TKeyset;
+      case A::Nonnull:    return TInitCell - TInitNull;
+      case A::Number:     return TInt | TDbl;
+      case A::ArrayKey:   return TInt | TStr;
+      case A::VArray:
+      case A::DArray:
+      case A::VArrOrDArr: return TArr;
+      case A::VecOrDict:  return TVec | TDict;
+      case A::ArrayLike:  return TArrLike;
+      case A::This:
+        return (isSProp && !tc.couldSeeMockObject())
+          ? Type::ExactObj(propCls)
+          : Type::SubObj(propCls);
+      case A::Nothing:
+      case A::NoReturn:
+      case A::Self:
+      case A::Parent:
+      case A::Callable:
+        break;
+    }
+    always_assert(false);
+  };
+
+  auto base = [&]{
+    if (!tc.isObject()) return atToType(tc.type());
+
+    auto const handleCls = [&] (const Class* cls) {
+      // Don't try to be clever with magic interfaces
+      if (interface_supports_non_objects(cls->name())) return TInitCell;
+
+      if (isEnum(cls)) {
+        if (auto const dt = cls->enumBaseTy()) return Type{*dt};
+        return TInt | TStr;
+      }
+      return Type::SubObj(cls);
+    };
+
+    bool persistent = false;
+    if (auto const alias = Unit::lookupTypeAlias(tc.typeName(), &persistent)) {
+      if (persistent && !alias->invalid) {
+        auto ty = [&]{
+          if (alias->klass) return handleCls(alias->klass);
+          return atToType(alias->type);
+        }();
+        if (alias->nullable) ty |= TInitNull;
+        return ty;
+      }
+    }
+
+    if (auto const cls = Unit::lookupUniqueClassInContext(tc.typeName(), ctx)) {
+      return handleCls(cls);
+    }
+
+    // It could be an alias to mixed so we might have refs
+    return TGen;
+  }();
+  if (tc.isNullable()) base |= TInitNull;
+  return base;
+}
+
+//////////////////////////////////////////////////////////////////////
+
 Type ldRefReturn(Type typeParam) {
   // Guarding on specialized types and uncommon unions like {Int|Bool} is
   // expensive enough that we only want to do it in situations where we've
@@ -701,6 +1106,7 @@ Type negativeCheckType(Type srcType, Type typeParam) {
   if (typeParam.maybe(TPersistent)) {
     if (tmp.maybe(TCountedStr)) tmp |= TStr;
     if (tmp.maybe(TCountedArr)) tmp |= TArr;
+    if (tmp.maybe(TCountedShape)) tmp |= TShape;
     if (tmp.maybe(TCountedVec)) tmp |= TVec;
     if (tmp.maybe(TCountedDict)) tmp |= TDict;
     if (tmp.maybe(TCountedKeyset)) tmp |= TKeyset;
@@ -719,6 +1125,8 @@ Type boxType(Type t) {
     t = TStr;
   } else if (t <= TArr) {
     t = TArr;
+  } else if (t <= TShape) {
+    t = TShape;
   } else if (t <= TVec) {
     t = TVec;
   } else if (t <= TDict) {
@@ -782,6 +1190,7 @@ Type relaxToGuardable(Type ty) {
   // ty is unspecialized and we don't support guarding on CountedArr or
   // StaticArr, so widen any subtypes of Arr to Arr.
   if (ty <= TArr) return TArr;
+  if (ty <= TShape) return TShape;
   if (ty <= TVec) return TVec;
   if (ty <= TDict) return TDict;
   if (ty <= TKeyset) return TKeyset;

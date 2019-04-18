@@ -18,7 +18,8 @@
 #ifndef incl_HPHP_EXT_HOTPROFILER_H_
 #define incl_HPHP_EXT_HOTPROFILER_H_
 
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/rds-local.h"
 
 #ifdef __FreeBSD__
 #include <sys/param.h>
@@ -234,7 +235,7 @@ struct Profiler {
    * and doesn't actually perform the free.
    */
   void releaseFrame() {
-    assert(m_stack);
+    assertx(m_stack);
 
     Frame *p = m_stack;
     m_stack = p->m_parent;

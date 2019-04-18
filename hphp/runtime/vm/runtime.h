@@ -20,10 +20,14 @@
 #include "hphp/runtime/ext/asio/ext_async-function-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_async-generator.h"
 #include "hphp/runtime/ext/std/ext_std_errorfunc.h"
+#include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/event-hook.h"
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/reified-generics.h"
 #include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/tv-refcount.h"
 
@@ -45,20 +49,21 @@ void print_boolean(bool val);
 
 void raiseWarning(const StringData* sd);
 void raiseNotice(const StringData* sd);
-void raiseArrayIndexNotice(int64_t index);
-void raiseArrayKeyNotice(const StringData* key);
+void raiseArrayIndexNotice(int64_t index, bool isInOut);
+void raiseArrayKeyNotice(const StringData* key, bool isInOut);
+std::string formatParamRefMismatch(const char* fname, uint32_t index,
+                                   bool funcByRef);
+void raiseParamRefMismatchForFunc(const Func* func, uint32_t index);
 
 inline intptr_t frame_clsref_offset(const Func* f, uint32_t slot) {
   return
     -((f->numLocals() + f->numIterators() * kNumIterCells) * sizeof(Cell) +
-      (slot + 1) * sizeof(LowPtr<Class>));
+      (slot + 1) * sizeof(cls_ref));
 }
 
-inline LowPtr<Class>*
+inline cls_ref*
 frame_clsref_slot(const ActRec* fp, uint32_t slot) {
-  return (LowPtr<Class>*)(
-    uintptr_t(fp) + frame_clsref_offset(fp->m_func, slot)
-  );
+  return (cls_ref*)(uintptr_t(fp) + frame_clsref_offset(fp->m_func, slot));
 }
 
 inline Iter*
@@ -76,30 +81,30 @@ frame_local(const ActRec* fp, int n) {
 
 inline Resumable*
 frame_resumable(const ActRec* fp) {
-  assert(fp->resumed());
+  assertx(fp->resumed());
   return (Resumable*)((char*)fp - Resumable::arOff());
 }
 
 inline c_AsyncFunctionWaitHandle*
 frame_afwh(const ActRec* fp) {
-  assert(fp->func()->isAsyncFunction());
+  assertx(fp->func()->isAsyncFunction());
   auto resumable = frame_resumable(fp);
   auto arOffset = c_AsyncFunctionWaitHandle::arOff();
   auto waitHandle = (c_AsyncFunctionWaitHandle*)((char*)resumable - arOffset);
-  assert(waitHandle->getVMClass() == c_AsyncFunctionWaitHandle::classof());
+  assertx(waitHandle->getVMClass() == c_AsyncFunctionWaitHandle::classof());
   return waitHandle;
 }
 
 inline Generator*
 frame_generator(const ActRec* fp) {
-  assert(fp->func()->isNonAsyncGenerator());
+  assertx(fp->func()->isNonAsyncGenerator());
   auto resumable = frame_resumable(fp);
   return (Generator*)((char*)resumable - Generator::resumableOff());
 }
 
 inline AsyncGenerator*
 frame_async_generator(const ActRec* fp) {
-  assert(fp->func()->isAsyncGenerator());
+  assertx(fp->func()->isAsyncGenerator());
   auto resumable = frame_resumable(fp);
   return (AsyncGenerator*)((char*)resumable -
     AsyncGenerator::resumableOff());
@@ -107,7 +112,7 @@ frame_async_generator(const ActRec* fp) {
 
 void ALWAYS_INLINE
 frame_free_locals_helper_inl(ActRec* fp, int numLocals) {
-  assert(numLocals == fp->m_func->numLocals());
+  assertx(numLocals == fp->m_func->numLocals());
   // Check if the frame has a VarEnv or if it has extraArgs
   if (UNLIKELY(fp->func()->attrs() & AttrMayUseVV) &&
       UNLIKELY(fp->m_varEnv != nullptr)) {
@@ -118,7 +123,7 @@ frame_free_locals_helper_inl(ActRec* fp, int numLocals) {
       return;
     }
     // Free extra args
-    assert(fp->hasExtraArgs());
+    assertx(fp->hasExtraArgs());
     ExtraArgs* ea = fp->getExtraArgs();
     int numExtra = fp->numArgs() - fp->m_func->numNonVariadicParams();
     ExtraArgs::deallocate(ea, numExtra);
@@ -148,9 +153,9 @@ frame_free_locals_inl(ActRec* fp, int numLocals, TypedValue* rv) {
 
 void ALWAYS_INLINE
 frame_free_inl(ActRec* fp, TypedValue* rv) { // For frames with no locals
-  assert(0 == fp->m_func->numLocals());
-  assert(fp->m_varEnv == nullptr);
-  assert(fp->hasThis());
+  assertx(0 == fp->m_func->numLocals());
+  assertx(fp->m_varEnv == nullptr);
+  assertx(fp->hasThis());
   decRefObj(fp->getThis());
   EventHook::FunctionReturn(fp, *rv);
 }
@@ -176,48 +181,53 @@ frame_free_args(TypedValue* args, int count) {
   for (auto i = count; i--; ) tvDecRefGen(*(args - i));
 }
 
-// If set, releaseUnit will contain a pointer to any extraneous unit created due
-// to race-conditions while compiling
-Unit* compile_file(const char* s, size_t sz, const MD5& md5, const char* fname,
-                   Unit** releaseUnit = nullptr);
-Unit* compile_string(const char* s, size_t sz, const char* fname = nullptr,
-                     Unit** releaseUnit = nullptr);
-Unit* compile_systemlib_string(const char* s, size_t sz, const char* fname);
-Unit* build_native_func_unit(const HhbcExtFuncInfo* builtinFuncs,
-                                 ssize_t numBuiltinFuncs);
-Unit* build_native_class_unit(const HhbcExtClassInfo* builtinClasses,
-                                  ssize_t numBuiltinClasses);
+extern const StaticString s_86reifiedinit;
+
+namespace {
+
+inline void setReifiedGenerics(
+  ObjectData* inst, Class* cls, ArrayData* reifiedTypes
+) {
+  auto const arg = RuntimeOption::EvalHackArrDVArrs
+    ? make_tv<KindOfVec>(reifiedTypes) : make_tv<KindOfArray>(reifiedTypes);
+  auto const meth = cls->lookupMethod(s_86reifiedinit.get());
+  assertx(meth != nullptr);
+  g_context->invokeMethod(inst, meth, InvokeArgs(&arg, 1));
+}
+
+inline ObjectData* newInstanceImpl(Class* cls) {
+  assertx(cls);
+  auto* inst = ObjectData::newInstance(cls);
+  assertx(inst->checkCount());
+  return inst;
+}
+
+} // namespace
 
 // Create a new class instance, and register it in the live object table if
 // necessary. The initial ref-count of the instance will be greater than zero.
-inline ObjectData*
-newInstance(Class* cls) {
-  assert(cls);
-  auto* inst = ObjectData::newInstance(cls);
-  assert(inst->checkCount());
-  Stats::inc(cls->getDtor() ? Stats::ObjectData_new_dtor_yes
-                            : Stats::ObjectData_new_dtor_no);
-
-  if (UNLIKELY(RuntimeOption::EnableObjDestructCall && cls->getDtor())) {
-    g_context->m_liveBCObjs.insert(inst);
+inline ObjectData* newInstance(Class* cls) {
+  auto* inst = newInstanceImpl(cls);
+  if (cls->hasReifiedGenerics()) {
+    raise_error("Cannot create a new instance of a reified class without "
+                "the reified generics");
+  }
+  if (cls->hasReifiedParent()) {
+    setReifiedGenerics(inst, cls, ArrayData::CreateVArray());
   }
   return inst;
 }
 
-/*
- * A few functions are exposed by libhphp_analysis and used in
- * VM-specific parts of the runtime.
- *
- * Currently we handle this by using these global pointers, which must
- * be set up before you use those parts of the runtime.
- */
-
-typedef Unit* (*CompileStringFn)(const char*, int, const MD5&, const char*,
-                                 Unit**);
-typedef Unit* (*BuildNativeFuncUnitFn)(const HhbcExtFuncInfo*, ssize_t);
-typedef Unit* (*BuildNativeClassUnitFn)(const HhbcExtClassInfo*, ssize_t);
-
-extern CompileStringFn g_hphp_compiler_parse;
+// Does the same work as newInstance but also sets the reified generics on the
+// class denoted as `cls`.
+inline ObjectData* newInstanceReified(Class* cls, ArrayData* reifiedTypes) {
+  if (!cls->hasReifiedGenerics()) return newInstance(cls);
+  auto* inst = newInstanceImpl(cls);
+  assertx(reifiedTypes != nullptr);
+  checkClassReifiedGenericMismatch(cls, reifiedTypes);
+  setReifiedGenerics(inst, cls, reifiedTypes);
+  return inst;
+}
 
 // returns the number of things it put on sp
 int init_closure(ActRec* ar, TypedValue* sp);

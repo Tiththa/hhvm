@@ -38,6 +38,12 @@ const char* show(RoundDirection rd) {
   not_reached();
 }
 
+#ifdef HAVE_LIBXED
+  static XedInit xi;
+  constexpr xed_state_t XedAssembler::kXedState;
+  constexpr RIPRelativeRef XedAssembler::nullrip;
+#endif
+
 namespace x64 {
 
 void DecodedInstruction::decode(uint8_t* ip) {
@@ -355,12 +361,18 @@ int DecodedInstruction::decodeModRm(uint8_t* ip) {
   return size;
 }
 
+/**
+ * Read the numeric value stored at `ip`.  It's widened to 64 bits (if smaller
+ * than 8 serialized bytes) but the MSB's sign is preserved.
+ */
 static int64_t readValue(uint8_t* ip, int size) {
   int64_t value = 0;
+  // This is the most-significant byte, so keep its sign.
   value = (signed char)ip[--size];
   while (size--) {
-    value <<= 8;
-    value += ip[size];
+    // Shift left 8 bits.  (UBSAN doesn't like `<<` with signed values.)
+    value *= 256;
+    value += (uint64_t) ip[size];
   }
   return value;
 }

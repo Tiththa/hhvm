@@ -14,35 +14,35 @@
    +----------------------------------------------------------------------+
 */
 #include "hphp/runtime/base/rds.h"
-#include "hphp/runtime/vm/vm-regs.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
 #include <mutex>
-#include <atomic>
 #include <vector>
 
-#ifndef _MSC_VER
-#include <execinfo.h>
-#endif
-
+#include <folly/Bits.h>
+#include <folly/Hash.h>
+#include <folly/portability/SysMman.h>
 #include <folly/sorted_vector_types.h>
 #include <folly/String.h>
-#include <folly/Hash.h>
-#include <folly/Bits.h>
-#include <folly/portability/SysMman.h>
 
 #include <tbb/concurrent_hash_map.h>
 
 #include "hphp/util/logger.h"
 #include "hphp/util/maphuge.h"
 #include "hphp/util/numa.h"
+#include "hphp/util/smalllocks.h"
 #include "hphp/util/type-scan.h"
 
 #include "hphp/runtime/base/rds-header.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/vm/debug/debug.h"
-#include "hphp/runtime/vm/treadmill.h"
+#include "hphp/runtime/vm/jit/mcgen.h"
+#include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/jit/vm-protect.h"
+#include "hphp/runtime/vm/treadmill.h"
+#include "hphp/runtime/vm/vm-regs.h"
 
 namespace HPHP { namespace rds {
 
@@ -63,28 +63,19 @@ std::mutex s_allocMutex;
 //////////////////////////////////////////////////////////////////////
 
 struct SymbolKind : boost::static_visitor<std::string> {
-  std::string operator()(StaticLocal /*k*/) const { return "StaticLocal"; }
   std::string operator()(ClsConstant /*k*/) const { return "ClsConstant"; }
   std::string operator()(StaticMethod /*k*/) const { return "StaticMethod"; }
   std::string operator()(StaticMethodF /*k*/) const { return "StaticMethodF"; }
-  std::string operator()(Profile /*k*/) const { return "Profile"; }
+  template<typename T>
+  std::string operator()(Profile<T> /*k*/) const { return "Profile"; }
   std::string operator()(SPropCache /*k*/) const { return "SPropCache"; }
+  std::string operator()(StaticMemoValue) const { return "StaticMemoValue"; }
+  std::string operator()(StaticMemoCache) const { return "StaticMemoCache"; }
+  std::string operator()(LSBMemoValue) const { return "LSBMemoValue"; }
+  std::string operator()(LSBMemoCache) const { return "LSBMemoCache"; }
 };
 
 struct SymbolRep : boost::static_visitor<std::string> {
-  std::string operator()(StaticLocal k) const {
-    const Func* func = Func::fromFuncId(k.funcId);
-    const Class* cls = getOwningClassForFunc(func);
-    std::string name;
-    if (cls != func->cls()) {
-      name = cls->name()->toCppString() + "::" +
-        func->name()->toCppString();
-    } else {
-      name = func->fullName()->toCppString();
-    }
-    return name + "::" + k.name->toCppString();
-  }
-
   std::string operator()(ClsConstant k) const {
     return k.clsName->data() + std::string("::") + k.cnsName->data();
   }
@@ -92,7 +83,8 @@ struct SymbolRep : boost::static_visitor<std::string> {
   std::string operator()(StaticMethod k)  const { return k.name->data(); }
   std::string operator()(StaticMethodF k) const { return k.name->data(); }
 
-  std::string operator()(Profile k) const {
+  template<typename T>
+  std::string operator()(Profile<T> k) const {
     return folly::format(
       "{}:t{}:{}",
       k.name,
@@ -104,6 +96,26 @@ struct SymbolRep : boost::static_visitor<std::string> {
     return k.cls->name()->toCppString() + "::" +
            k.cls->staticProperties()[k.slot].name->toCppString();
   }
+
+  std::string operator()(StaticMemoValue k) const {
+    auto const func = Func::fromFuncId(k.funcId);
+    return func->fullName()->toCppString();
+  }
+  std::string operator()(StaticMemoCache k) const {
+    auto const func = Func::fromFuncId(k.funcId);
+    return func->fullName()->toCppString();
+  }
+
+  std::string operator()(LSBMemoValue k) const {
+    auto const clsName = k.cls->name()->toCppString();
+    auto const funcName = Func::fromFuncId(k.funcId)->fullName()->toCppString();
+    return clsName + "::" + funcName;
+  }
+  std::string operator()(LSBMemoCache k) const {
+    auto const clsName = k.cls->name()->toCppString();
+    auto const funcName = Func::fromFuncId(k.funcId)->fullName()->toCppString();
+    return clsName + "::" + funcName;
+  }
 };
 
 struct SymbolEq : boost::static_visitor<bool> {
@@ -113,20 +125,16 @@ struct SymbolEq : boost::static_visitor<bool> {
     bool
   >::type operator()(const T&, const U&) const { return false; }
 
-  bool operator()(StaticLocal k1, StaticLocal k2) const {
-    assert(k1.name->isStatic() && k2.name->isStatic());
-    return k1.funcId == k2.funcId && k1.name == k2.name;
-  }
-
   bool operator()(ClsConstant k1, ClsConstant k2) const {
-    assert(k1.clsName->isStatic() && k1.cnsName->isStatic());
-    assert(k2.clsName->isStatic() && k2.cnsName->isStatic());
+    assertx(k1.clsName->isStatic() && k1.cnsName->isStatic());
+    assertx(k2.clsName->isStatic() && k2.cnsName->isStatic());
     return k1.clsName->isame(k2.clsName) &&
            k1.cnsName == k2.cnsName;
   }
 
-  bool operator()(Profile k1, Profile k2) const {
-    assert(k1.name->isStatic() && k2.name->isStatic());
+  template<typename T>
+  bool operator()(Profile<T> k1, Profile<T> k2) const {
+    assertx(k1.name->isStatic() && k2.name->isStatic());
     return k1.transId == k2.transId &&
            k1.bcOff == k2.bcOff &&
            k1.name == k2.name;
@@ -138,23 +146,32 @@ struct SymbolEq : boost::static_visitor<bool> {
       std::is_same<T,StaticMethodF>::value,
     bool
   >::type operator()(const T& t1, const T& t2) const {
-    assert(t1.name->isStatic() && t2.name->isStatic());
+    assertx(t1.name->isStatic() && t2.name->isStatic());
     return t1.name->isame(t2.name);
   }
 
   bool operator()(SPropCache k1, SPropCache k2) const {
     return k1.cls == k2.cls && k1.slot == k2.slot;
   }
+
+  bool operator()(StaticMemoValue k1, StaticMemoValue k2) const {
+    return k1.funcId == k2.funcId;
+  }
+
+  bool operator()(StaticMemoCache k1, StaticMemoCache k2) const {
+    return k1.funcId == k2.funcId;
+  }
+
+  bool operator()(LSBMemoValue k1, LSBMemoValue k2) const {
+    return k1.cls == k2.cls && k1.funcId == k2.funcId;
+  }
+
+  bool operator()(LSBMemoCache k1, LSBMemoCache k2) const {
+    return k1.cls == k2.cls && k1.funcId == k2.funcId;
+  }
 };
 
 struct SymbolHash : boost::static_visitor<size_t> {
-  size_t operator()(StaticLocal k) const {
-    return folly::hash::hash_128_to_64(
-      std::hash<FuncId>()(k.funcId),
-      k.name->hash()
-    );
-  }
-
   size_t operator()(ClsConstant k) const {
     return folly::hash::hash_128_to_64(
       k.clsName->hash(),
@@ -162,7 +179,8 @@ struct SymbolHash : boost::static_visitor<size_t> {
     );
   }
 
-  size_t operator()(Profile k) const {
+  template<typename T>
+  size_t operator()(Profile<T> k) const {
     return folly::hash::hash_combine(
       k.transId,
       k.bcOff,
@@ -175,10 +193,27 @@ struct SymbolHash : boost::static_visitor<size_t> {
 
   size_t operator()(SPropCache k) const {
     return folly::hash::hash_combine(
-      k.cls, k.slot
+      k.cls.get(), k.slot
     );
   }
 
+  size_t operator()(StaticMemoValue k) const {
+    return std::hash<FuncId>()(k.funcId);
+  }
+  size_t operator()(StaticMemoCache k) const {
+    return std::hash<FuncId>()(k.funcId);
+  }
+
+  size_t operator()(LSBMemoValue k) const {
+    return folly::hash::hash_combine(
+      k.cls.get(), std::hash<FuncId>()(k.funcId)
+    );
+  }
+  size_t operator()(LSBMemoCache k) const {
+    return folly::hash::hash_combine(
+      k.cls.get(), std::hash<FuncId>()(k.funcId)
+    );
+  }
 };
 
 struct HashCompare {
@@ -191,9 +226,14 @@ struct HashCompare {
   }
 };
 
+struct LinkEntry {
+  Handle   handle;
+  uint32_t size;
+};
+
 using LinkTable = tbb::concurrent_hash_map<
   Symbol,
-  Handle,
+  LinkEntry,
   HashCompare
 >;
 LinkTable s_linkTable;
@@ -213,6 +253,10 @@ using FreeLists = folly::sorted_vector_map<unsigned,
 FreeLists s_normal_free_lists;
 FreeLists s_persistent_free_lists;
 
+#if RDS_FIXED_PERSISTENT_BASE
+// Allocate 2M from low memory each time.
+constexpr size_t kPersistentChunkSize = 16u << 10;
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -222,15 +266,25 @@ namespace detail {
 // Current allocation frontier for the non-persistent region.
 size_t s_normal_frontier = sizeof(Header);
 
-// Frontier and base of the persistent region.
-size_t s_persistent_base = 0;
-size_t s_persistent_frontier = 0;
-
 // Frontier for the "local" part of the persistent region (data not
 // shared between threads, but not zero'd)---downward-growing.
 size_t s_local_frontier = 0;
+size_t s_local_base = 0;
 
-Link<GenNumber> g_current_gen_link{kInvalidHandle};
+#if !RDS_FIXED_PERSISTENT_BASE
+uintptr_t s_persistent_base = 0;
+size_t s_persistent_size = 0;
+#else
+// It is a constexpr equal to 0 defined in rds-inl.h
+#endif
+
+// Persistent region grows down from frontier towards limit, when it runs out of
+// space, we can allocate another chunk and redefine the frontier and the limit,
+// as guarded by s_allocMutex.
+uintptr_t s_persistent_frontier = 0;
+uintptr_t s_persistent_limit = 0;
+
+size_t s_persistent_usage = 0;
 
 AllocDescriptorList s_normal_alloc_descs;
 AllocDescriptorList s_local_alloc_descs;
@@ -239,7 +293,7 @@ AllocDescriptorList s_local_alloc_descs;
  * Round base up to align, which must be a power of two.
  */
 size_t roundUp(size_t base, size_t align) {
-  assert(folly::isPowTwo(align));
+  assertx(folly::isPowTwo(align));
   --align;
   return (base + align) & ~align;
 }
@@ -254,19 +308,19 @@ void addFreeBlock(FreeLists& lists, size_t where, size_t size) {
 
 /*
  * Try to find a tracked free block of a suitable size. If an oversized block is
- * found instead, the remaining space before and/or after the return space it
+ * found instead, the remaining space before and/or after the return space is
  * re-added to the appropriate free lists.
  */
 folly::Optional<Handle> findFreeBlock(FreeLists& lists, size_t size,
                                       size_t align) {
   for (auto it = lists.lower_bound(size); it != lists.end(); ++it) {
+    auto const blockSize = it->first;
     for (auto list_it = it->second.begin();
          list_it != it->second.end();
          ++list_it) {
-      auto const blockSize = it->first;
-      auto const raw = *list_it;
+      auto const raw = static_cast<size_t>(*list_it);
+      static_assert(sizeof(raw) > 4, "avoid 32-bit overflow");
       auto const end = raw + blockSize;
-
       auto const handle = roundUp(raw, align);
 
       if (handle + size > end) continue;
@@ -284,8 +338,37 @@ folly::Optional<Handle> findFreeBlock(FreeLists& lists, size_t size,
   return folly::none;
 }
 
+// Create a new chunk for use in persistent RDS, but don't add to
+// 's_persistent_free_lists' yet.
+NEVER_INLINE void addNewPersistentChunk(size_t size) {
+  assertx(size > 0 && size < kMaxHandle && size % 4096 == 0);
+  auto const raw = static_cast<char*>(low_malloc(size));
+  auto const addr = reinterpret_cast<uintptr_t>(raw);
+  memset(raw, 0, size);
+#if !RDS_FIXED_PERSISTENT_BASE
+  // This is only called once in processInit() if we don't have a persistent
+  // base.
+  always_assert(s_persistent_base == 0);
+  s_persistent_limit = addr;
+  s_persistent_frontier = addr + size;
+  s_persistent_base = s_persistent_frontier - size4g;
+#else
+  always_assert_flog(addr >= kMinPersistentHandle && addr < size4g,
+                     "low_malloc() failed to return suitable address for RDS");
+  assertx(s_persistent_frontier >= s_persistent_limit);
+  if (s_persistent_frontier != s_persistent_limit) {
+    addFreeBlock(s_persistent_free_lists,
+                 ptrToHandle<Mode::Persistent>(s_persistent_limit),
+                 s_persistent_frontier - s_persistent_limit);
+  }
+  s_persistent_limit = addr;
+  s_persistent_frontier = addr + size;
+#endif
+}
+
 Handle alloc(Mode mode, size_t numBytes,
              size_t align, type_scan::Index tyIndex) {
+  assertx(align <= 16);
   switch (mode) {
     case Mode::Normal: {
       align = folly::nextPowTwo(std::max(align, alignof(GenNumber)));
@@ -309,7 +392,7 @@ Handle alloc(Mode mode, size_t numBytes,
       s_normal_frontier = roundUp(s_normal_frontier, align);
 
       addFreeBlock(s_normal_free_lists, oldFrontier,
-                  s_normal_frontier - oldFrontier);
+                   s_normal_frontier - oldFrontier);
       s_normal_frontier += adjBytes;
       if (debug && !jit::VMProtect::is_protected) {
         memset(
@@ -338,25 +421,33 @@ Handle alloc(Mode mode, size_t numBytes,
     case Mode::Persistent: {
       align = folly::nextPowTwo(align);
       always_assert(align <= numBytes);
+      s_persistent_usage += numBytes;
 
       if (auto free = findFreeBlock(s_persistent_free_lists, numBytes, align)) {
         return *free;
       }
 
-      // Note: it's ok not to zero new allocations, because we've never done
-      // anything with this part of the page yet, so it must still be zero.
-      auto const oldFrontier = s_persistent_frontier;
-      s_persistent_frontier = roundUp(s_persistent_frontier, align);
-      addFreeBlock(s_persistent_free_lists, oldFrontier,
-                   s_persistent_frontier - oldFrontier);
-      s_persistent_frontier += numBytes;
+      auto const newFrontier =
+        (s_persistent_frontier - numBytes) & ~(align - 1);
+      if (newFrontier >= s_persistent_limit) {
+        s_persistent_frontier = newFrontier;
+        return ptrToHandle<Mode::Persistent>(newFrontier);
+      }
 
+#if RDS_FIXED_PERSISTENT_BASE
+      // Allocate on demand, add kPersistentChunkSize each time.
+      assertx(numBytes <= kPersistentChunkSize);
+      addNewPersistentChunk(kPersistentChunkSize);
+      return alloc(mode, numBytes, align, tyIndex); // retry after a new chunk
+#else
+      // We reserved plenty of space in s_persistent_free_lists in the beginning
+      // of the process, but maybe it is time to increase the size in the
+      // config.
       always_assert_flog(
-        s_persistent_frontier < RuntimeOption::EvalJitTargetCacheSize,
+        false,
         "Ran out of RDS space (mode=Persistent)"
       );
-
-      return s_persistent_frontier - numBytes;
+#endif
     }
     case Mode::Local: {
       align = folly::nextPowTwo(align);
@@ -378,9 +469,9 @@ Handle alloc(Mode mode, size_t numBytes,
       }
       return frontier;
     }
+    default:
+      not_reached();
   }
-
-  not_reached();
 }
 
 Handle allocUnlocked(Mode mode, size_t numBytes,
@@ -392,17 +483,19 @@ Handle allocUnlocked(Mode mode, size_t numBytes,
 Handle bindImpl(Symbol key, Mode mode, size_t sizeBytes,
                 size_t align, type_scan::Index tyIndex) {
   LinkTable::const_accessor acc;
-  if (s_linkTable.find(acc, key)) return acc->second;
+  if (s_linkTable.find(acc, key)) return acc->second.handle;
 
   Guard g(s_allocMutex);
-  if (s_linkTable.find(acc, key)) return acc->second;
+  if (s_linkTable.find(acc, key)) return acc->second.handle;
 
   auto const handle = alloc(mode, sizeBytes, align, tyIndex);
   recordRds(handle, sizeBytes, key);
 
   LinkTable::const_accessor insert_acc;
   // insert_acc lives until after s_handleTable is updated
-  if (!s_linkTable.insert(insert_acc, LinkTable::value_type(key, handle))) {
+  if (!s_linkTable.insert(
+        insert_acc,
+        LinkTable::value_type(key, {handle, safe_cast<uint32_t>(sizeBytes)}))) {
     always_assert(0);
   }
   if (type_scan::hasScanner(tyIndex)) {
@@ -413,20 +506,53 @@ Handle bindImpl(Symbol key, Mode mode, size_t sizeBytes,
 
 Handle attachImpl(Symbol key) {
   LinkTable::const_accessor acc;
-  if (s_linkTable.find(acc, key)) return acc->second;
-  return kInvalidHandle;
+  if (s_linkTable.find(acc, key)) return acc->second.handle;
+  return kUninitHandle;
 }
 
+NEVER_INLINE
+void bindOnLinkImpl(std::atomic<Handle>& handle, std::function<Handle()> fun,
+                    const void* init, size_t size,
+                    type_scan::Index /*tyIndex*/) {
+  Handle c = kUninitHandle;
+  if (handle.compare_exchange_strong(c, kBeingBound,
+                                     std::memory_order_relaxed,
+                                     std::memory_order_relaxed)) {
+    // we flipped it from kUninitHandle, so we get to fill in the value.
+    auto const h = fun();
+    if (size && isPersistentHandle(h)) {
+      memcpy(handleToPtr<void, Mode::Persistent>(h), init, size);
+    }
+    if (handle.exchange(h, std::memory_order_relaxed) ==
+        kBeingBoundWithWaiters) {
+      futex_wake(&handle, INT_MAX);
+    }
+    return;
+  }
+  // Someone else beat us to it, so wait until they've filled it in.
+  if (c == kBeingBound) {
+    handle.compare_exchange_strong(c, kBeingBoundWithWaiters,
+                                   std::memory_order_relaxed,
+                                   std::memory_order_relaxed);
+  }
+  while (handle.load(std::memory_order_relaxed) == kBeingBoundWithWaiters) {
+    futex_wait(&handle, kBeingBoundWithWaiters);
+  }
+  assertx(isHandleBound(handle.load(std::memory_order_relaxed)));
+}
+
+NEVER_INLINE
 void bindOnLinkImpl(std::atomic<Handle>& handle,
                     Mode mode,
                     size_t sizeBytes,
                     size_t align,
                     type_scan::Index tyIndex) {
-  Guard g(s_allocMutex);
-  if (handle.load(std::memory_order_relaxed) == kInvalidHandle) {
-    handle.store(alloc(mode, sizeBytes, align, tyIndex),
-                 std::memory_order_relaxed);
-  }
+  bindOnLinkImpl(handle,
+                 [&] {
+                   Guard g(s_allocMutex);
+                   return alloc(mode, sizeBytes, align, tyIndex);
+                 },
+                 nullptr, 0, tyIndex);
 }
 
 }
@@ -439,13 +565,22 @@ void unbind(Symbol key, Handle handle) {
 
 using namespace detail;
 
+void visitSymbols(std::function<void(const Symbol&,Handle,uint32_t)> fun) {
+  Guard g(s_allocMutex);
+  // make sure that find/count don't interfere with iteration.
+  s_linkTable.rehash();
+  for (auto it : s_linkTable) {
+    fun(it.first, it.second.handle, it.second.size);
+  }
+}
+
 //////////////////////////////////////////////////////////////////////
 
 __thread void* tl_base = nullptr;
-static __thread std::aligned_storage<
-  sizeof(Array),
-  alignof(Array)
->::type s_constantsStorage;
+
+RDS_LOCAL_NO_CHECK(ArrayData*, s_constantsStorage)(nullptr);
+
+rds::Link<bool, Mode::Persistent> s_persistentTrue;
 
 // All threads tl_bases are kept in a set, to allow iterating Local
 // and Normal RDS sections across threads.
@@ -456,25 +591,38 @@ std::vector<void*> s_tlBaseList;
 
 static size_t s_next_bit;
 static size_t s_bits_to_go;
-static int s_tc_fd;
-
-// Mapping from names to targetcache locations.
-typedef tbb::concurrent_hash_map<const StringData*, Handle,
-        StringDataHashICompare>
-  HandleMapIS;
-
-typedef tbb::concurrent_hash_map<const StringData*, Handle,
-        StringDataHashCompare>
-  HandleMapCS;
 
 //////////////////////////////////////////////////////////////////////
 
-void requestInit() {
-  assert(tl_base);
-  new (&s_constantsStorage) Array();
-  assert(!s_constants().get());
-  assert(g_current_gen_link.bound());
+void processInit() {
+  assertx(!s_local_base);
+  if (RuntimeOption::EvalJitTargetCacheSize > 1u << 30) {
+    // The encoding of RDS handles require that the normal and local regions
+    // together be smaller than 1G.
+    RuntimeOption::EvalJitTargetCacheSize = 1u << 30;
+  }
+  s_local_base = RuntimeOption::EvalJitTargetCacheSize * 3 / 4;
+  s_local_frontier = s_local_base;
 
+#if RDS_FIXED_PERSISTENT_BASE
+  auto constexpr allocSize = kPersistentChunkSize;
+#else
+  auto const allocSize = RuntimeOption::EvalJitTargetCacheSize / 4;
+#endif
+  addNewPersistentChunk(allocSize),
+
+  s_persistentTrue.bind(Mode::Persistent);
+  *s_persistentTrue = true;
+
+  local::RDSInit();
+}
+
+void requestInit() {
+  assertx(tl_base);
+  *s_constantsStorage = nullptr;
+  assertx(!s_constants().get());
+
+  auto gen = header()->currentGen;
   memset(tl_base, 0, sizeof(Header));
   if (debug) {
     // Trash the normal section in debug mode, so that we can catch errors with
@@ -484,9 +632,8 @@ void requestInit() {
       kRDSTrashFill,
       s_normal_frontier - sizeof(Header)
     );
-    *g_current_gen_link = 1;
-    return;
-  } else if (++*g_current_gen_link == kInvalidGenNumber) {
+    gen = 1;
+  } else if (++gen == kInvalidGenNumber) {
     // If the current gen number has wrapped around back to the "invalid"
     // number, memset the entire normal section.  Once the current gen number
     // wraps, it becomes ambiguous whether any given gen number is up to date.
@@ -495,12 +642,13 @@ void requestInit() {
       kInvalidGenNumber,
       s_normal_frontier - sizeof(Header)
     );
-    ++*g_current_gen_link;
+    ++gen;
   }
+  header()->currentGen = gen;
 }
 
 void requestExit() {
-  s_constants().detach(); // it will be swept
+  *s_constantsStorage = nullptr; // it will be swept
   // Don't bother running the dtor ...
 }
 
@@ -509,11 +657,17 @@ void flush() {
     Logger::Warning("RDS madvise failure: %s\n",
                     folly::errnoStr(errno).c_str());
   }
-  size_t offset = s_local_frontier & ~0xfff;
-  if (madvise(static_cast<char*>(tl_base) + offset,
-              s_persistent_base - offset, MADV_DONTNEED)) {
-    Logger::Warning("RDS local madvise failure: %s\n",
-                    folly::errnoStr(errno).c_str());
+  if (jit::mcgen::retranslateAllEnabled() &&
+      !jit::mcgen::retranslateAllPending()) {
+    size_t offset = s_local_frontier & ~0xfff;
+    size_t protectedSpace = local::detail::s_usedbytes +
+                            (-local::detail::s_usedbytes & 0xfff);
+    if (madvise(static_cast<char*>(tl_base) + offset,
+                s_local_base - protectedSpace - offset,
+                MADV_DONTNEED)) {
+      Logger::Warning("RDS local madvise failure: %s\n",
+                      folly::errnoStr(errno).c_str());
+    }
   }
 }
 
@@ -532,14 +686,16 @@ void flush() {
  * |  Local      | ^^^
  * |    region   | growing lower
  * |             |
- * +-------------+ <-- tl_base + s_persistent_base
- * |             |
- * | Persistent  | growing higher
- * |     region  | vvv
- * |             |
- * +-------------+ <-- tl_base + s_persistent_frontier
+ * +-------------+ <-- tl_base + s_local_base
  * | \ \ \ \ \ \ |
  * +-------------+ higher addresses
+ *
+ * +-------------+ <--- s_persistent_base
+ * |             |
+ * | Persistent  | not necessarily contiguous when RDS_FIXED_PERSISTENT_BASE
+ * |     region  |
+ * |             |
+ * +-------------+
  */
 
 size_t usedBytes() {
@@ -547,11 +703,11 @@ size_t usedBytes() {
 }
 
 size_t usedLocalBytes() {
-  return s_persistent_base - s_local_frontier;
+  return s_local_base - s_local_frontier;
 }
 
 size_t usedPersistentBytes() {
-  return s_persistent_frontier - s_persistent_base;
+  return s_persistent_usage;
 }
 
 folly::Range<const char*> normalSection() {
@@ -562,24 +718,19 @@ folly::Range<const char*> localSection() {
   return {(const char*)tl_base + s_local_frontier, usedLocalBytes()};
 }
 
-folly::Range<const char*> persistentSection() {
-  return {(const char*)tl_base + s_persistent_base, usedPersistentBytes()};
-}
-
 Array& s_constants() {
-  void* vp = &s_constantsStorage;
-  return *static_cast<Array*>(vp);
+  return *reinterpret_cast<Array*>(s_constantsStorage.get());
 }
 
-//////////////////////////////////////////////////////////////////////
-
-namespace {
-
-constexpr std::size_t kAllocBitNumBytes = 8;
-
+GenNumber currentGenNumber() {
+  return header()->currentGen;
 }
 
-/////////////////////////////////////////////////////////////////////
+Handle currentGenNumberHandle() {
+  return offsetof(Header, currentGen);
+}
+
+constexpr size_t kAllocBitNumBytes = 8;
 
 size_t allocBit() {
   Guard g(s_allocMutex);
@@ -604,107 +755,65 @@ bool testAndSetBit(size_t bit) {
   Handle handle = block & ~(kAllocBitNumBytes - 1);
 
   if (!isHandleInit(handle, NormalTag{})) {
-    auto ptr = &handleToRef<unsigned char>(handle);
-    for (size_t i = 0; i < kAllocBitNumBytes; ++i) ptr[i] = 0;
+    auto ptr = handleToPtr<unsigned char, Mode::Normal>(handle);
+    memset(ptr, 0, kAllocBitNumBytes);
     initHandle(handle);
   }
-  bool ret = handleToRef<unsigned char>(block) & mask;
-  handleToRef<unsigned char>(block) |= mask;
+  auto& ref = handleToRef<unsigned char, Mode::Normal>(block);
+  bool ret = ref & mask;
+  ref |= mask;
   return ret;
 }
 
 bool isValidHandle(Handle handle) {
-  return handle >= sizeof(Header) &&
-    handle < RuntimeOption::EvalJitTargetCacheSize;
-}
-
-static void initPersistentCache() {
-  Guard g(s_allocMutex);
-  if (s_tc_fd) return;
-  char tmpName[] = "/tmp/tcXXXXXX";
-  s_tc_fd = mkstemp(tmpName);
-  always_assert(s_tc_fd != -1);
-  unlink(tmpName);
-  s_persistent_base = RuntimeOption::EvalJitTargetCacheSize * 3 / 4;
-  s_persistent_base -= s_persistent_base & (4 * 1024 - 1);
-  ftruncate(s_tc_fd,
-            RuntimeOption::EvalJitTargetCacheSize - s_persistent_base);
-  s_local_frontier = s_persistent_frontier = s_persistent_base;
+  return handle >= kMinPersistentHandle ||
+    (handle >= sizeof(Header) && handle < s_normal_frontier) ||
+    (handle >= s_local_frontier && handle < s_local_base);
 }
 
 void threadInit(bool shouldRegister) {
-  assert(tl_base == nullptr);
-
-  if (!s_tc_fd) {
-    initPersistentCache();
+  if (!s_local_base) {
+    processInit();
   }
-
-  tl_base = mmap(nullptr, RuntimeOption::EvalJitTargetCacheSize,
-                 PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+  assertx(tl_base == nullptr);
+  tl_base = mmap(nullptr, s_local_base, PROT_READ | PROT_WRITE,
+                 MAP_ANON | MAP_PRIVATE, -1, 0);
   always_assert_flog(
     tl_base != MAP_FAILED,
-    "Failed to mmap persistent RDS region. errno = {}",
+    "Failed to mmap RDS region. errno = {}",
     folly::errnoStr(errno).c_str()
   );
-#ifdef _MSC_VER
-  // MapViewOfFileEx() requires "the specified memory region is not already in
-  // use by the calling process" when mapping the shared area below. Otherwise
-  // it will return MAP_FAILED. We first map the full size to make sure the
-  // memory area is available. Then we unmap and map the lower portion of the
-  // RDS at the same address.
-  munmap(tl_base, RuntimeOption::EvalJitTargetCacheSize);
-  void* tl_same = mmap(tl_base, s_persistent_base,
-                       PROT_READ | PROT_WRITE,
-                       MAP_ANON | MAP_PRIVATE | MAP_FIXED,
-                       -1, 0);
-  always_assert(tl_same == tl_base);
-#endif
-  numa_bind_to(tl_base, s_persistent_base, s_numaNode);
+  numa_bind_to(tl_base, s_local_base, s_numaNode);
 #ifdef NDEBUG
   // A huge-page RDS is incompatible with VMProtect in vm-regs.cpp
   if (RuntimeOption::EvalMapTgtCacheHuge) {
-    hintHuge(tl_base, RuntimeOption::EvalJitTargetCacheSize);
+    hintHuge(tl_base, s_local_base);
   }
 #endif
 
   if (shouldRegister) {
     Guard g(s_tlBaseListLock);
-    assert(std::find(begin(s_tlBaseList), end(s_tlBaseList), tl_base) ==
-             end(s_tlBaseList));
+    assertx(std::find(begin(s_tlBaseList), end(s_tlBaseList), tl_base) ==
+            end(s_tlBaseList));
     s_tlBaseList.push_back(tl_base);
   }
-
-  void* shared_base = (char*)tl_base + s_persistent_base;
-  /*
-   * Map the upper portion of the RDS to a shared area. This is used
-   * for persistent classes and functions, so they are always defined,
-   * and always visible to all threads.
-   */
-  void* mem = mmap(shared_base,
-                   RuntimeOption::EvalJitTargetCacheSize - s_persistent_base,
-                   PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, s_tc_fd, 0);
-  always_assert(mem == shared_base);
 
   if (RuntimeOption::EvalPerfDataMap) {
     Debug::DebugInfo::recordDataMap(
       tl_base,
-      (char*)tl_base + RuntimeOption::EvalJitTargetCacheSize,
+      (char*)tl_base + s_local_base,
       "rds");
   }
 
-  g_current_gen_link.bind(Mode::Local);
-  *g_current_gen_link = 1;
-  if (RuntimeOption::EvalPerfDataMap) {
-    Debug::DebugInfo::recordDataMap(
-      (char*)tl_base + g_current_gen_link.handle(),
-      (char*)tl_base + g_current_gen_link.handle() +
-      RuntimeOption::EvalJitTargetCacheSize,
-      "-rds-gen-number");
+  header()->currentGen = 1;
+  if (shouldRegister) {
+    local::init();
   }
 }
 
 void threadExit(bool shouldUnregister) {
   if (shouldUnregister) {
+    local::fini(true);
     Guard g(s_tlBaseListLock);
     auto it = std::find(begin(s_tlBaseList), end(s_tlBaseList), tl_base);
     if (it != end(s_tlBaseList)) {
@@ -715,19 +824,13 @@ void threadExit(bool shouldUnregister) {
   if (RuntimeOption::EvalPerfDataMap) {
     Debug::DebugInfo::recordDataMap(
       tl_base,
-      (char*)tl_base + RuntimeOption::EvalJitTargetCacheSize,
+      (char*)tl_base + s_local_base,
       "-rds");
   }
 
   auto const base = tl_base;
   auto do_unmap = [base] {
-#ifdef _MSC_VER
-    munmap(base, s_persistent_base);
-    munmap((char*)base + s_persistent_base,
-           RuntimeOption::EvalJitTargetCacheSize - s_persistent_base);
-#else
-    munmap(base, RuntimeOption::EvalJitTargetCacheSize);
-#endif
+    munmap(base, s_local_base);
   };
 
   // Other requests may be reading from this rds section via the s_tlBaseList.
@@ -741,7 +844,7 @@ void threadExit(bool shouldUnregister) {
 }
 
 void recordRds(Handle h, size_t size,
-               const std::string& type, const std::string& msg) {
+               folly::StringPiece type, folly::StringPiece msg) {
   if (RuntimeOption::EvalPerfDataMap) {
     if (isNormalHandle(h)) {
       h = genNumberHandleFrom(h);
@@ -750,7 +853,7 @@ void recordRds(Handle h, size_t size,
     Debug::DebugInfo::recordDataMap(
       (char*)(intptr_t)h,
       (char*)(intptr_t)h + size,
-      folly::format("rds+{}-{}", type, msg).str());
+      folly::sformat("rds+{}-{}", type, msg));
   }
 }
 

@@ -2,9 +2,8 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -21,7 +20,7 @@ type disk_type = Disk of string | Ide of string
 
 exception File_heap_stale
 
-module FileHeap = SharedMem.WithCache (Relative_path.S) (struct
+module FileHeap = SharedMem.WithCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
     type t = disk_type
     let prefix = Prefix.make()
     let description = "Disk"

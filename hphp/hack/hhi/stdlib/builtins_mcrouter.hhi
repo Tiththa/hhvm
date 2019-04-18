@@ -1,5 +1,6 @@
-<?hh // decl
+<?hh
 
+<<__PHPStdLib>>
 class MCRouterException extends Exception {
   public function getKey(): string;
   public function getOp(): int;
@@ -12,11 +13,13 @@ class MCRouterException extends Exception {
   );
 }
 
+<<__PHPStdLib>>
 class MCRouterOptionException extends Exception {
   public function getErrors(): array<array<string,string>>;
   public function __construct(protected array<array<string,string>> $errors);
 }
 
+<<__PHPStdLib>>
 class MCRouter {
   public function __construct(
     array<string,mixed> $options,
@@ -81,7 +84,7 @@ class MCRouter {
   const int mc_op_gets = 0;
   const int mc_op_get_service_info = 0;
 
-  // From mcrouter/lib/mc/msg.h enum mc_res_e:
+  // From mcrouter/lib/carbon/Result.h enum carbon::Result:
   const int mc_res_unknown = 0;
   const int mc_res_deleted = 0;
   const int mc_res_found = 0;

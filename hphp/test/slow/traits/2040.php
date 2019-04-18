@@ -34,5 +34,3 @@ $t->smallTalk();
 $t->bigTalk();
 $t->talk();
 
-?>
-

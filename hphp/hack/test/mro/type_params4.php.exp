@@ -1,0 +1,8 @@
+Linearization for class \A:
+[\A]
+Linearization for class \B:
+[\B, \A<bool,T1>]
+Linearization for class \C:
+[\C, \A<string,T1>]
+Linearization for class \D:
+[\D, \B<float>, \A<bool,float>, \C<int>, \A<string,int>]

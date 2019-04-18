@@ -3,9 +3,11 @@
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  UnboxR
+  FCall <> 0 1 "" - "" ""
   RetC
 }
 
@@ -18,10 +20,12 @@
   SetL $arr
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $arr
   FPushFuncD 1 "var_dump"
-  FPassL 0 $arr
-  FCall 1
-  UnboxR
+  FCall <> 1 1 "" - "" ""
   PopC
 
   Int 1

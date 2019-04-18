@@ -1,27 +1,37 @@
 .main {
   DefCls 0
 
-  FPushCtorD 0 "Foo"
-  FCall 0
-  PopR
+  NewObjD "Foo"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $object
   PopC
 
   CGetL $object
+  NullUninit
+  NullUninit
+   NewObjD "Foo"
+   Dup
+   NullUninit
+   NullUninit
+   FPushCtor 0
+   FCall <> 0 1 "" - "" ""
+   PopC
   FPushObjMethodD 1 "main" NullThrows
-   FPushCtorD 0 "Foo"
-   FCall 0
-   PopR
-   FPassC 0
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
   CGetL $object
-  FPushObjMethodD 1 "main" NullThrows
+  NullUninit
+  NullUninit
    Null
-   FPassC 0
-  FCall 1
-  PopR
+  FPushObjMethodD 1 "main" NullThrows
+  FCall <> 1 1 "" - "" ""
+  PopC
 
   Int 1
   RetC

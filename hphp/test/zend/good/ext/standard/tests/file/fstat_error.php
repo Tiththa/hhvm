@@ -2,10 +2,9 @@
 $fp = fopen (__FILE__, 'r');
 $extra_arg = 'nothing'; 
 
-var_dump(fstat( $fp, $extra_arg ) );
-var_dump(fstat());
+try { var_dump(fstat( $fp, $extra_arg ) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+try { var_dump(fstat()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 fclose($fp);
 
-?>
-===DONE===
+echo "===DONE===\n";

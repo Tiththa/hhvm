@@ -1,4 +1,4 @@
-open Core
+open Core_kernel
 
 module Tools = struct
 
@@ -48,20 +48,20 @@ type config = {
 (** Invoke a subprocess on the harness's repo with its environment. *)
 let exec_hh_client args harness =
   Printf.eprintf "executing hh_client. Args: %s\n%!"
-    (String.concat ", " args);
-  Process.exec harness.hh_client_path
+    (String.concat ~sep:", " args);
+  Process.exec_with_augmented_env harness.hh_client_path
     ~env:harness.test_env (args @ [Path.to_string harness.repo_dir])
 
 let get_server_logs harness =
   let process = exec_hh_client ["--logname"] harness in
   match Process.read_and_wait_pid ~timeout:5 process with
-  | Result.Ok (log_path, _) ->
-    let log_path = Path.make (String.trim log_path) in
+  | Ok {Process_types.stdout; _} ->
+    let log_path = Path.make (String.strip stdout) in
     (try Some (Sys_utils.cat (Path.to_string log_path)) with
     | Sys_error(m)
       when Sys_utils.string_contains m "No such file or directory" ->
       None)
-  | Result.Error failure ->
+  | Error failure ->
     raise @@ Process_failed failure
 
 let wait_until_lock_free lock_file _harness =
@@ -81,7 +81,7 @@ let get_recording_path harness =
       (Path.make (Str.matched_group 1 logs)),
       (Path.make (Str.matched_group 2 logs)))
   end with
-  | Not_found ->
+  | Caml.Not_found ->
     Printf.eprintf "recorder path or lock file not found\n%!";
     Printf.eprintf "See also server logs: %s\n%!" logs;
     None
@@ -90,17 +90,17 @@ let check_cmd harness =
   let process = exec_hh_client ["check"] harness in
   Printf.eprintf "Waiting for process\n%!";
   match Process.read_and_wait_pid ~timeout:30 process with
-  | Result.Ok (result, _) ->
-    Sys_utils.split_lines result
-  | Result.Error failure ->
+  | Ok {Process_types.stdout; _} ->
+    Sys_utils.split_lines stdout
+  | Error failure ->
     raise @@ Process_failed failure
 
 let stop_server harness =
   let process = exec_hh_client ["stop"] harness in
   match Process.read_and_wait_pid ~timeout:30 process with
-  | Result.Ok (result, _) ->
-    result
-  | Result.Error failure ->
+  | Ok {Process_types.stdout; _} ->
+    stdout
+  | Error failure ->
     raise @@ Process_failed failure
 
 let run_test ?(stop_server_in_teardown=true)
@@ -169,8 +169,7 @@ config test_case =
     in
     let with_exception_printing test_case harness =
       let result = try test_case harness with
-      | Process_failed (Process_types.Process_exited_abnormally
-          (status, _stdout, stderr)) as e ->
+      | Process_failed (Process_types.Abnormal_exit {status; stderr; _}) as e ->
             Printf.eprintf "Process exited abnormally (%s). See also Stderr: %s\n"
               (Tools.process_status_to_string status)
               (Tools.boxed_string stderr);

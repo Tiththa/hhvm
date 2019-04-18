@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function mytolower($a) {
   return strtolower($a);
@@ -14,8 +14,11 @@ function VS($x, $y) {
   }
 }
 
+
 //////////////////////////////////////////////////////////////////////
 
+<<__EntryPoint>>
+function main_ext_output() {
 ob_start();
 ob_start("mytolower");
 echo "TEst";
@@ -87,5 +90,7 @@ $handlers = ob_list_handlers();
 ob_end_clean();
 ob_end_clean();
 VS($handlers, array("default output handler", "mytolower"));
+VS(is_varray($handlers), true);
 
 echo "\nok\n";
+}

@@ -29,6 +29,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include "hphp/runtime/vm/treadmill.h"
 #include "hphp/runtime/base/program-functions.h"
 
 namespace HPHP { namespace HHBBC {
@@ -46,23 +47,40 @@ extern size_t work_chunk;
 
 //////////////////////////////////////////////////////////////////////
 
+namespace detail {
+
+template<class Func, class Item>
+auto caller(const Func& func, Item&& item, size_t worker) ->
+  decltype(func(std::forward<Item>(item), worker)) {
+  return func(std::forward<Item>(item), worker);
+}
+
+template<class Func, class Item>
+auto caller(const Func& func, Item&& item, size_t worker) ->
+  decltype(func(std::forward<Item>(item))) {
+  return func(std::forward<Item>(item));
+}
+
+}
+
 /*
  * Call a function on each element of `inputs', in parallel.
  *
  * If `func' throws an exception, some of the work will not be
  * attempted.
  */
-template<class Func, class Item>
-void for_each(const std::vector<Item>& inputs, Func func) {
+template<class Func, class Items>
+void for_each(Items&& inputs, Func func) {
   std::atomic<bool> failed{false};
   std::atomic<size_t> index{0};
+  auto const size = inputs.size();
 
   std::vector<std::thread> workers;
   for (auto worker = size_t{0}; worker < num_threads; ++worker) {
-    workers.push_back(std::thread([&] {
+    workers.push_back(std::thread([&, worker] {
       try {
         hphp_thread_init();
-        hphp_session_init();
+        hphp_session_init(Treadmill::SessionKind::HHBBC);
         SCOPE_EXIT {
           hphp_context_exit();
           hphp_session_exit();
@@ -71,9 +89,13 @@ void for_each(const std::vector<Item>& inputs, Func func) {
 
         for (;;) {
           auto start = index.fetch_add(work_chunk);
-          auto const stop = std::min(start + work_chunk, inputs.size());
+          auto const stop = std::min(start + work_chunk, size);
           if (start >= stop) break;
-          for (auto i = start; i != stop; ++i) func(inputs[i]);
+          for (auto i = start; i != stop; ++i) {
+            detail::caller(func,
+                           std::forward<Items>(inputs)[i],
+                           worker);
+          }
         }
       } catch (const std::exception& e) {
         std::fprintf(stderr,
@@ -113,7 +135,7 @@ auto map(Items&& inputs, Func func) -> std::vector<decltype(func(inputs[0]))> {
     workers.push_back(std::thread([&] {
       try {
         hphp_thread_init();
-        hphp_session_init();
+        hphp_session_init(Treadmill::SessionKind::HHBBC);
         SCOPE_EXIT {
           hphp_context_exit();
           hphp_session_exit();

@@ -1,11 +1,6 @@
 <?php
 
-set_error_handler(function() { throw new Exception; });
-
 class X {
-  function __destruct() {
-    echo __METHOD__, "\n";
-  }
 }
 
 function test($x) {
@@ -20,5 +15,11 @@ function main() {
   }
 }
 
+
+<<__EntryPoint>>
+function main_cuf_throw() {
+set_error_handler(function() { throw new Exception; });
+
 main();
 echo "Done\n";
+}

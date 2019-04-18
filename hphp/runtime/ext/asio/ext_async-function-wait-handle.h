@@ -90,7 +90,7 @@ struct c_AsyncFunctionWaitHandle final : c_ResumableWaitHandle {
   static void PrepareChild(const ActRec* fp, c_WaitableWaitHandle* child);
   void onUnblocked();
   void resume();
-  void await(Offset resumeOffset, c_WaitableWaitHandle* child);
+  void await(Offset resumeOffset, req::ptr<c_WaitableWaitHandle>&& child);
   void ret(Cell& result);
   void fail(ObjectData* exception);
   void failCpp();
@@ -112,7 +112,7 @@ struct c_AsyncFunctionWaitHandle final : c_ResumableWaitHandle {
   }
 
   bool isFastResumable() const {
-    assert(getState() == STATE_READY);
+    assertx(getState() == STATE_READY);
     return (resumable()->resumeAddr() &&
             m_children[0].getChild()->isSucceeded());
   }
@@ -134,8 +134,8 @@ struct c_AsyncFunctionWaitHandle final : c_ResumableWaitHandle {
   }
 };
 
-inline c_AsyncFunctionWaitHandle* c_WaitHandle::asAsyncFunction() {
-  assert(getKind() == Kind::AsyncFunction);
+inline c_AsyncFunctionWaitHandle* c_Awaitable::asAsyncFunction() {
+  assertx(getKind() == Kind::AsyncFunction);
   return static_cast<c_AsyncFunctionWaitHandle*>(this);
 }
 

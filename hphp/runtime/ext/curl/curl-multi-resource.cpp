@@ -83,21 +83,60 @@ Resource CurlMultiResource::find(CURL *cp) {
   return Resource();
 }
 
+void CurlMultiResource::setInExec(bool b) {
+  for (ArrayIter iter(m_easyh); iter; ++iter) {
+    auto const curl = cast<CurlResource>(iter.second());
+    curl->m_in_exec = b;
+  }
+}
+
+bool CurlMultiResource::anyInExec() const {
+  for (ArrayIter iter(m_easyh); iter; ++iter) {
+    auto const curl = cast<CurlResource>(iter.second());
+    if (curl->m_in_exec) return true;
+  }
+  return false;
+}
+
 void CurlMultiResource::check_exceptions() {
+  SCOPE_EXIT {
+    if (debug) {
+      for (ArrayIter iter(m_easyh); iter; ++iter) {
+        auto const curl = cast<CurlResource>(iter.second());
+        always_assert(!curl->m_exception);
+      }
+    }
+  };
+
+  // If we exit unexpectedly, ensure we've released any queued exceptions.
+  SCOPE_EXIT {
+    for (ArrayIter iter(m_easyh); iter; ++iter) {
+      auto const curl = cast<CurlResource>(iter.second());
+      if (auto const exn = curl->getAndClearException()) {
+        if (!CurlResource::isPhpException(exn)) {
+          delete CurlResource::getCppException(exn);
+        }
+      }
+    }
+  };
+
   Exception* cppException = nullptr;
   Object phpException;
   for (ArrayIter iter(m_easyh); iter; ++iter) {
-    auto curl = cast<CurlResource>(iter.second());
-    CurlResource::ExceptionType nextException(curl->getAndClearException());
+    auto const curl = cast<CurlResource>(iter.second());
+    auto const nextException = curl->getAndClearException();
     if (!nextException) continue;
     if (CurlResource::isPhpException(nextException)) {
       Object e(CurlResource::getPhpException(nextException));
       e->o_set(s_previous, phpException, s_exception);
       phpException = std::move(e);
     } else {
-      auto e = CurlResource::getCppException(nextException);
-      if (auto f = dynamic_cast<FatalErrorException*>(e)) {
-        if (!f->isRecoverable()) f->throwException();
+      auto const e = CurlResource::getCppException(nextException);
+      if (auto const f = dynamic_cast<FatalErrorException*>(e)) {
+        if (!f->isRecoverable()) {
+          delete cppException;
+          f->throwException();
+        }
       }
       delete cppException;
       cppException = e;

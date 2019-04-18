@@ -16,6 +16,7 @@
 
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 
+#include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/runtime/vm/jit/cls-cns-profile.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
@@ -44,6 +45,8 @@ SSATmp* staticTVCns(IRGS& env, const TypedValue* tv) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return cns(env, tv->m_data.parr);
 
@@ -51,34 +54,30 @@ SSATmp* staticTVCns(IRGS& env, const TypedValue* tv) {
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
+    // TODO (T29639296)
+    case KindOfFunc:
+    case KindOfClass:
+    case KindOfClsMeth:
+    case KindOfRecord: // TODO(arnabde)
       break;
   }
   always_assert(false);
 }
 
-void implCns(IRGS& env,
-             const StringData* name,
-             const StringData* fallbackName,
-             bool error) {
-  assertx(fallbackName == nullptr || !error);
+//////////////////////////////////////////////////////////////////////
+
+} // namespace
+
+void emitCnsE(IRGS& env, const StringData* name) {
   auto const cnsNameTmp = cns(env, name);
   auto const tv = Unit::lookupPersistentCns(name);
   SSATmp* result = nullptr;
 
-  SSATmp* fallbackNameTmp = nullptr;
-  if (fallbackName != nullptr) {
-    fallbackNameTmp = cns(env, fallbackName);
-  }
   if (tv) {
     if (tv->m_type == KindOfUninit) {
       // KindOfUninit is a dynamic system constant. always a slow
       // lookup.
-      assertx(!fallbackNameTmp);
-      if (error) {
-        result = gen(env, LookupCnsE, cnsNameTmp);
-      } else {
-        result = gen(env, LookupCns, cnsNameTmp);
-      }
+      result = gen(env, LookupCnsE, cnsNameTmp);
     } else {
       result = staticTVCns(env, tv);
     }
@@ -94,22 +93,16 @@ void implCns(IRGS& env,
       },
       [&] { // Taken: miss in TC, do lookup & init
         hint(env, Block::Hint::Unlikely);
-
-        if (fallbackNameTmp) {
-          return gen(env,
-                     LookupCnsU,
-                     cnsNameTmp,
-                     fallbackNameTmp);
-        }
-        if (error) {
-          return gen(env, LookupCnsE, cnsNameTmp);
-        }
-        return gen(env, LookupCns, cnsNameTmp);
+        return gen(env, LookupCnsE, cnsNameTmp);
       }
     );
   }
   push(env, result);
 }
+
+namespace {
+
+//////////////////////////////////////////////////////////////////////
 
 void implClsCns(IRGS& env,
                 const Class* cls,
@@ -170,21 +163,7 @@ void clsCnsHelper(IRGS& env, SSATmp* ptv, uint32_t clsRefSlot,
 
 //////////////////////////////////////////////////////////////////////
 
-}
-
-void emitCns(IRGS& env, const StringData* name) {
-  implCns(env, name, nullptr, false);
-}
-
-void emitCnsE(IRGS& env, const StringData* name) {
-  implCns(env, name, nullptr, true);
-}
-
-void emitCnsU(IRGS& env,
-              const StringData* name,
-              const StringData* fallback) {
-  implCns(env, name, fallback, false);
-}
+} // namespace
 
 void emitClsCnsD(IRGS& env,
                  const StringData* cnsNameStr,
@@ -193,9 +172,9 @@ void emitClsCnsD(IRGS& env,
 }
 
 void emitClsCns(IRGS& env, const StringData* cnsNameStr, uint32_t clsRefSlot) {
-  auto const clsTmp = peekClsRef(env, clsRefSlot);
+  auto const clsTmp = peekClsRefCls(env, clsRefSlot);
   auto const clsTy = clsTmp->type();
-  if (!clsTy.clsSpec()) {
+  if (!clsTy.clsSpec() || !isNormalClass(clsTy.clsSpec().cls())) {
     if (RuntimeOption::RepoAuthoritative) {
       TargetProfile<ClsCnsProfile> profile(env.context, env.irb->curMarker(),
                                            clsCnsProfileKey.get());
@@ -205,7 +184,7 @@ void emitClsCns(IRGS& env, const StringData* cnsNameStr, uint32_t clsRefSlot) {
         return;
       }
       if (profile.optimizing()) {
-        auto const slot = profile.data(ClsCnsProfile::reduce).getSlot();
+        auto const slot = profile.data().getSlot();
         if (slot != kInvalidSlot) {
           auto const exit = makeExitSlow(env);
           auto const len = gen(env, LdClsCnsVecLen, clsTmp);

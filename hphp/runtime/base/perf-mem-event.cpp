@@ -21,9 +21,9 @@
 #include "hphp/runtime/base/header-kind.h"
 #include "hphp/runtime/base/member-reflection.h"
 #include "hphp/runtime/base/memory-manager.h"
+#include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array.h"
-#include "hphp/runtime/base/proxy-array.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/class.h"
@@ -68,7 +68,7 @@ namespace {
  * Bump this whenever the log format changes, so that it's easy to filter out
  * old, incompatible results.
  */
-constexpr auto kVersion = 2;
+constexpr auto kVersion = 3;
 
 /*
  * Update `record' with the data member that `internal' is in, relative to
@@ -96,22 +96,22 @@ void fill_record(const Class* cls, const void* addr,
   record.setStr("name", cls->name()->data());
 
   if (cls->classVec() <= addr && addr < cls->mallocEnd()) {
-    auto const off = (reinterpret_cast<uintptr_t>(addr)
+    auto const idx = (reinterpret_cast<uintptr_t>(addr)
                      - reinterpret_cast<uintptr_t>(cls->classVec()))
                      / sizeof(*cls->classVec());
     record.setStr("member", "m_classVec");
-    record.setInt("offset", off);
+    record.setInt("index", idx);
   }
   // Introspect members after dealing with the variable-length terminal
   // array member.
   if (try_member(cls, addr, record)) return;
 
   if (cls->funcVec() <= addr && addr < cls) {
-    auto const off = (reinterpret_cast<uintptr_t>(cls)
+    auto const idx = (reinterpret_cast<uintptr_t>(cls)
                      - reinterpret_cast<uintptr_t>(addr))
                      / sizeof(*cls->funcVec());
     record.setStr("member", "funcVec");
-    record.setInt("offset", off);
+    record.setInt("index", idx);
   }
 }
 
@@ -122,10 +122,10 @@ void fill_record(const Func* func, const void* addr,
   auto const func_end = reinterpret_cast<const char*>(func)
                         + Func::prologueTableOff();
   if (func_end <= addr && addr < func->mallocEnd()) {
-    auto const off = (reinterpret_cast<const char*>(addr) - func_end)
+    auto const idx = (reinterpret_cast<const char*>(addr) - func_end)
                      / sizeof(AtomicLowPtr<uint8_t>);
     record.setStr("member", "m_prologueTable");
-    record.setInt("offset", off);
+    record.setInt("index", idx);
   }
   // Introspect members after dealing with the variable-length terminal
   // array member.
@@ -143,8 +143,10 @@ void fill_record(const StringData* sd, const void* addr,
   record.setStr("data", sd->data());
   if (try_member(sd, addr, record)) return;
 
-  auto const off = uintptr_t(addr) - uintptr_t(sd->data());
-  record.setInt("offset", off);
+  auto const idx = uintptr_t(addr) - uintptr_t(sd->data());
+  if (idx < 0) return;
+
+  record.setInt("index", idx);
 }
 
 void fill_record(const ArrayData* arr, const void* addr,
@@ -153,6 +155,7 @@ void fill_record(const ArrayData* arr, const void* addr,
 
   auto const tv = reinterpret_cast<const TypedValue*>(addr);
   auto const idx = tv - packedData(arr);
+  if (idx < 0) return;
 
   record.setInt("ikey", idx);
 
@@ -216,26 +219,34 @@ bool record_tc_mem_event(TCA tca, StructuredLogEntry& record) {
  */
 bool record_vm_metadata_mem_event(data_map::result res, const void* addr,
                                   StructuredLogEntry& record) {
+  auto const pos = reinterpret_cast<const char*>(addr);
+
   assertx(!res.empty());
   match<void>(
     res,
     [&](const Class* cls) {
+      record.setInt("offset", pos - reinterpret_cast<const char*>(cls));
       record.setStr("kind", "Class");
       fill_record(cls, addr, record);
     },
     [&](const Func* func) {
+      record.setInt("offset", pos - reinterpret_cast<const char*>(func));
+      record.setStr("kind", "Class");
       record.setStr("kind", "Func");
       fill_record(func, addr, record);
     },
     [&](const NamedEntity* ne) {
+      record.setInt("offset", pos - reinterpret_cast<const char*>(ne));
       record.setStr("kind", "NamedEntity");
       try_member(ne, addr, record);
     },
     [&](const StringData* sd) {
+      record.setInt("offset", pos - reinterpret_cast<const char*>(sd));
       record.setStr("kind", "StringData");
       fill_record(sd, addr, record);
     },
     [&](const Unit* unit) {
+      record.setInt("offset", pos - reinterpret_cast<const char*>(unit));
       record.setStr("kind", "Unit");
       fill_record(unit, addr, record);
     }
@@ -280,6 +291,8 @@ bool record_request_heap_mem_event(const void* addr,
                                    StructuredLogEntry& record) {
   record.setStr("location", "request_heap");
   record.setStr("kind", header_names[uint8_t(hdr->kind())]);
+  record.setInt("offset", reinterpret_cast<const char*>(addr) -
+                          reinterpret_cast<const char*>(hdr));
 
   switch (hdr->kind()) {
     case HeaderKind::String:
@@ -293,8 +306,12 @@ bool record_request_heap_mem_event(const void* addr,
 
     case HeaderKind::Mixed:
     case HeaderKind::Dict:
-    case HeaderKind::Keyset:
+    case HeaderKind::Shape:
       fill_record(static_cast<const MixedArray*>(hdr), addr, record);
+      break;
+
+    case HeaderKind::Keyset:
+      try_member(static_cast<const SetArray*>(hdr), addr, record);
       break;
 
     case HeaderKind::Apc:
@@ -303,19 +320,18 @@ bool record_request_heap_mem_event(const void* addr,
     case HeaderKind::Globals:
       try_member(static_cast<const GlobalsArray*>(hdr), addr, record);
       break;
-    case HeaderKind::Proxy:
-      try_member(static_cast<const ProxyArray*>(hdr), addr, record);
-      break;
     case HeaderKind::Empty:
       break;
 
     case HeaderKind::Object:
+    case HeaderKind::NativeObject:
     case HeaderKind::Closure:
     case HeaderKind::WaitHandle:
     case HeaderKind::AsyncFuncWH:
     case HeaderKind::AwaitAllWH:
     case HeaderKind::Resource:
     case HeaderKind::Ref:
+    case HeaderKind::ClsMeth:
 
     case HeaderKind::Vector:
     case HeaderKind::Map:
@@ -328,11 +344,14 @@ bool record_request_heap_mem_event(const void* addr,
     case HeaderKind::AsyncFuncFrame:
     case HeaderKind::NativeData:
     case HeaderKind::ClosureHdr:
+    case HeaderKind::MemoData:
+
+    case HeaderKind::Record:
       break;
 
+    case HeaderKind::Cpp:
     case HeaderKind::SmallMalloc:
     case HeaderKind::BigMalloc:
-    case HeaderKind::BigObj:
     case HeaderKind::Slab:
     case HeaderKind::Free:
     case HeaderKind::Hole:
@@ -410,18 +429,15 @@ void record_perf_mem_event(PerfEvent kind, const perf_event_sample* sample) {
       return record_vm_stack_mem_event(addr, record);
     }
 
-    /*
-     * What we'd like to do here is:
-     *
-     * if (auto const hdr = MM().find(addr)) {
-     *    return record_request_heap_mem_event(addr, hdr, record);
-     * }
-     *
-     * but what appears to be a multithreaded use-after-free bug prevents us
-     * from doing so safely.
-     */
-    if (MM().contains(const_cast<void*>(addr))) {
-      (void)record_request_heap_mem_event; // shoosh warnings
+    if (auto const thing = tl_heap->find(addr)) {
+      if (UNLIKELY(thing->kind() != HeaderKind::Slab)) {
+        return record_request_heap_mem_event(addr, thing, record);
+      }
+      auto const slab = static_cast<const Slab*>(thing);
+      auto const obj = slab->find(addr);
+      return record_request_heap_mem_event(addr, obj ? obj : slab, record);
+    }
+    if (tl_heap->contains(const_cast<void*>(addr))) {
       record.setStr("location", "request_heap");
       return true;
     }

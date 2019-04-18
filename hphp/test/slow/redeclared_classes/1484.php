@@ -1,16 +1,10 @@
 <?php
 
 if (isset($g)) {
-  class X {
-}
+  include '1484-1.inc';
 }
  else {
-  class X {
-    public $a = 1;
-    function __destruct() {
- var_dump(__METHOD__);
- }
-  }
+  include '1484-2.inc';
 }
 class X1 extends X {
   public $t = 1;

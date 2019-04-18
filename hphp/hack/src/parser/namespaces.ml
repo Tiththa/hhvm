@@ -2,15 +2,16 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
+open Core_kernel
 open Ast
-open Core
 open Namespace_env
+
+module SN = Naming_special_names
 
 (* When dealing with an <?hh file, HHVM automatically imports a few
  * "core" classes into every namespace, mostly collections. Their
@@ -21,10 +22,7 @@ open Namespace_env
  * namespace. This is a tiny bit weird, but since Facebook www all runs
  * in the global namespace relying on this autoimport, this makes the
  * most sense there.
- *
- * See hhvm/compiler/parser/parser.cpp Parser::getAutoAliasedClasses
- * for the canonical list of classes and Parser::onCall for the
- * canonical list of functions. *)
+ *)
 let autoimport_classes = [
   "Traversable";
   "KeyedTraversable";
@@ -52,7 +50,6 @@ let autoimport_classes = [
   "AsyncKeyedIterator";
   "InvariantException";
   "AsyncGenerator";
-  "WaitHandle";
   "StaticWaitHandle";
   "WaitableWaitHandle";
   "ResumableWaitHandle";
@@ -66,29 +63,97 @@ let autoimport_classes = [
   "Shapes";
   "TypeStructureKind";
 ]
-let autoimport_funcs = [
+let autoimport_funcs =   [
+  "fun";
+  "meth_caller";
+  "class_meth";
+  "inst_meth";
+  "invariant_callback_register";
   "invariant";
   "invariant_violation";
+  "idx";
   "type_structure";
+  "asio_get_current_context_idx";
+  "asio_get_running_in_context";
+  "asio_get_running";
+  "xenon_get_data";
+  "thread_memory_stats";
+  "thread_mark_stack";
+  "objprof_get_strings";
+  "objprof_get_data";
+  "objprof_get_paths";
+  "heapgraph_create";
+  "heapgraph_stats";
+  "heapgraph_foreach_node";
+  "heapgraph_foreach_edge";
+  "heapgraph_foreach_root";
+  "heapgraph_dfs_nodes";
+  "heapgraph_dfs_edges";
+  "heapgraph_node";
+  "heapgraph_edge";
+  "heapgraph_node_in_edges";
+  "heapgraph_node_out_edges";
+  "server_warmup_status";
+  "dict";
+  "vec";
+  "keyset";
+  "varray";
+  "darray";
+  "is_vec";
+  "is_dict";
+  "is_keyset";
+  "is_varray";
+  "is_darray";
 ]
 let autoimport_types = [
   "typename";
   "classname";
   "TypeStructure";
 ]
+let autoimport_consts = [
+  "Rx\\IS_ENABLED";
+]
 
 let autoimport_set =
   let autoimport_list
-    = autoimport_classes @ autoimport_funcs @ autoimport_types in
+    = autoimport_classes @ autoimport_funcs @ autoimport_types @ autoimport_consts in
   List.fold_left autoimport_list ~init:SSet.empty ~f:(fun s e -> SSet.add e s)
+
+(* Return the namespace (or None if the global one) into which id is auto imported.
+ * Return false as first value if it is not auto imported
+ *)
+let get_autoimport_name_namespace id =
+  if SN.Typehints.is_reserved_global_name id
+  then (true, None)
+  else
+  if SN.Typehints.is_reserved_hh_name id ||
+     SSet.mem id autoimport_set
+  then (true, Some "HH")
+  else (false, None)
+
 (* NOTE that the runtime is able to distinguish between class and
    function names when auto-importing *)
-let is_autoimport_name id = SSet.mem id autoimport_set
+let is_autoimport_name id =
+  fst (get_autoimport_name_namespace id)
+
+let is_always_global_function =
+  let h = HashSet.create 23 in
+  let funcs = SN.PseudoFunctions.all_pseudo_functions @ [
+    "\\assert";
+    "\\echo";
+    "\\exit";
+    "\\die";
+  ] in
+  List.iter funcs (HashSet.add h);
+  fun x -> HashSet.mem h x
+
+let elaborate_into_ns ns_name id =
+match ns_name with
+  | None -> "\\" ^ id
+  | Some ns -> "\\" ^ ns ^ "\\" ^ id
 
 let elaborate_into_current_ns nsenv id =
-  match nsenv.ns_name with
-    | None -> "\\" ^ id
-    | Some ns -> "\\" ^ ns ^ "\\" ^ id
+  elaborate_into_ns nsenv.ns_name id
 
 (* Walks over the namespace map and checks if any source
  * matches the given id.
@@ -112,22 +177,26 @@ let rec translate_id ~reverse ns_map id =
       then target ^ (String_utils.lstrip id source)
       else translate_id ~reverse rest id
 
-(* Runs the autonamespace translation for both fully qualified and non qualified
- * names *)
-let renamespace_if_aliased ?(reverse = false) ns_map id =
-  try
-    let has_bslash = id.[0] = '\\' in
-    let len = String.length id in
-    let id = if has_bslash then String.sub id 1 (len - 1) else id in
-    let translation = translate_id ~reverse ns_map id in
-    if has_bslash then "\\" ^ translation else translation
-  (* If there is some matching problem, that means we are not aliasing *)
-  with _ -> id
+let aliased_to_fully_qualified_id alias_map id =
+  translate_id ~reverse:true alias_map id
 
 type elaborate_kind =
   | ElaborateFun
   | ElaborateClass
   | ElaborateConst
+
+(* Elaborate a defined identifier in a given namespace environment. For example,
+ * a class might be defined inside a namespace. Return new environment if
+ * ID is auto imported (e.g. Map) and so must be mapped when used.
+ *)
+let elaborate_defined_id nsenv kind (p, id) =
+  let newid = elaborate_into_current_ns nsenv id in
+  let update_nsenv = kind = ElaborateClass && is_autoimport_name id in
+  let nsenv =
+    if update_nsenv
+    then {nsenv with ns_class_uses = SMap.add id newid nsenv.ns_class_uses}
+    else nsenv in
+  (p, newid), nsenv, update_nsenv
 
 (* Resolves an identifier in a given namespace environment. For example, if we
  * are in the namespace "N\O", the identifier "P\Q" is resolved to "\N\O\P\Q".
@@ -145,47 +214,62 @@ type elaborate_kind =
  * works out. (Fully qualifying identifiers is of course idempotent, but there
  * used to be other schemes here.)
  *)
-let elaborate_id_impl ~autoimport nsenv kind (p, id) =
-  (* Go ahead and fully-qualify the name first. *)
-  let fully_qualified =
-    if id <> "" && id.[0] = '\\' then id
-    else if autoimport && is_autoimport_name id then "\\" ^ id
-    else begin
-      (* Expand "use" imports. *)
-      let (bslash_loc, has_bslash) =
-        try String.index id '\\', true
-        with Not_found -> String.length id, false in
-      (* "use function" and "use const" only apply if the id is completely
-       * unqualified, otherwise the normal "use" imports apply. *)
-      let uses = if has_bslash then nsenv.ns_ns_uses else match kind with
-        | ElaborateClass -> nsenv.ns_class_uses
-        | ElaborateFun -> nsenv.ns_fun_uses
-        | ElaborateConst -> nsenv.ns_const_uses in
-      let prefix = String.sub id 0 bslash_loc in
-      if prefix = "namespace" && id <> "namespace" then begin
-        (* Strip off the 'namespace\' (including the slash) from id, then
-        elaborate back into the current namespace. *)
-        let len = (String.length id) - bslash_loc  - 1 in
-        elaborate_into_current_ns nsenv (String.sub id (bslash_loc + 1) len)
-      end else match SMap.get prefix uses with
-        | None -> elaborate_into_current_ns nsenv id
-        | Some use -> begin
-          (* Strip off the "use" from id, but *not* the backslash after that
-           * (so "use\foo" will become "\foo") and then prepend the new
-           * namespace. *)
-          let len = (String.length id) - bslash_loc in
-          use ^ (String.sub id bslash_loc len)
-        end
-    end in
-  let translated = renamespace_if_aliased
-      (ParserOptions.auto_namespace_map nsenv.ns_popt) fully_qualified in
-  p, translated
+let elaborate_id_impl ~autoimport nsenv kind id =
+  if id <> "" && id.[0] = '\\' then
+    false, id (* The name is already fully-qualified. *)
+  else
 
-let elaborate_id = elaborate_id_impl ~autoimport:true
-(* When a name that clashes with an auto-imported name is first being
- * defined (in its own namespace), it's impressively incorrect to
- * teleport it's definition into the global namespace *)
-let elaborate_id_no_autos = elaborate_id_impl ~autoimport:false
+  let global_id = Utils.add_ns id in
+  if kind = ElaborateConst && SN.PseudoConsts.is_pseudo_const global_id then
+    false, global_id (* Pseudo-constants are always global. *)
+  else if kind = ElaborateFun && is_always_global_function global_id then
+    false, global_id
+  else
+
+  let bslash_loc, has_bslash =
+    match String.index id '\\' with
+    | Some i -> i, true
+    | None -> String.length id, false
+  in
+  let prefix = String.sub id 0 bslash_loc in
+  if prefix = "namespace" then
+    false, elaborate_into_current_ns nsenv (String_utils.lstrip id "namespace\\")
+  else
+
+  (* Expand "use" imports. "use function" and "use const" only apply if the id
+   * is completely unqualified, otherwise the normal "use" imports apply. *)
+  let uses = if has_bslash then nsenv.ns_ns_uses else
+    match kind with
+    | ElaborateClass -> nsenv.ns_class_uses
+    | ElaborateFun -> nsenv.ns_fun_uses
+    | ElaborateConst -> nsenv.ns_const_uses
+  in
+  match SMap.get prefix uses with
+  | Some use ->
+    true, use ^ (String_utils.lstrip id prefix)
+  | None ->
+    let fq_id =
+      let unaliased_id = aliased_to_fully_qualified_id
+        (ParserOptions.auto_namespace_map nsenv.ns_popt) id in
+      if unaliased_id <> id then
+        "\\" ^ unaliased_id
+      else if not autoimport then
+        elaborate_into_current_ns nsenv id
+      else
+        match get_autoimport_name_namespace id with
+        | false, _ ->
+          elaborate_into_current_ns nsenv id
+        | true, ns_name ->
+          if ParserOptions.enable_hh_syntax_for_hhvm nsenv.ns_popt
+            && (kind = ElaborateClass || kind = ElaborateConst)
+          then elaborate_into_ns ns_name id
+          else global_id
+    in
+    false, fq_id
+
+let elaborate_id ?(autoimport=true) nsenv kind (p, id) =
+  let _, newid = elaborate_id_impl ~autoimport nsenv kind id in
+  p, newid
 
 (* First pass of flattening namespaces, run super early in the pipeline, right
  * after parsing.
@@ -201,17 +285,22 @@ let elaborate_id_no_autos = elaborate_id_impl ~autoimport:false
  * allow us to fix those up during a second pass during naming.
  *)
 module ElaborateDefs = struct
-  let hint nsenv = function
+  let hint ~autoimport nsenv = function
     | p, Happly (id, args) ->
-        p, Happly (elaborate_id nsenv ElaborateClass id, args)
+        p, Happly (elaborate_id ~autoimport nsenv ElaborateClass id, args)
     | other -> other
 
-  let class_def nsenv = function
-    | ClassUse h -> ClassUse (hint nsenv h)
-    | XhpAttrUse h -> XhpAttrUse (hint nsenv h)
+  let class_def ~autoimport nsenv = function
+    | ClassUse h -> ClassUse (hint ~autoimport nsenv h)
+    | XhpAttrUse h -> XhpAttrUse (hint ~autoimport nsenv h)
     | other -> other
 
-  let rec def nsenv = function
+  let finish nsenv updated_nsenv stmt =
+    if updated_nsenv
+    then nsenv, [stmt; SetNamespaceEnv nsenv]
+    else nsenv, [stmt]
+
+  let rec def ~autoimport nsenv = function
     (*
       The default namespace in php is the global namespace specified by
       the empty string. In the case of an empty string, we model it as
@@ -221,11 +310,15 @@ module ElaborateDefs = struct
       SetNamespaceEnv nodes that contain the namespace environment
     *)
     | Namespace ((_, nsname), prog) -> begin
+        let parent_nsname =
+          Option.value_map nsenv.ns_name
+            ~default:""
+            ~f:(fun n -> n ^ "\\") in
         let nsname = match nsname with
           | "" -> None
-          | _ -> Some nsname in
+          | _ -> Some (parent_nsname ^ nsname) in
         let new_nsenv = {nsenv with ns_name = nsname} in
-        nsenv, SetNamespaceEnv new_nsenv :: program new_nsenv prog
+        nsenv, SetNamespaceEnv new_nsenv :: program ~autoimport new_nsenv prog
       end
     | NamespaceUse l -> begin
         let nsenv =
@@ -255,47 +348,66 @@ module ElaborateDefs = struct
           end in
         nsenv, [SetNamespaceEnv nsenv]
       end
-    | Class c -> nsenv, [Class {c with
-        c_name = elaborate_id_no_autos nsenv ElaborateClass c.c_name;
-        c_extends = List.map c.c_extends (hint nsenv);
-        c_implements = List.map c.c_implements (hint nsenv);
-        c_body = List.map c.c_body (class_def nsenv);
+    | Class c ->
+      let name, nsenv, updated_nsenv =
+        elaborate_defined_id nsenv ElaborateClass c.c_name in
+      finish nsenv updated_nsenv (Class {c with
+        c_name = name;
+        c_extends = List.map c.c_extends (hint ~autoimport nsenv);
+        c_implements = List.map c.c_implements (hint ~autoimport nsenv);
+        c_body = List.map c.c_body (class_def ~autoimport nsenv);
         c_namespace = nsenv;
-      }]
-    | Fun f -> nsenv, [Fun {f with
-        f_name = elaborate_id_no_autos nsenv ElaborateFun f.f_name;
+      })
+    | Fun f ->
+      let name, nsenv, updated_nsenv =
+        elaborate_defined_id nsenv ElaborateFun f.f_name in
+      finish nsenv updated_nsenv (Fun {f with
+        f_name = name;
         f_namespace = nsenv;
-      }]
-    | Typedef t -> nsenv, [Typedef {t with
-        t_id = elaborate_id_no_autos nsenv ElaborateClass t.t_id;
+      })
+    | Typedef t ->
+      let name, nsenv, updated_nsenv =
+        elaborate_defined_id nsenv ElaborateClass t.t_id in
+      finish nsenv updated_nsenv (Typedef {t with
+        t_id = name;
         t_namespace = nsenv;
-      }]
+      })
     | Constant cst -> nsenv, [Constant {cst with
         cst_name =
-          if cst.cst_kind = Ast.Cst_define
-          then
-            (* names in define are interpreted as-is:
-            prefix it with "\\" to mark it as elaborated. This prefix will be
-            stripped during emit phase.
-            In program this name of the constant can be accessed either
-            via identifier name or through 'constant' PHP function.
-            In the former case in Naming phase reference will be mangled in
-            the same way so name will be successfully resolved.*)
-            let (pos, n) = cst.cst_name in
-            pos, "\\" ^ n
-          else elaborate_id_no_autos nsenv ElaborateConst cst.cst_name;
+          (let name, _, _ =
+            elaborate_defined_id nsenv ElaborateConst cst.cst_name
+          in name);
         cst_namespace = nsenv;
       }]
+    | FileAttributes fa ->
+      finish nsenv false (FileAttributes {fa with
+        fa_namespace = nsenv;
+      })
     | other -> nsenv, [other]
 
-  and program nsenv p =
-    let _, acc =
+  and attach_file_attributes p =
+    let file_attributes =
+      List.filter_map p ~f:begin function
+      | FileAttributes fa -> Some fa
+      | _ -> None
+    end in
+    List.map p ~f:begin function
+      | Class c -> Class { c with c_file_attributes = file_attributes }
+      | Fun f -> Fun { f with f_file_attributes = file_attributes }
+      | x -> x
+    end
+
+  and program ~autoimport nsenv p =
+    let _, p =
       List.fold_left p ~init:(nsenv, []) ~f:begin fun (nsenv, acc) item ->
-        let nsenv, item = def nsenv item in
+        let nsenv, item = def ~autoimport nsenv item in
         nsenv, item :: acc
       end in
-    List.concat (List.rev acc)
+    p |> List.rev |> List.concat |> attach_file_attributes
 end
 
-let elaborate_defs popt ast =
-  ElaborateDefs.program (Namespace_env.empty popt) ast
+let elaborate_toplevel_defs ~autoimport popt ast  =
+  ElaborateDefs.program ~autoimport (Namespace_env.empty popt) ast
+
+let elaborate_def nsenv def =
+  ElaborateDefs.def ~autoimport:true nsenv def

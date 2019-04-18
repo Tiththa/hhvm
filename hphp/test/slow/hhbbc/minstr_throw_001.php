@@ -1,11 +1,12 @@
 <?php
 
-function err() {
-  static $x = 0;
-  if (++$x == 2) throw new Exception('asd');
+abstract final class ErrStatics {
+  public static $x = 0;
 }
 
-set_error_handler('err');
+function err() {
+  if (++ErrStatics::$x == 2) throw new Exception('asd');
+}
 
 function main() {
   $x = null;
@@ -20,5 +21,11 @@ function main() {
   }
 }
 
-main();
 
+
+<<__EntryPoint>>
+function main_minstr_throw_001() {
+set_error_handler('err');
+
+main();
+}

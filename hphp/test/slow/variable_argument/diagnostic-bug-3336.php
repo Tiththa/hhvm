@@ -8,14 +8,12 @@ function foo( $a, $b, $c = null, $d = null ) {
 function bar($a, $b = null, $c, $d = null) {
   echo "$a\n";
 }
-foo();
-foo('does');
-foo('this', 'not');
+
+<<__EntryPoint>>
+function main_diagnostic_bug_3336() {
 foo('really', 'works', 'not');
 foo('work', 'this', 'works', 'not');
 
-bar();
-bar('does');
-bar('this', 'not');
 bar('really', 'works', 'not');
 bar('work', 'this', 'works', 'not');
+}

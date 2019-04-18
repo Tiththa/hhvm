@@ -3,9 +3,12 @@
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
   Int 1
   RetC
 }
@@ -17,11 +20,13 @@
           NewKeysetArray 3
           SetL $ks
           PopC
-          FPushFuncD 1 "var_dump"
+          NullUninit
+          NullUninit
+          NullUninit
           NewLikeArrayL $ks 3
-          FPassC 0
-          FCall 1
-          PopR
+          FPushFuncD 1 "var_dump"
+          FCall <> 1 1 "" - "" ""
+          PopC
           True
           RetC
 }

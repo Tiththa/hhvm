@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_scalar_none() {
 require 'fix_exceptions.inc';
 
 $functions = [
@@ -16,9 +19,10 @@ $functions = [
 foreach ($functions as $type => $function) {
     echo "Testing $type:", PHP_EOL;
     try {
-        var_dump($function());
+        var_dump($function(null));
     } catch (TypeError $e) {
         echo "*** Caught " . $e->getMessage() . PHP_EOL;
     }
 }
 echo PHP_EOL . "Done";
+}

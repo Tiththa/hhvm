@@ -30,6 +30,8 @@
 #include "hphp/runtime/vm/jit/srcdb.h"
 #include "hphp/runtime/vm/jit/vasm-gen.h"
 
+#include "hphp/runtime/base/rds-local.h"
+
 #include "hphp/util/arch.h"
 #include "hphp/util/asm-x64.h"
 #include "hphp/util/match.h"
@@ -95,7 +97,7 @@ struct FuncInfo {
 
   std::vector<TransLoc> prologues;
   std::vector<SrcRec*>  srcRecs;
-  std::unordered_set<TCA> callers;
+  jit::fast_set<TCA> callers;
 };
 
 struct SmashedCall {
@@ -106,18 +108,18 @@ struct SmashedCall {
 
 std::mutex s_dataLock;
 
-std::unordered_map<
+jit::fast_map<
   TCA /* toSmash */,
   SmashedCall /* target */
 > s_smashedCalls;
 
-std::unordered_map<
+jit::fast_map<
   TCA /* toSmash */,
   SrcRec* /* dest */
 > s_smashedBranches;
 
 // Keyed on FuncId as these are never reused
-std::unordered_map<FuncId, FuncInfo> s_funcTCData;
+jit::fast_map<FuncId, FuncInfo> s_funcTCData;
 
 struct FuncJob {
   const StringData* fname;
@@ -238,6 +240,7 @@ void clearTCMaps(TCA start, TCA end) {
       }
     }
     eraseCatchTrace(start);
+    eraseInlineStack(start);
     if (isCall) {
       if (auto call = eraseSmashedCall(start)) {
         clearProfCaller(start, call->isGuard, call->rec);
@@ -288,7 +291,7 @@ void clearRange(TCA start, size_t len, const char* info) {
   cb.init(start, len, info);
 
   CGMeta fixups;
-  SCOPE_EXIT { assert(fixups.empty()); };
+  SCOPE_EXIT { assertx(fixups.empty()); };
 
   DataBlock db;
   Vauto vasm { cb, cb, db, fixups };
@@ -485,6 +488,8 @@ void recycleInit() {
 
   s_running.store(true, std::memory_order_release);
   s_reaper = std::thread([] {
+    rds::local::init();
+    SCOPE_EXIT { rds::local::fini(); };
     while (auto j = dequeueJob()) {
       ProfData::Session pds;
       match<void>(

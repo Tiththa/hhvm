@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 print "\"Hello\" . \" world!\" --> "; print "Hello" . " world!"; print "\n";
 print "\n";
@@ -49,6 +49,27 @@ print "1 / 0.0 --> "; print 1 / 0.0;
 print "1.0 / 0.0 --> "; print 1.0 / 0.0;
 print "\n";
 
+for ($i = -10; $i <= 10; $i++) {
+  print $i." % 4 --> ";
+  print $i % 4;
+  print "\n";
+}
+
+for ($i = -10; $i <= 10; $i++) {
+  print $i." % -4 --> ";
+  print $i % -4;
+  print "\n";
+}
+
+print "7 % 3 --> "; print 7 % 3; print "\n";
+print "-7 % 3 --> "; print -7 % 3; print "\n";
+print "7 % -3 --> "; print 7 % -3; print "\n";
+print "-7 % -3 --> "; print -7 % -3; print "\n";
+print "7 % -1 --> "; print 7 % -1; print "\n";
+print "7 % 1 --> "; print 7 % 1; print "\n";
+print "2147483647 % 2147483647 --> "; print 2147483647 % 2147483647; print "\n";
+print "123 % 2147483647 --> "; print 123 % 2147483647; print "\n";
+print "10 % -2147483648 --> "; print 10 % -2147483648; print "\n";
 print "2 % 2 --> "; print 2 % 2; print "\n";
 print "2.5 % 5 --> "; print 2.5 % 5; print "\n";
 print "5 % 2.0 --> "; print 5 % 2.0; print "\n";

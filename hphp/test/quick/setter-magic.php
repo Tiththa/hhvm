@@ -1,4 +1,8 @@
-<?php
+<?hh
+
+abstract final class SetterMagic {
+  public static $heh;
+}
 
 error_reporting(-1);
 
@@ -12,13 +16,12 @@ class Heh {
 }
 
 function test() {
-  global $heh;
   // Note: this is different from zend right now.  Zend drops this set
   // without a notice or fatal.  We are raising a fatal since we can't
   // access the protected property.
-  $heh->prop = 3;
+  SetterMagic::$heh->prop = 3;
 }
 
-$heh = new Heh;
-$heh->prop = 2;
-var_dump($heh);
+SetterMagic::$heh = new Heh;
+SetterMagic::$heh->prop = 2;
+var_dump(SetterMagic::$heh);

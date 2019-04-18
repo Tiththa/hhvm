@@ -6,8 +6,10 @@ NULL
 
 Notice: Undefined index: noidx in %s/test/slow/array_cse/533.php on line 5
 string(1) "a"
-HIstring(1) "a"
-HINULL
+HI
+string(1) "a"
+HI
+NULL
 int(0)
 
 Notice: Undefined index: noidx in %s/test/slow/array_cse/533.php on line 8
@@ -15,5 +17,6 @@ NULL
 
 Notice: Undefined index: noidx in %s/test/slow/array_cse/533.php on line 9
 string(1) "a"
-HIstring(1) "a"
+HI
+string(1) "a"
 HI

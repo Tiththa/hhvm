@@ -7,7 +7,7 @@ function run () {
 		echo "$x\n";
 	};
 
-	$lambda2 = function () use (&$x) {
+	$lambda2 = function () use ($x) {
 		echo "$x\n";
 		$x++;
 	};
@@ -23,4 +23,3 @@ $lambda1();
 $lambda2();
 
 echo "Done\n";
-?>

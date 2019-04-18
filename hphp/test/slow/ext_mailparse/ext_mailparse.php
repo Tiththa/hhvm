@@ -7,8 +7,11 @@ function VS($x, $y) {
 }
 function VERIFY($x) { VS($x != false, true); }
 
+
 //////////////////////////////////////////////////////////////////////
 
+<<__EntryPoint>>
+function main_ext_mailparse() {
 VS(ezmlm_hash("foo"), 40);
 
 $files = array("mime", "phpcvs1", "qp", "uue");
@@ -43,7 +46,7 @@ foreach ($files as $file) {
 
     $data = mailparse_msg_get_part_data($subpart);
     echo "\n"; echo $indent; echo "Part "; echo $partname; echo "\n";
-    ksort($data);
+    ksort(&$data);
     foreach ($data as $key => $second) {
       if ($key != "headers" && $key != "ending-pos-body") {
         echo $indent; echo $key; echo " => ";
@@ -306,3 +309,4 @@ VS($output,
    "\n".
    "UUE\n".
    "this is a test\n");
+}

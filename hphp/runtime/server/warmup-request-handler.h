@@ -53,11 +53,9 @@ struct WarmupRequestHandlerFactory
   : std::enable_shared_from_this<WarmupRequestHandlerFactory>
 {
   WarmupRequestHandlerFactory(Server *server,
-                              uint32_t additionalThreads,
                               uint32_t reqCount,
                               int timeout)
-    : m_additionalThreads(additionalThreads),
-      m_reqNumber(0),
+    : m_reqNumber(0),
       m_warmupReqThreshold(reqCount),
       m_timeout(timeout),
       m_server(server) {}
@@ -67,13 +65,24 @@ struct WarmupRequestHandlerFactory
   void bumpReqCount();
 
 private:
-  std::atomic<uint32_t> m_additionalThreads;
   std::atomic<uint32_t> m_reqNumber;
   uint32_t const m_warmupReqThreshold;
   int m_timeout;
   // The server owns this object so will by definition outlive us
   Server *m_server;
 };
+
+// Play an internal warmup request.
+struct InternalWarmupWorker {
+  InternalWarmupWorker(const std::string& file, unsigned index)
+    : m_hdfFile(file)
+    , m_index(index) {}
+  void run();
+ private:
+  const std::string m_hdfFile;
+  const unsigned m_index;
+};
+
 
 ///////////////////////////////////////////////////////////////////////////////
 }

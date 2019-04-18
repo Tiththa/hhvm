@@ -16,9 +16,9 @@
 #include "hphp/util/light-process.h"
 
 #include <string>
+#include <memory>
 #include <vector>
 
-#include <boost/scoped_array.hpp>
 #include <boost/thread/barrier.hpp>
 
 #include <folly/portability/SysMman.h>
@@ -117,6 +117,8 @@ int popen_impl(const char* cmd, const char* mode, pid_t* out_pid) {
   if (pid == 0) {
     // child
     mprotect_1g_pages(PROT_READ);
+    // If anything goes wrong, let the OOM killer kill this child process.
+    Process::OOMScoreAdj(1000);
     // replace stdin or stdout with the appropriate end
     // of the pipe
     if (p[child_pipe] == child_pipe) {
@@ -311,6 +313,7 @@ pid_t do_proc_open_helper(int afdt_fd) {
   pid_t child = fork();
   if (child == 0) {
     mprotect_1g_pages(PROT_READ);
+    Process::OOMScoreAdj(1000);
     for (int i = 0; i < pvals.size(); i++) {
       dup2(pkeys[i], pvals[i]);
     }
@@ -366,12 +369,13 @@ void do_waitpid(int afdt_fd) {
   }
 
   rusage ru;
+  int64_t time_us = 0;
   const auto ret = ::wait4(pid, &stat, options, &ru);
   alarm(0); // cancel the previous alarm if not triggered yet
   waited = 0;
-  const auto time_us = ru2microseconds(ru);
   int64_t events[] = { 0, 0, 0 };
   if (ret > 0 && s_trackProcessTimes) {
+    time_us = ru2microseconds(ru);
     auto it = s_pidToHCWMap.find(ret);
     if (it == s_pidToHCWMap.end()) {
       throw Exception("pid not in map: %s",
@@ -409,7 +413,7 @@ void do_change_user(int afdt_fd) {
 ///////////////////////////////////////////////////////////////////////////////
 // light-weight process
 
-boost::scoped_array<LightProcess> g_procs;
+std::unique_ptr<LightProcess[]> g_procs;
 int g_procsCount = 0;
 bool s_handlerInited = false;
 LightProcess::LostChildHandler s_lostChildHandler;
@@ -534,7 +538,9 @@ bool LightProcess::initShadow(int afdt_lid,
     g_procsCount = 0;
     close_fds(inherited_fds);
     ::close(afdt_lid);
-
+    // Tell the OOM killer never to kill a light process.  Killing it will cause
+    // the entire server to exit, and won't free much memory anyway.
+    Process::OOMScoreAdj(-1000);
     runShadow(afdt_fd);
   } else if (child < 0) {
     // failed
@@ -638,7 +644,7 @@ R runLight(const char* call, F1 body, R failureResult) {
 }
 
 void LightProcess::Close() {
-  boost::scoped_array<LightProcess> procs;
+  std::unique_ptr<LightProcess[]> procs;
   procs.swap(g_procs);
   int count = g_procsCount;
   g_procs.reset();
@@ -658,7 +664,14 @@ void LightProcess::closeShadow() {
       handleException("closeShadow");
     }
     // removes the "zombie" process, so not to interfere with later waits
-    ::waitpid(m_shadowProcess, nullptr, 0);
+    while (true) {
+      auto r = ::waitpid(m_shadowProcess, nullptr, 0);
+      // retry on EINTR
+      if (r != -1 || errno != EINTR) {
+        break;
+      }
+    }
+
     m_shadowProcess = 0;
   }
   closeFiles();
@@ -688,7 +701,7 @@ FILE *LightProcess::popen(const char *cmd, const char *type,
       return f;
     }
     if (tl_proc) {
-      Logger::Warning("Light-weight fork failed in remote CLI mode.");
+      Logger::Verbose("Light-weight fork failed in remote CLI mode.");
       return nullptr;
     }
     Logger::Verbose("Light-weight fork failed; use the heavy one instead.");
@@ -829,8 +842,8 @@ pid_t LightProcess::waitpid(pid_t pid, int *stat_loc, int options,
     // light process is not really there
     rusage ru;
     const auto ret = wait4(pid, stat_loc, options, &ru);
-    if (s_trackProcessTimes) {
-      s_extra_request_microseconds += ru2microseconds(ru);
+    if (ret > 0 && s_trackProcessTimes) {
+      s_extra_request_nanoseconds += ru2microseconds(ru) * 1000;
     }
     return ret;
   }
@@ -849,7 +862,7 @@ pid_t LightProcess::waitpid(pid_t pid, int *stat_loc, int options,
       if (ret < 0) {
         errno = err;
       } else if (s_trackProcessTimes) {
-        s_extra_request_microseconds += time_us;
+        s_extra_request_nanoseconds += time_us * 1000;
         HardwareCounter::IncInstructionCount(events[0]);
         HardwareCounter::IncLoadCount(events[1]);
         HardwareCounter::IncStoreCount(events[2]);
@@ -862,8 +875,8 @@ pid_t LightProcess::waitpid(pid_t pid, int *stat_loc, int options,
 pid_t LightProcess::pcntl_waitpid(pid_t pid, int *stat_loc, int options) {
   rusage ru;
   const auto ret = wait4(pid, stat_loc, options, &ru);
-  if (s_trackProcessTimes) {
-    s_extra_request_microseconds += ru2microseconds(ru);
+  if (ret > 0 && s_trackProcessTimes) {
+    s_extra_request_nanoseconds += ru2microseconds(ru) * 1000;
   }
   return ret;
 }
@@ -935,6 +948,14 @@ int LightProcess::createDelegate() {
     }
 
     close(pair[0]);
+#ifdef __APPLE__
+    {
+      int newfd = dup2(pair[1], 0);
+      always_assert(newfd == 0);
+    }
+    close(pair[1]);
+    pair[1] = 0;
+#endif
     runShadow(pair[1]);
   }
 

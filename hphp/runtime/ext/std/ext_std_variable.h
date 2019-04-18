@@ -35,14 +35,10 @@ bool HHVM_FUNCTION(is_array, const Variant& v);
 bool HHVM_FUNCTION(HH_is_vec, const Variant& v);
 bool HHVM_FUNCTION(is_object, const Variant& v);
 bool HHVM_FUNCTION(is_resource, const Variant& v);
+bool HHVM_FUNCTION(HH_is_meth_caller, TypedValue v);
 
 String HHVM_FUNCTION(gettype, const Variant& v);
 String HHVM_FUNCTION(get_resource_type, const Resource& handle);
-
-///////////////////////////////////////////////////////////////////////////////
-// type conversion
-
-bool HHVM_FUNCTION(settype, VRefParam var, const String& type);
 
 ///////////////////////////////////////////////////////////////////////////////
 // input/output
@@ -53,20 +49,7 @@ void HHVM_FUNCTION(var_dump,
                    const Variant& v, const Array& _argv = null_array);
 void HHVM_FUNCTION(debug_zval_dump, const Variant& variable);
 String HHVM_FUNCTION(serialize, const Variant& value);
-Variant HHVM_FUNCTION(unserialize, const String& str,
-                      const Array& options = empty_array_ref);
-
-///////////////////////////////////////////////////////////////////////////////
-// variable table
-
-int64_t constexpr EXTR_OVERWRITE        = 0;
-int64_t constexpr EXTR_SKIP             = 1;
-int64_t constexpr EXTR_PREFIX_SAME      = 2;
-int64_t constexpr EXTR_PREFIX_ALL       = 3;
-int64_t constexpr EXTR_PREFIX_INVALID   = 4;
-int64_t constexpr EXTR_PREFIX_IF_EXISTS = 5;
-int64_t constexpr EXTR_IF_EXISTS        = 6;
-int64_t constexpr EXTR_REFS             = 0x100;
+Variant HHVM_FUNCTION(unserialize, const String& str, const Array& options);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

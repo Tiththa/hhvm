@@ -2,9 +2,8 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -13,17 +12,29 @@
 (* Pretty printing of types *)
 (*****************************************************************************)
 
-val error: 'a Typing_defs.ty_ -> string
+val error: Typing_env.env -> Typing_defs.locl Typing_defs.ty -> string
 val suggest: 'a Typing_defs.ty -> string
 val full: Typing_env.env -> 'a Typing_defs.ty -> string
 val full_rec: Typing_env.env -> int -> 'a Typing_defs.ty -> string
 val full_strip_ns: Typing_env.env -> 'a Typing_defs.ty -> string
+
+(** Pretty print a type and all of its associated declaration information. *)
+val full_with_identity:
+  Typing_env.env ->
+  'a Typing_defs.ty ->
+  'b SymbolOccurrence.t ->
+  'b SymbolDefinition.t option ->
+  string
 val debug: Typing_env.env -> 'a Typing_defs.ty -> string
-val debug_with_tvars: Typing_env.env -> 'a Typing_defs.ty -> string
-val class_: TypecheckerOptions.t -> Typing_defs.class_type -> string
+val with_blank_tyvars: (unit -> 'a) -> 'a
+val class_: TypecheckerOptions.t -> Typing_classes_heap.t -> string
 val gconst: TypecheckerOptions.t -> Decl_heap.GConst.t -> string
 val fun_: TypecheckerOptions.t -> Decl_heap.Fun.t -> string
 val typedef: TypecheckerOptions.t -> Decl_heap.Typedef.t -> string
+val constraints_for_type: Typing_env.env -> 'a Typing_defs.ty -> string option
+val class_kind: Ast_defs.class_kind -> bool -> string
+val subtype_prop:
+  ?do_normalize:bool -> Typing_env.env -> Typing_logic.subtype_prop -> string
 
 (* Convert a type to a structured JSON value, as follows:
  * <prim> ::= "int" | "bool" | "float" | "string" | "num" | "arraykey"
@@ -71,3 +82,11 @@ val typedef: TypecheckerOptions.t -> Decl_heap.Typedef.t -> string
  *         { "kind":"expr" }
  *)
 val to_json: Typing_env.env -> 'a Typing_defs.ty -> Hh_json.json
+
+(* Attempt to deserialize a previously-serialized type back into a type we can
+manipulate. Note that this function accesses the global state in
+`Typing_lazy_heap` to verify that certain type names exist. *)
+val json_to_locl_ty:
+  ?keytrace: Hh_json.Access.keytrace
+  -> Hh_json.json
+  -> (Typing_defs.locl Typing_defs.ty, Typing_defs.deserialization_error) result

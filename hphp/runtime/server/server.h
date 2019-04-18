@@ -212,7 +212,7 @@ public:
   /**
    * Add additional worker threads
    */
-  virtual void addWorkers(int numWorkers) = 0;
+  virtual void saturateWorkers() = 0;
 
   /**
    * Informational.
@@ -255,6 +255,11 @@ public:
    * At background, it will eventually make the thread calling start() quit.
    */
   virtual void stop() = 0;
+
+  /**
+   * How many threads can be available for handling requests.
+   */
+  virtual size_t getMaxThreadCount() = 0;
 
   /**
    * How many threads are actively working on handling requests.
@@ -312,17 +317,14 @@ struct ServerOptions {
   ServerOptions(const std::string &address,
                 uint16_t port,
                 int maxThreads,
-                int initThreads = -1)
+                int initThreads = -1,
+                int maxQueue = -1)
     : m_address(address),
       m_port(port),
       m_maxThreads(maxThreads),
       m_initThreads(initThreads),
-      m_serverFD(-1),
-      m_sslFD(-1),
-      m_takeoverFilename(),
-      m_useFileSocket(false),
-      m_queueToWorkerRatio(1) {
-    assert(m_maxThreads >= 0);
+      m_maxQueue(maxQueue == -1 ? maxThreads : maxQueue) {
+    assertx(m_maxThreads >= 0);
     if (m_initThreads < 0 || m_initThreads > m_maxThreads) {
       m_initThreads = m_maxThreads;
     }
@@ -332,11 +334,15 @@ struct ServerOptions {
   uint16_t m_port;
   int m_maxThreads;
   int m_initThreads;
-  int m_serverFD;
-  int m_sslFD;
+  int m_maxQueue;
+  int m_serverFD{-1};
+  int m_sslFD{-1};
   std::string m_takeoverFilename;
-  bool m_useFileSocket;
-  int m_queueToWorkerRatio;
+  bool m_useFileSocket{false};
+  int m_hugeThreads{0};
+  unsigned m_hugeStackKb{0};
+  unsigned m_extraKb{0};
+  uint32_t m_loop_sample_rate{0};
 };
 
 /**

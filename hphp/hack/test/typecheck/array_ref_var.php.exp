@@ -1,1 +1,2 @@
-No errors
+File "array_ref_var.php", line 13, characters 14-17:
+Collection element cannot be marked as reference (Parsing[1002])

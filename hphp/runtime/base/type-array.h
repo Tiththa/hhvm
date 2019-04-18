@@ -18,7 +18,10 @@
 #define incl_HPHP_ARRAY_H_
 
 #include "hphp/runtime/base/array-data.h"
+#include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/req-ptr.h"
+#include "hphp/runtime/base/tv-type.h"
+#include "hphp/runtime/base/tv-val.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/types.h"
 
@@ -27,6 +30,10 @@
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+// Forward declare to avoid including tv-conversions.h and creating a cycle.
+template <IntishCast IC = IntishCast::None>
+ArrayData* tvCastToArrayLikeData(TypedValue tv);
 
 struct ArrayIter;
 struct VariableUnserializer;
@@ -68,14 +75,19 @@ private:
 
 public:
   /*
-   * Create an empty array or an array with one element.
-   *
-   * Note these are different than the copy (or copy-like) constructors that
-   * also take one value.
+   * Create an empty array.
    */
   static Array Create() {
     return Array(ArrayData::Create(), NoIncRef{});
   }
+
+  /*
+   * There are existing callsites that we intentionally want to create a
+   * "traditional" PHP array with no specialization. Array::CreatePHPArray()
+   * are calls that have been audited and determined that the callsite should
+   * never be converted.
+   */
+  static constexpr auto CreatePHPArray = &Create;
 
   static Array CreateVec() {
     return Array(ArrayData::CreateVec(), NoIncRef{});
@@ -85,15 +97,21 @@ public:
     return Array(ArrayData::CreateDict(), NoIncRef{});
   }
 
+  static Array CreateShape() {
+    return Array(ArrayData::CreateShape(), NoIncRef{});
+  }
+
   static Array CreateKeyset() {
     return Array(ArrayData::CreateKeyset(), NoIncRef{});
   }
 
-  static Array Create(const Variant& value) {
-    return Array(ArrayData::Create(value), NoIncRef{});
+  static Array CreateVArray() {
+    return Array(ArrayData::CreateVArray(), NoIncRef{});
   }
 
-  static Array Create(const Variant& key, const Variant& value);
+  static Array CreateDArray() {
+    return Array(ArrayData::CreateDArray(), NoIncRef{});
+  }
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -186,9 +204,14 @@ public:
   Array copy() const { COPY_BODY(copy(), Array{}) }
   Array toVec() const { COPY_BODY(toVec(true), CreateVec()) }
   Array toDict() const { COPY_BODY(toDict(true), CreateDict()) }
+  Array toShape() const { COPY_BODY(toShape(true), CreateShape()) }
   Array toKeyset() const { COPY_BODY(toKeyset(true), CreateKeyset()) }
   Array toPHPArray() const { COPY_BODY(toPHPArray(true), Array{}) }
-  Array toVArray() const { COPY_BODY(toVArray(true), Array{}) }
+  Array toPHPArrayIntishCast() const {
+    COPY_BODY(toPHPArrayIntishCast(true), Array{})
+  }
+  Array toVArray() const { COPY_BODY(toVArray(true), CreateVArray()) }
+  Array toDArray() const { COPY_BODY(toDArray(true), CreateDArray()) }
 
   #undef COPY_BODY
 
@@ -211,10 +234,17 @@ public:
    */
   bool isVecArray() const { return m_arr && m_arr->isVecArray(); }
   bool isDict() const { return m_arr && m_arr->isDict(); }
+  bool isShape() const { return m_arr && m_arr->isShape(); }
   bool isKeyset() const { return m_arr && m_arr->isKeyset(); }
   bool isHackArray() const { return m_arr && m_arr->isHackArray(); }
   bool isPHPArray() const { return !m_arr || m_arr->isPHPArray(); }
-  bool isVArray() const { return !m_arr || m_arr->isVArray(); }
+  bool isVArray() const { return m_arr && m_arr->isVArray(); }
+  bool isDArray() const { return m_arr && m_arr->isDArray(); }
+  bool isVecOrVArray() const { return m_arr && m_arr->isVecOrVArray(); }
+  bool isDictOrDArray() const { return m_arr && m_arr->isDictOrDArray(); }
+  bool isDictOrDArrayOrShape() const {
+    return m_arr && m_arr->isDictOrDArrayOrShape();
+  }
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -228,7 +258,9 @@ public:
   /*
    * Converts `k' to a valid key for this array kind.
    */
+  template <IntishCast IC = IntishCast::None>
   Cell convertKey(Cell k) const;
+  template <IntishCast IC = IntishCast::None>
   Cell convertKey(const Variant& k) const;
 
   /*
@@ -373,14 +405,10 @@ public:
    * Comparisons.
    */
   bool same(const Array& v2) const;
-  bool same(const Object& v2) const;
   bool equal(const Array& v2) const;
-  bool equal(const Object& v2) const;
   bool less(const Array& v2, bool flip = false) const;
-  bool less(const Object& v2) const;
   bool less(const Variant& v2) const;
   bool more(const Array& v2, bool flip = true) const;
-  bool more(const Object& v2) const;
   bool more(const Variant& v2) const;
   int compare(const Array& v2, bool flip = false) const;
 
@@ -406,20 +434,17 @@ public:
   Variant operator[](double key) const = delete;
   Variant operator[](const char*) const = delete;
 
-#define C(key_t, name, ret_t, var_ret_t, cns) \
+#define C(key_t, name, ret_t, cns) \
   ret_t name(key_t, Flags = Flags::None) cns;
-#define V(key_t, name, ret_t, var_ret_t, cns) \
-  var_ret_t name(key_t, Flags = Flags::None) cns;
+#define V C
 #define I V
-#define D(key_t, name, ret_t, var_ret_t, cns) \
-  var_ret_t name(key_t, Flags = Flags::None) cns = delete;
+#define D(key_t, name, ret_t, cns) \
+  ret_t name(key_t, Flags = Flags::None) cns = delete;
 
   /*
    * Get an rval to the element at `key'.
-   *
-   * TODO(#9077255): Return member_rval instead.
    */
-  FOR_EACH_KEY_TYPE(rvalAt, const Variant&, const Variant&, const)
+  FOR_EACH_KEY_TYPE(rvalAt, tv_rval, const)
 
   /*
    * Get an lval to the element at `key'.
@@ -428,8 +453,8 @@ public:
    * escalation.  As with those functions, the Ref versions should be used if
    * the lval will be boxed, and the non-Ref versions should be used otherwise.
    */
-  FOR_EACH_KEY_TYPE(lvalAt, member_lval, Variant&, )
-  FOR_EACH_KEY_TYPE(lvalAtRef, member_lval, Variant&, )
+  FOR_EACH_KEY_TYPE(lvalAt, arr_lval, )
+  FOR_EACH_KEY_TYPE(lvalAtRef, arr_lval, )
 
 #undef D
 #undef I
@@ -439,8 +464,8 @@ public:
   /*
    * Get an lval to a newly created element.
    */
-  Variant& lvalAt();
-  Variant& lvalAtRef();
+  arr_lval lvalAt();
+  arr_lval lvalAtRef();
 
   /////////////////////////////////////////////////////////////////////////////
   // Element access and mutation.
@@ -481,19 +506,6 @@ public:
    */
   FOR_EACH_KEY_TYPE(setWithRef, TypedValue)
 
-  /*
-   * Set an element to a reference to `v', boxing it if it's unboxed.
-   */
-  FOR_EACH_KEY_TYPE(setRef, Variant&)
-
-  /*
-   * Add an element.
-   *
-   * Like set(), but with the precondition that the key does not already exist
-   * in the array.
-   */
-  FOR_EACH_KEY_TYPE(add, TypedValue)
-
 #undef D
 #undef I
 #undef V
@@ -510,7 +522,6 @@ public:
    */
   FOR_EACH_KEY_TYPE(set, const Variant&)
   FOR_EACH_KEY_TYPE(setWithRef, const Variant&)
-  FOR_EACH_KEY_TYPE(add, const Variant&)
 
 #undef D
 #undef I
@@ -524,7 +535,6 @@ public:
   void append(const Variant& v);
   void appendWithRef(TypedValue v);
   void appendWithRef(const Variant& v);
-  void appendRef(Variant& v);
   void prepend(TypedValue v);
   void prepend(const Variant& v);
 
@@ -552,15 +562,14 @@ private:
                  PFUNC_CMP key_cmp_function, const void* key_data,
                  PFUNC_CMP value_cmp_function, const void* value_data) const;
 
-  template<typename T> const Variant& rvalAtImpl(const T& key, Flags) const;
-  template<typename T> member_lval lvalAtImpl(const T& key, Flags);
-  template<typename T> member_lval lvalAtRefImpl(const T& key, Flags);
+  template<typename T> tv_rval rvalAtImpl(const T& key, Flags) const;
+  template<typename T> arr_lval lvalAtImpl(const T& key, Flags);
+  template<typename T> arr_lval lvalAtRefImpl(const T& key, Flags);
 
   template<typename T> bool existsImpl(const T& key) const;
   template<typename T> void removeImpl(const T& key);
   template<typename T> void setImpl(const T& key, TypedValue v);
-  template<typename T> void setRefImpl(const T& key, Variant& v);
-  template<typename T> void addImpl(const T& key, TypedValue v);
+  template<typename T> void setWithRefImpl(const T& key, TypedValue v);
 
   static void compileTimeAssertions();
 
@@ -574,6 +583,7 @@ private:
 
 struct ArrNR {
   explicit ArrNR(ArrayData* data = nullptr) { m_px = data; }
+  explicit ArrNR(const ArrayData *ad) : m_px(const_cast<ArrayData*>(ad)) {}
 
   ArrNR(const ArrNR& a) { m_px = a.m_px; }
 
@@ -630,8 +640,54 @@ ALWAYS_INLINE Array empty_array() {
   return Array::attach(staticEmptyArray());
 }
 
+ALWAYS_INLINE Array empty_varray() {
+  return Array::attach(staticEmptyVArray());
+}
+
+ALWAYS_INLINE Array empty_darray() {
+  return Array::attach(staticEmptyDArray());
+}
+
 ALWAYS_INLINE Array empty_vec_array() {
   return Array::attach(staticEmptyVecArray());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Type-pun a referenced ArrayData* as an Array&.
+ *
+ * This lets us take advantage of Array's CoW and escalation machinery to
+ * possibly mutate `ad', without the overhead or behavioral change of
+ * refcounting.
+ *
+ * asArrRef() unconditionally removes Persistent bits from the referenced type.
+ */
+ALWAYS_INLINE Array& asArrRef(tv_lval tv) {
+  assertx(tvIsArrayLike(tv));
+  tv.type() = tv.val().parr->toDataType();
+  return *reinterpret_cast<Array*>(&val(tv).parr);
+}
+
+ALWAYS_INLINE Array& toArrRef(tv_lval tv) {
+  return asArrRef(isRefType(type(tv)) ? val(tv).pref->cell() : tv);
+}
+
+ALWAYS_INLINE const Array& asCArrRef(tv_rval tv) {
+  assertx(tvIsArrayLike(tv));
+  return *reinterpret_cast<const Array*>(&val(tv).parr);
+}
+
+ALWAYS_INLINE const Array& toCArrRef(tv_rval tv) {
+  return asCArrRef(tvIsRef(tv) ? val(tv).pref->cell() : tv);
+}
+
+template <IntishCast IC = IntishCast::None>
+ALWAYS_INLINE Array toArray(tv_rval rval) {
+  if (isArrayLikeType(type(rval))) {
+    return Array{assert_not_null(val(rval).parr)};
+  }
+  return Array::attach(tvCastToArrayLikeData<IC>(*rval));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

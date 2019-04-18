@@ -191,11 +191,11 @@ bool HHVM_FUNCTION(msg_set_queue,
     value = data[s_msg_perm_uid];
     if (!value.isNull()) stat.msg_perm.uid = value.toInt64();
     value = data[s_msg_perm_gid];
-    if (!value.isNull()) stat.msg_perm.uid = value.toInt64();
+    if (!value.isNull()) stat.msg_perm.gid = value.toInt64();
     value = data[s_msg_perm_mode];
-    if (!value.isNull()) stat.msg_perm.uid = value.toInt64();
+    if (!value.isNull()) stat.msg_perm.mode = value.toInt64();
     value = data[s_msg_qbytes];
-    if (!value.isNull()) stat.msg_perm.uid = value.toInt64();
+    if (!value.isNull()) stat.msg_qbytes = value.toInt64();
 
     return msgctl(q->id, IPC_SET, &stat) == 0;
   }
@@ -392,7 +392,7 @@ struct Semaphore : SweepableResourceData {
     return true;
   }
 
-  ~Semaphore() {
+  ~Semaphore() override {
     /*
      * if count == -1, semaphore has been removed
      * Need better way to handle this
@@ -769,7 +769,11 @@ Variant HHVM_FUNCTION(shm_get_var,
 
   sysvshm_chunk *shm_var =
     (sysvshm_chunk*)((char *)shm_list_ptr->ptr + shm_varpos);
-  return unserialize_from_buffer(&shm_var->mem, shm_var->length);
+  return unserialize_from_buffer(
+    &shm_var->mem,
+    shm_var->length,
+    VariableUnserializer::Type::Serialize
+  );
 }
 
 bool HHVM_FUNCTION(shm_has_var,

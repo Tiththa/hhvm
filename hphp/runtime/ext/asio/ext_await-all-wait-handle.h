@@ -39,7 +39,7 @@ struct c_AwaitAllWaitHandle final : c_WaitableWaitHandle {
     auto wh = wait_handle<c_AwaitAllWaitHandle>(obj);
     auto const sz = wh->heapSize();
     wh->~c_AwaitAllWaitHandle();
-    MM().objFree(obj, sz);
+    tl_heap->objFree(obj, sz);
   }
 
   explicit c_AwaitAllWaitHandle(unsigned cap = 0)
@@ -56,6 +56,9 @@ struct c_AwaitAllWaitHandle final : c_WaitableWaitHandle {
       decRefObj(m_children[i].m_child);
     }
   }
+
+  static ObjectData* fromFrameNoCheck(uint32_t total, uint32_t cnt,
+                                      TypedValue* stk);
 
  public:
   struct Node final {
@@ -102,12 +105,8 @@ struct c_AwaitAllWaitHandle final : c_WaitableWaitHandle {
   void scan(type_scan::Scanner&) const;
 
  private:
-  template<typename T, typename F1, typename F2>
-  static Object createAAWH(T start, T stop, F1 iterNext, F2 getCell);
-  static Object FromPackedArray(const ArrayData* dependencies);
-  static Object FromMixedArray(const MixedArray* dependencies);
-  static Object FromMap(const BaseMap* dependencies);
-  static Object FromVector(const BaseVector* dependencies);
+  template<bool convert, typename Iter>
+  static Object Create(Iter iter);
   static req::ptr<c_AwaitAllWaitHandle> Alloc(int32_t cnt);
   void initialize(context_idx_t ctx_idx);
   void markAsFinished(void);
@@ -147,8 +146,8 @@ Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromMap,
 Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromVector,
                           const Variant& dependencies);
 
-inline c_AwaitAllWaitHandle* c_WaitHandle::asAwaitAll() {
-  assert(getKind() == Kind::AwaitAll);
+inline c_AwaitAllWaitHandle* c_Awaitable::asAwaitAll() {
+  assertx(getKind() == Kind::AwaitAll);
   return static_cast<c_AwaitAllWaitHandle*>(this);
 }
 

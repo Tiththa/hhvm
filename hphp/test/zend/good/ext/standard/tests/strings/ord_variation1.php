@@ -68,11 +68,10 @@ $inputs =  array (
 $count = 1;
 foreach($inputs as $input) {
   echo "-- Iteration $count --\n";
-  var_dump( ord($input) );
+  try { var_dump( ord($input) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $count ++;
 }
 
 fclose($file_handle);  //closing the file handle
 
-?>
-===DONE===
+echo "===DONE===\n";

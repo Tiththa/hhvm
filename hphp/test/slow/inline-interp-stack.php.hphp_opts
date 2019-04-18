@@ -1,0 +1,2 @@
+-vHackArrCompatNotices=1 -vHackArrCompatCheckArrayKeyCast=1 -vJitEnableRenameFunction=0
+-vEval.EnablePHP=1

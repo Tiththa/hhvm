@@ -1,15 +1,16 @@
 <?php
 /* Prototype  : string file_get_contents(string filename [, bool use_include_path [, resource context [, long offset [, long maxlen]]]])
- * Description: Read the entire file into a string 
+ * Description: Read the entire file into a string
  * Source code: ext/standard/file.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
 echo "*** Testing file_get_contents() : variation ***\n";
-$filename = dirname(__FILE__).'/fileGetContentsVar9.tmp';
-$softlink = dirname(__FILE__).'/fileGetContentsVar9.SoftLink';
-$hardlink = dirname(__FILE__).'/fileGetContentsVar9.HardLink';
-$chainlink = dirname(__FILE__).'/fileGetContentsVar9.ChainLink';
+$test_dir = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+$filename = $test_dir.'/fileGetContentsVar9.tmp';
+$softlink = $test_dir.'/fileGetContentsVar9.SoftLink';
+$hardlink = $test_dir.'/fileGetContentsVar9.HardLink';
+$chainlink = $test_dir.'/fileGetContentsVar9.ChainLink';
 
 // create file
 $h = fopen($filename,"w");
@@ -35,4 +36,3 @@ unlink($hardlink);
 unlink($filename);
 
 echo "\n*** Done ***\n";
-?>

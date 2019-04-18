@@ -65,18 +65,6 @@ function nonLocalBase() {
 }
 
 // --------------------------------------------
-// 5. Var name of the base var.
-// --------------------------------------------
-
-function varNameBase() {
-  echo "= ".__FUNCTION__.":\n\n";
-  $x = null;
-  $xName = 'x';
-  var_dump($$xName?->y?->z(sideEffect(__FUNCTION__)));
-  echo "\n";
-}
-
-// --------------------------------------------
 // 6. XHP attribute
 // --------------------------------------------
 
@@ -111,11 +99,14 @@ function emptyProp() {
   echo "\n";
 }
 
+
+<<__EntryPoint>>
+function main_nullsafe_prop_1() {
 basic();
 nested();
 notNull();
 nonLocalBase();
-varNameBase();
 xhpAttr();
 issetProp();
 emptyProp();
+}

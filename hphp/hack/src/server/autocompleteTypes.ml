@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -30,6 +29,7 @@ type autocomplete_kind =
   | Function_kind
   | Interface_kind
   | Keyword_kind
+  | Literal_kind
   | Method_kind
   | Namespace_kind
   | Property_kind
@@ -38,19 +38,22 @@ type autocomplete_kind =
 
 (* Results ready to be displayed to the user *)
 type complete_autocomplete_result = {
-    res_pos      : Pos.absolute;
-    res_ty       : string;
-    res_name     : string;
-    res_kind     : autocomplete_kind;
-    func_details : func_details_result option;
+    res_pos         : Pos.absolute;
+    res_replace_pos : Ide_api_types.range;
+    res_base_class  : string option;
+    res_ty          : string;
+    res_name        : string;
+    res_kind        : autocomplete_kind;
+    func_details    : func_details_result option;
   }
 
 (* Results that still need a typing environment to convert ty information
    into strings *)
 type partial_autocomplete_result = {
-    ty   : Typing_defs.phase_ty;
-    name : string;
-    kind_: autocomplete_kind;
+    ty        : Typing_defs.phase_ty;
+    name      : string;
+    kind_     : autocomplete_kind;
+    base_class: string option;
   }
 
 type autocomplete_result =
@@ -65,3 +68,13 @@ type ide_result = {
 }
 
 type result = complete_autocomplete_result list
+
+type legacy_autocomplete_context = {
+  is_manually_invoked : bool;
+  is_xhp_classname : bool;
+  is_instance_member : bool;
+  is_after_single_colon : bool;
+  is_after_double_right_angle_bracket : bool;
+  is_after_open_square_bracket : bool;
+  is_after_quote : bool;
+}

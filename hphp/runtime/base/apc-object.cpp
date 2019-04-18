@@ -56,12 +56,13 @@ APCObject::APCObject(ClassOrName cls, uint32_t propCount)
   , m_persistent{0}
   , m_no_wakeup{0}
   , m_fast_init{0}
+  , m_no_verify_prop_types{0}
 {}
 
 APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
   // This function assumes the object and object/array down the tree have no
   // internal references and do not implement the serializable interface.
-  assert(!objectData->instanceof(SystemLib::s_SerializableClass));
+  assertx(!objectData->instanceof(SystemLib::s_SerializableClass));
 
   auto cls = objectData->getVMClass();
   auto clsOrName = make_class(cls);
@@ -74,7 +75,7 @@ APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
   auto const numRealProps = propInfo.size();
   auto const numApcProps = numRealProps + hasDynProps;
   auto size = sizeof(APCObject) + sizeof(APCHandle*) * numApcProps;
-  auto const apcObj = new (malloc_huge(size)) APCObject(clsOrName, numApcProps);
+  auto const apcObj = new (apc_malloc(size)) APCObject(clsOrName, numApcProps);
   apcObj->m_persistent = 1;
 
   // Set a few more flags for faster fetching: whether or not the object has a
@@ -89,11 +90,12 @@ APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
   auto const objPropVec = objectData->propVec();
   const TypedValueAux* propInit = nullptr;
 
+  auto propsDontNeedCheck = RuntimeOption::EvalCheckPropTypeHints > 0;
   for (unsigned i = 0; i < numRealProps; ++i) {
     auto const attrs = propInfo[i].attrs;
-    assert((attrs & AttrStatic) == 0);
+    assertx((attrs & AttrStatic) == 0);
 
-    const TypedValue* objProp;
+    tv_rval objProp;
     if (attrs & AttrBuiltin) {
       // Special properties like the Memoize cache should be set to their
       // default value, not the current value.
@@ -107,14 +109,47 @@ APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
       objProp = objPropVec + i;
     }
 
-    auto val = APCHandle::Create(tvAsCVarRef(objProp), false,
+    if (UNLIKELY(type(objProp) == KindOfUninit) && (attrs & AttrLateInit)) {
+      if (attrs & AttrLateInitSoft) {
+        assertx(!(attrs & AttrBuiltin));
+        raise_soft_late_init_prop(
+          propInfo[i].cls,
+          propInfo[i].name,
+          false
+        );
+        tvDup(
+          *g_context->getSoftLateInitDefault().asTypedValue(),
+          *const_cast<TypedValue*>(objPropVec + i)
+        );
+      } else {
+        auto const origI = i;
+        while (i > 0) {
+          --i;
+          apcPropVec[i]->unreferenceRoot();
+        }
+        apc_sized_free(apcObj, size);
+        throw_late_init_prop(propInfo[origI].cls, propInfo[origI].name, false);
+      }
+    }
+
+    // If the property value satisfies its type-hint in all contexts, we don't
+    // need to do any validation when we re-create the object.
+    if (propsDontNeedCheck) {
+      propsDontNeedCheck = propInfo[i].typeConstraint.alwaysPasses(objProp);
+    }
+
+    auto val = APCHandle::Create(const_variant_ref{objProp}, false,
                                  APCHandleLevel::Inner, true);
     size += val.size;
     apcPropVec[i] = val.handle;
   }
 
+  if (RuntimeOption::EvalCheckPropTypeHints <= 0 || propsDontNeedCheck) {
+    apcObj->m_no_verify_prop_types = 1;
+  }
+
   if (UNLIKELY(hasDynProps)) {
-    auto val = APCHandle::Create(objectData->dynPropArray(), false,
+    auto val = APCHandle::Create(VarNR{objectData->dynPropArray()}, false,
                                  APCHandleLevel::Inner, true);
     size += val.size;
     apcPropVec[numRealProps] = val.handle;
@@ -131,16 +166,16 @@ APCHandle::Pair APCObject::ConstructSlow(ObjectData* objectData,
   auto const propCount = odProps.size();
 
   auto size = sizeof(APCObject) + sizeof(Prop) * propCount;
-  auto const apcObj = new (malloc_huge(size)) APCObject(name, propCount);
+  auto const apcObj = new (apc_malloc(size)) APCObject(name, propCount);
   if (!propCount) return {apcObj->getHandle(), size};
 
   auto prop = apcObj->props();
   for (ArrayIter it(odProps); !it.end(); it.next(), ++prop) {
     Variant key(it.first());
-    assert(key.isString());
+    assertx(key.isString());
     auto const rval = it.secondRval();
-    if (!isNullType(tvToCell(rval).type())) {
-      auto val = APCHandle::Create(VarNR(rval.tv()), false,
+    if (!isNullType(rval.unboxed().type())) {
+      auto val = APCHandle::Create(const_variant_ref{rval}, false,
                                    APCHandleLevel::Inner, true);
       prop->val = val.handle;
       size += val.size;
@@ -171,7 +206,7 @@ APCHandle::Pair APCObject::ConstructSlow(ObjectData* objectData,
       prop->name = makeStaticString(keySD.get());
     }
   }
-  assert(prop == apcObj->props() + propCount);
+  assertx(prop == apcObj->props() + propCount);
 
   return {apcObj->getHandle(), size};
 }
@@ -190,15 +225,17 @@ APCObject::~APCObject() {
 
   for (auto i = uint32_t{0}; i < numProps; ++i) {
     if (props()[i].val) props()[i].val->unreferenceRoot();
-    assert(props()[i].name->isStatic());
+    assertx(props()[i].name->isStatic());
   }
 }
 
 void APCObject::Delete(APCHandle* handle) {
   auto const obj = fromHandle(handle);
+  auto const allocSize = sizeof(APCObject) + obj->m_propCount *
+    (obj->m_persistent ? sizeof(APCHandle*) : sizeof(Prop));
   obj->~APCObject();
   // No need to run Prop destructors.
-  free_huge(obj);
+  apc_sized_free(obj, allocSize);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -227,7 +264,7 @@ Variant APCObject::MakeLocalObject(const APCHandle* handle) {
 
 Object APCObject::createObject() const {
   auto cls = m_cls.left();
-  assert(cls != nullptr);
+  assertx(cls != nullptr);
 
   auto obj = Object::attach(
     m_fast_init ? ObjectData::newInstanceNoPropInit(const_cast<Class*>(cls))
@@ -235,7 +272,7 @@ Object APCObject::createObject() const {
   );
 
   auto const numProps = cls->numDeclProperties();
-  auto const objProp = obj->propVec();
+  auto const objProp = obj->propVecForConstruct();
   auto const apcProp = persistentProps();
 
   if (m_fast_init) {
@@ -244,13 +281,16 @@ Object APCObject::createObject() const {
     // not yet exposed to PHP.
     unsigned i = 0;
     try {
+      obj->setHasUninitProps();
       for (; i < numProps; ++i) {
         new (objProp + i) Variant(apcProp[i]->toLocal());
       }
+      obj->clearHasUninitProps();
     } catch (...) {
       for (; i < numProps; ++i) {
         new (objProp + i) Variant();
       }
+      obj->clearHasUninitProps();
       throw;
     }
   } else {
@@ -259,12 +299,17 @@ Object APCObject::createObject() const {
     }
   }
 
+  // Make sure the unserialized values don't violate any type-hints if they
+  // require validation.
+  if (!m_no_verify_prop_types) obj->verifyPropTypeHints();
+  assertx(obj->assertPropTypeHints());
+
   if (UNLIKELY(numProps < m_propCount)) {
     auto dynProps = apcProp[numProps];
-    assert(dynProps->kind() == APCKind::StaticArray ||
+    assertx(dynProps->kind() == APCKind::StaticArray ||
            dynProps->kind() == APCKind::UncountedArray ||
            dynProps->kind() == APCKind::SharedArray);
-    obj->setDynPropArray(dynProps->toLocal().asCArrRef());
+    obj->setDynProps(dynProps->toLocal().asCArrRef());
   }
 
   if (!m_no_wakeup) obj->invokeWakeup();
@@ -303,7 +348,7 @@ Object APCObject::createObjectSlow() const {
     }
 
     auto val = prop->val ? prop->val->toLocal() : init_null();
-    obj->setProp(const_cast<Class*>(ctx), key, val.asTypedValue(), false);
+    obj->setProp(const_cast<Class*>(ctx), key, *val.toCell());
   }
 
   obj->invokeWakeup();

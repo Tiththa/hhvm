@@ -1,24 +1,21 @@
 
 Warning: %s
-NULL
 
 Warning: %s
-NULL
-
-Warning: %s
-bool(false)
-
-Warning: %s
-NULL
 
 Warning: %s
 bool(false)
-object(GMP)#%d (1) {
+
+Warning: %s
+
+Warning: %s
+bool(false)
+object(GMP) (1) {
   ["num"]=>
   string(2) "-1"
 }
 string(2) "-1"
-object(GMP)#%d (1) {
+object(GMP) (1) {
   ["num"]=>
   string(5) "10001"
 }

@@ -1,9 +1,6 @@
 <?php
 
 class X {
-  function __destruct() {
- var_dump(__METHOD__);
- }
 }
 function test() {
   $a = array(new X, 0);
@@ -13,5 +10,9 @@ function test() {
   $a = null;
   var_dump('done');
 }
+
+<<__EntryPoint>>
+function main_500() {
 test();
 var_dump('exit');
+}

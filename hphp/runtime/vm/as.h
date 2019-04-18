@@ -24,7 +24,11 @@ namespace HPHP {
 
 struct UnitEmitter;
 struct FuncEmitter;
-struct MD5;
+struct SHA1;
+
+namespace Native {
+struct FuncTable;
+}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -39,8 +43,10 @@ std::unique_ptr<UnitEmitter> assemble_string(
   const char* code,
   int codeLen,
   const char* filename,
-  const MD5&,
-  bool swallowErrors = true
+  const SHA1&,
+  const Native::FuncTable&,
+  bool swallowErrors = true,
+  bool wantsSymbolRefs = false
 );
 
 enum class AsmResult {
@@ -49,8 +55,18 @@ enum class AsmResult {
   Unreachable
 };
 
-AsmResult assemble_expression(UnitEmitter&, FuncEmitter*, int,
-                              const std::string&);
+struct AssemblerFatal : std::runtime_error {
+  explicit AssemblerFatal(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+struct AssemblerError : std::runtime_error {
+  explicit AssemblerError(const std::string& msg) : std::runtime_error(msg) {}
+  AssemblerError(int where, const std::string& what);
+};
+
+struct AssemblerUnserializationError : AssemblerError {
+  using AssemblerError::AssemblerError;
+};
 
 //////////////////////////////////////////////////////////////////////
 

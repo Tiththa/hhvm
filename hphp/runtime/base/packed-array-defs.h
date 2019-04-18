@@ -87,24 +87,50 @@ static_assert(
 );
 
 ALWAYS_INLINE
+size_t PackedArray::capacityToSizeIndex(size_t cap) {
+  if (cap <= PackedArray::SmallSize) {
+    return PackedArray::SmallSizeIndex;
+  }
+  auto const sizeIndex = MemoryManager::size2Index(
+    sizeof(ArrayData) + cap * sizeof(TypedValue)
+  );
+  assertx(sizeIndex <= PackedArray::MaxSizeIndex);
+  return sizeIndex;
+}
+
+ALWAYS_INLINE
 uint32_t PackedArray::capacity(const ArrayData* ad) {
-  return kSizeIndex2PackedArrayCapacity[ad->m_aux16];
+  return kSizeIndex2PackedArrayCapacity[sizeClass(ad)];
 }
 
 ALWAYS_INLINE
 size_t PackedArray::heapSize(const ArrayData* ad) {
-  return kSizeIndex2Size[ad->m_aux16];
+  return kSizeIndex2Size[sizeClass(ad)];
+}
+
+// Pack together the size class and the other aux bits into a single 16-bit
+// number which can be stored in the HeapObject object. ArrayData requires the
+// varray/darray state to be in the lower 8-bits, but we're free to use the
+// upper.
+ALWAYS_INLINE
+uint16_t PackedArray::packSizeIndexAndAuxBits(uint8_t idx, uint8_t aux) {
+  return (static_cast<uint16_t>(idx) << 8) | aux;
+}
+
+ALWAYS_INLINE
+uint8_t PackedArray::sizeClass(const ArrayData* ad) {
+  return ad->m_aux16 >> 8;
 }
 
 inline void PackedArray::scan(const ArrayData* a, type_scan::Scanner& scanner) {
-  assert(checkInvariants(a));
+  assertx(checkInvariants(a));
   auto data = packedData(a);
   scanner.scan(*data, a->getSize() * sizeof(*data));
 }
 
 template <class F, bool inc>
 void PackedArray::IterateV(const ArrayData* arr, F fn) {
-  assert(checkInvariants(arr));
+  assertx(checkInvariants(arr));
   auto elm = packedData(arr);
   if (inc) arr->incRefCount();
   SCOPE_EXIT { if (inc) decRefArr(const_cast<ArrayData*>(arr)); };
@@ -115,7 +141,7 @@ void PackedArray::IterateV(const ArrayData* arr, F fn) {
 
 template <class F, bool inc>
 void PackedArray::IterateKV(const ArrayData* arr, F fn) {
-  assert(checkInvariants(arr));
+  assertx(checkInvariants(arr));
   auto elm = packedData(arr);
   if (inc) arr->incRefCount();
   SCOPE_EXIT { if (inc) decRefArr(const_cast<ArrayData*>(arr)); };

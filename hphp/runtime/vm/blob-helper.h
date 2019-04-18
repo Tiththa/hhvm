@@ -27,12 +27,17 @@
 #include <folly/Optional.h>
 #include <folly/Varint.h>
 
+#include "hphp/compiler/option.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/type-string.h"
+#include "hphp/runtime/base/variable-serializer.h"
+#include "hphp/runtime/vm/litstr-table.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
+
+#include "hphp/util/compact-vector.h"
 
 /*
  * This module contains helpers for serializing and deserializing
@@ -95,7 +100,7 @@ public:
 
 struct BlobEncoder {
   static const bool deserializing = false;
-
+  explicit BlobEncoder(bool l) : m_useGlobalIds{l} {}
   /*
    * Currently the most basic encoder/decode only works for integral
    * types.  (We don't want this to accidentally get used for things
@@ -103,9 +108,17 @@ struct BlobEncoder {
    *
    * Floating point support could be added later if we need it ...
    */
+   template<class T>
+   typename std::enable_if<
+     std::is_integral<T>::value && std::is_signed<T>::value
+   >::type
+   encode(const T& t) {
+     encode(folly::encodeZigZag(static_cast<int64_t>(t)));
+   }
+
   template<class T>
   typename std::enable_if<
-    std::is_integral<T>::value ||
+    (std::is_integral<T>::value && !std::is_signed<T>::value) ||
     std::is_enum<T>::value
   >::type
   encode(const T& t) {
@@ -133,8 +146,19 @@ struct BlobEncoder {
 
   void encode(DataType t) {
     // always encode DataType as int8 even if it's a bigger size.
-    assert(DataType(int8_t(t)) == t);
+    assertx(DataType(int8_t(t)) == t);
     encode(int8_t(t));
+  }
+
+  void encode(const LowStringPtr& s) {
+    const StringData* sd = s;
+    if (m_useGlobalIds) {
+      Id id = LitstrTable::get().mergeLitstr(sd);
+      encode(id);
+      return;
+    }
+
+    encode(sd);
   }
 
   void encode(const StringData* sd) {
@@ -148,16 +172,21 @@ struct BlobEncoder {
     std::copy(sd->data(), sd->data() + sz, &m_blob[start]);
   }
 
-  void encode(const RepoAuthType::Array* ar) {
-    if (!ar) return encode(std::numeric_limits<uint32_t>::max());
-    encode(ar->id());
+  void encode(const std::string& s) {
+    uint32_t sz = s.size();
+    encode(sz + 1);
+    if (!sz) { return; }
+
+    const size_t start = m_blob.size();
+    m_blob.resize(start + sz);
+    std::copy(s.data(), s.data() + sz, &m_blob[start]);
   }
 
   void encode(const TypedValue& tv) {
     if (tv.m_type == KindOfUninit) {
       return encode(staticEmptyString());
     }
-    String s = f_serialize(tvAsCVarRef(&tv));
+    auto s = internal_serialize(tvAsCVarRef(&tv));
     encode(s.get());
   }
 
@@ -187,9 +216,28 @@ struct BlobEncoder {
     encode(kv.second);
   }
 
+  template<class T, typename FDeltaEncode>
+  void encode(const std::vector<T>& cont, FDeltaEncode deltaEncode) {
+    if (cont.size() >= 0xffffffffu) {
+      throw std::runtime_error("maximum vector size exceeded in BlobEncoder");
+    }
+
+    auto prev = T{};
+    encode(uint32_t(cont.size()));
+    for (auto it = cont.begin(); it != cont.end(); ++it) {
+      encode(deltaEncode(prev, *it));
+      prev = *it;
+    }
+  }
+
   template<class T>
   void encode(const std::vector<T>& vec) {
     encodeContainer(vec, "vector");
+  }
+
+  template<class T>
+  void encode(const CompactVector<T>& vec) {
+    encodeContainer(vec, "CompactVector");
   }
 
   template<class T>
@@ -217,6 +265,18 @@ struct BlobEncoder {
     return *this;
   }
 
+  template<class T, class DeltaEncode>
+  BlobEncoder& operator()(T& t, DeltaEncode e) {
+    encode(t, e);
+    return *this;
+  }
+
+  template<class T, class DeltaEncode, class DeltaDecode>
+  BlobEncoder& operator()(T& t, DeltaEncode e, DeltaDecode d) {
+    encode(t, e);
+    return *this;
+  }
+
   size_t size() const { return m_blob.size(); }
   const void* data() const { return &m_blob[0]; }
 
@@ -236,6 +296,7 @@ private:
 
 private:
   std::vector<char> m_blob;
+  bool m_useGlobalIds;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -243,20 +304,31 @@ private:
 struct BlobDecoder {
   static const bool deserializing = true;
 
-  explicit BlobDecoder(const void* vp, size_t sz)
+  BlobDecoder(const void* vp, size_t sz, bool l)
     : m_p(static_cast<const unsigned char*>(vp))
     , m_last(m_p + sz)
+    , m_useGlobalIds{l}
   {}
 
   void assertDone() {
-    assert(m_p >= m_last);
+    assertx(m_p >= m_last);
   }
 
   // See encode() in BlobEncoder for why this only allows integral
   // types.
   template<class T>
   typename std::enable_if<
-    std::is_integral<T>::value ||
+    std::is_integral<T>::value && std::is_signed<T>::value
+  >::type
+  decode(T& t) {
+    uint64_t value;
+    decode(value);
+    t = static_cast<T>(folly::decodeZigZag(value));
+  }
+
+  template<class T>
+  typename std::enable_if<
+    (std::is_integral<T>::value && !std::is_signed<T>::value) ||
     std::is_enum<T>::value
   >::type
   decode(T& t) {
@@ -285,27 +357,31 @@ struct BlobDecoder {
   }
 
   void decode(LowStringPtr& s) {
-    const StringData* sd;
-    decode(sd);
-    s = sd;
+    if (m_useGlobalIds) {
+      Id id;
+      decode(id);
+      s = LitstrTable::get().lookupLitstrId(id);
+      return;
+    }
+
+    String st(decodeString());
+    s = st.get() ? makeStaticString(st) : 0;
   }
 
-  void decode(const RepoAuthType::Array*& ar) {
-    uint32_t id;
-    decode(id);
-    ar = id == std::numeric_limits<uint32_t>::max()
-      ? nullptr
-      : Repo::get().global().arrayTypeTable.lookup(id);
+  void decode(std::string& s) {
+    String str(decodeString());
+    s = str.toCppString();
   }
 
   void decode(TypedValue& tv) {
-    tvWriteUninit(&tv);
+    tvWriteUninit(tv);
 
     String s = decodeString();
-    assert(!!s);
+    assertx(!!s);
     if (s.empty()) return;
 
-    tvAsVariant(&tv) = unserialize_from_string(s);
+    tvAsVariant(&tv) =
+      unserialize_from_string(s, VariableUnserializer::Type::Internal);
     tvAsVariant(&tv).setEvalScalar();
   }
 
@@ -342,13 +418,29 @@ struct BlobDecoder {
     decode(val.second);
   }
 
-  template<class T>
-  void decode(std::vector<T>& vec) {
+  template<typename Cont>
+  auto decode(Cont& vec) -> decltype(vec.emplace_back(), void()) {
     uint32_t size;
     decode(size);
+    if (size) vec.reserve(vec.size() + size);
     for (uint32_t i = 0; i < size; ++i) {
-      vec.push_back(T());
+      vec.emplace_back();
       decode(vec.back());
+    }
+  }
+
+  template<class T, typename FDeltaDecode>
+  void decode(std::vector<T>& vec, FDeltaDecode deltaDecode) {
+    uint32_t size;
+    decode(size);
+    vec.reserve(size);
+
+    auto prev = T{};
+    auto delta = T{};
+    for (uint32_t i = 0; i < size; ++i) {
+      decode(delta);
+      prev = deltaDecode(prev, delta);
+      vec.push_back(prev);
     }
   }
 
@@ -391,6 +483,18 @@ struct BlobDecoder {
     return *this;
   }
 
+  template<class T, class DeltaDecode>
+  BlobDecoder& operator()(T& t, DeltaDecode d) {
+    decode(t, d);
+    return *this;
+  }
+
+  template<class T, class DeltaEncode, class DeltaDecode>
+  BlobDecoder& operator()(T& t, DeltaEncode e, DeltaDecode d) {
+    decode(t, d);
+    return *this;
+  }
+
 private:
   String decodeString() {
     uint32_t sz;
@@ -401,7 +505,7 @@ private:
 
     String s = String(sz, ReserveString);
     char* pch = s.mutableData();
-    assert(m_last - m_p >= sz);
+    assertx(m_last - m_p >= sz);
     std::copy(m_p, m_p + sz, pch);
     m_p += sz;
     s.setSize(sz);
@@ -411,6 +515,7 @@ private:
 private:
   const unsigned char* m_p;
   const unsigned char* const m_last;
+  bool m_useGlobalIds;
 };
 
 //////////////////////////////////////////////////////////////////////

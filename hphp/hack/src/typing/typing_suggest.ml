@@ -2,21 +2,20 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
 
 (** Module used to suggest type annotations when they are missing
 *)
-open Core
+open Core_kernel
 open Typing_defs
 open Utils
 
-let compare_types x y tcopt =
-  let tcopt = TypecheckerOptions.make_permissive tcopt in
+let compare_types x y =
+  let tcopt = GlobalNamingOptions.get () in
   let tenv = Typing_env.empty tcopt Relative_path.default ~droot:None in
   String.compare
     (Typing_print.full tenv x) (Typing_print.full tenv y)
@@ -49,10 +48,7 @@ let (initialized_members: (SSet.t SMap.t) ref) = ref SMap.empty
 
 let add_type env pos k type_ =
   let tcopt = Env.get_tcopt env in
-  let new_env =
-    Env.empty
-      (TypecheckerOptions.make_permissive tcopt)
-      Relative_path.default ~droot:None in
+  let new_env = Env.empty tcopt Relative_path.default ~droot:None in
   let new_type = (
     (* Some stuff in env isn't serializable, which we need so that we can infer
      * types part of the codebase at a time in worker threads. Fortunately we
@@ -80,8 +76,8 @@ let save_type hint_kind env x arg =
             let x_pos = Reason.to_pos (fst x) in
             add_type env x_pos hint_kind arg;
         )
-    | _, (Terr | Tmixed | Tarraykind _ | Tprim _ | Toption _
-      | Tvar _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _)
+    | _, (Terr | Tnonnull | Tarraykind _ | Tprim _ | Toption _ | Tdynamic
+      | Tvar _ | Tabstract _ | Tclass _ | Ttuple _ | Tanon _
       | Tfun _ | Tunresolved _ | Tobject | Tshape _) -> ()
   end
 
@@ -124,26 +120,31 @@ end
  * we are only interested in the non-parametric ones, infering
  * the parameter would be too hard anyway.
  *)
-let get_implements tcopt (_, x) =
-  match Typing_lazy_heap.get_class tcopt x with
+let get_implements (_, x) =
+  match Typing_lazy_heap.get_class x with
   | None -> SSet.empty
-  | Some { tc_ancestors = tyl; _ } ->
-      SMap.fold begin fun _ ty set ->
+  | Some cls ->
+      let tyl = Typing_classes_heap.all_ancestors cls in
+      Sequence.fold tyl ~init:SSet.empty ~f:begin fun set (_, ty) ->
         match ty with
         | _, Tapply ((_, x), []) -> SSet.add x set
         | _,
           (
             Tany
+            | Tdynamic
             | Terr
             | Tmixed
+            | Tnonnull
+            | Tnothing
             | Tarray (_, _)
             | Tdarray (_, _)
             | Tvarray _
-            | Tdarray_or_varray _
+            | Tvarray_or_darray _
             | Tprim _
             | Tgeneric _
             | Tfun _
             | Toption _
+            | Tlike _
             | Tapply (_, _)
             | Ttuple _
             | Tshape _
@@ -151,102 +152,102 @@ let get_implements tcopt (_, x) =
             | Tthis
           ) ->
             raise Exit
-      end tyl SSet.empty
+      end
 
 (** normalizes a "guessed" type. We basically want to bailout whenever
  * the inferred type doesn't resolve to a type hint.
  *)
-let rec normalize tcopt (r, ty) = r, normalize_ tcopt ty
-and normalize_ tcopt = function
-  | Tunresolved [x] -> snd (normalize tcopt x)
+let rec normalize (r, ty) = r, normalize_ ty
+and normalize_ = function
+  | Tunresolved [x] -> snd (normalize x)
   | Tunresolved tyl
     when List.exists tyl (function _, Toption _ -> true | _ -> false) ->
       let tyl = List.map tyl (function _, Toption ty -> ty | x -> x) in
-      normalize_ tcopt (Toption (Reason.Rnone, Tunresolved tyl))
+      normalize_ (Toption (Reason.Rnone, Tunresolved tyl))
   | Tunresolved tyl
     when List.exists tyl
     (function _, (Tany | Tunresolved []) -> true | _ -> false) ->
       let tyl = List.filter tyl begin function
         |  _, (Tany |  Tunresolved []) -> false
-        | _, (Terr | Tmixed | Tarraykind _ | Tprim _ | Toption _
-          | Tvar _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _
+        | _, (Terr | Tnonnull | Tarraykind _ | Tprim _ | Toption _
+          | Tvar _ | Tabstract _ | Tclass _ | Ttuple _
           | Tanon (_, _) | Tfun _ | Tunresolved _ | Tobject | Tshape _
+          | Tdynamic
              ) -> true
       end in
-      normalize_ tcopt (Tunresolved tyl)
-  | Tunresolved ((_, Tclass (x, [])) :: rl) ->
+      normalize_ (Tunresolved tyl)
+  | Tunresolved ((_, Tclass (x, e, [])) :: rl) ->
       (* If we have A & B & C where all the elements are classes
        * we try to find a unique common ancestor.
        *)
       let rl = List.map rl begin function
-        | _, Tclass (x, []) -> x
-        | _, (Terr | Tany | Tmixed | Tarraykind _ | Tprim _
-          | Toption _ | Tvar _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _
+        | _, Tclass (x, _, []) -> x
+        | _, (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Tdynamic
+          | Toption _ | Tvar _ | Tabstract _ | Tclass _ | Ttuple _
           | Tanon (_, _) | Tfun _ | Tunresolved _ | Tobject
           | Tshape _) -> raise Exit
       end in
-      let x_imp = get_implements tcopt x in
+      let x_imp = get_implements x in
       let set = List.fold_left rl ~f:begin fun x_imp x ->
-        SSet.inter x_imp (get_implements tcopt x)
+        SSet.inter x_imp (get_implements x)
       end ~init:x_imp in
       (* is it unique? *)
       if SSet.cardinal set = 1
-      then Tclass ((Pos.none, SSet.choose set), [])
+      then Tclass ((Pos.none, SSet.choose set), e, [])
       else raise Exit
-  | Tunresolved (x :: (y :: _ as rl)) when compare_types x y tcopt = 0 ->
-      normalize_ tcopt (Tunresolved rl)
+  | Tunresolved (x :: (y :: _ as rl)) when compare_types x y = 0 ->
+      normalize_ (Tunresolved rl)
   | Tunresolved _ | Tany -> raise Exit
-  | Tmixed -> Tmixed                       (* ' with Nothing (mixed type) *)
+  | Tnonnull -> Tnonnull
   | Terr -> Terr
   | Tarraykind akind -> begin
     try
       Tarraykind (match akind with
         | AKany -> AKany
         | AKempty -> AKempty
-        | AKvarray tk -> AKvarray (normalize tcopt tk)
-        | AKvec tk -> AKvec (normalize tcopt tk)
-        | AKdarray (tk, tv) -> AKdarray (normalize tcopt tk, normalize tcopt tv)
-        | AKmap (tk, tv) -> AKmap (normalize tcopt tk, normalize tcopt tv)
-        | AKdarray_or_varray tv -> AKdarray_or_varray (normalize tcopt tv)
-        (* fully_expand_tvars_downcast_aktypes should have removed those *)
-        | AKshape _ | AKtuple _ -> raise Exit
+        | AKvarray tk -> AKvarray (normalize tk)
+        | AKvec tk -> AKvec (normalize tk)
+        | AKdarray (tk, tv) -> AKdarray (normalize tk, normalize tv)
+        | AKmap (tk, tv) -> AKmap (normalize tk, normalize tv)
+        | AKvarray_or_darray tv -> AKvarray_or_darray (normalize tv)
       )
     with Exit -> Tarraykind AKany
   end
   | Tabstract (AKgeneric _, _) as x -> x
-  | Tabstract (AKdependent _, Some ty) -> normalize_ tcopt (snd ty)
-  | Toption (_, (Toption (_, _) as ty)) -> normalize_ tcopt ty
+  | Tabstract (AKdependent _, Some ty) -> normalize_ (snd ty)
+  | Toption (_, (Toption (_, _) as ty)) -> normalize_ ty
   | Toption (_, Tprim Nast.Tvoid) -> raise Exit
-  | Toption ty -> Toption (normalize tcopt ty)
+  | Toption ty -> Toption (normalize ty)
   | Tprim _ as ty -> ty
   | Tvar _ -> raise Exit
   | Tfun _ -> raise Exit
-  | Tclass ((pos, name), tyl) when name.[0] = '\\' && String.rindex name '\\' = 0 ->
+  | Tclass ((pos, name), e, tyl) when name.[0] = '\\' && String.rindex_exn name '\\' = 0 ->
       (* TODO this transform isn't completely legit; can cause a reference into
        * the global namespace to suddenly refer to a different class in the
        * local one. Figure something else out that doesn't involve spamming '\'
        * across FB code, maybe? See if anyone complains on GitHub? I have no
        * idea how bad this is in practice, I'm kinda hoping it's okay. *)
-      normalize_ tcopt (Tclass ((pos, strip_ns name), tyl))
-  | Tclass ((pos1, "Awaitable"), [(_, Toption (pos2, Tprim Nast.Tvoid))]) ->
+      normalize_ (Tclass ((pos, strip_ns name), e, tyl))
+  | Tclass ((pos1, "Awaitable"), e, [(_, Toption (pos2, Tprim Nast.Tvoid))]) ->
       (* Special case: Awaitable<?void> is nonsensical, but often
        * Awaitable<void> works. *)
-      Tclass ((pos1, "Awaitable"), [(pos2, Tprim Nast.Tvoid)])
-  | Tclass ((pos, name), tyl) ->
+      Tclass ((pos1, "Awaitable"), e, [(pos2, Tprim Nast.Tvoid)])
+  | Tclass ((pos, name), e, tyl) ->
       (* Handling xhp names *)
       let name =
         if String.contains name ':' && name.[0] <> ':'
         then ":"^name
         else name
       in
-      Tclass ((pos, name), List.map tyl (normalize tcopt))
-  | Ttuple tyl -> Ttuple (List.map tyl (normalize tcopt))
+      Tclass ((pos, name), e, List.map tyl (normalize))
+  | Ttuple tyl -> Ttuple (List.map tyl (normalize))
+  | Tdynamic -> Tdynamic
   | Tanon _ -> raise Exit
   | Tobject -> raise Exit
   | Tabstract _ -> raise Exit
   | Tshape _ -> raise Exit
 
-let normalize tcopt ty =
+let normalize ty =
   try
-    Some (normalize tcopt ty)
+    Some (normalize ty)
   with Exit -> None

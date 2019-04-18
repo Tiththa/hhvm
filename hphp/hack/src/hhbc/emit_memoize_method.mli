@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -25,9 +24,3 @@ val emit_wrapper_methods :
   Ast.class_ ->
   Ast.method_ list ->
   Hhas_method.t list
-
-(* Emit static and instance properties used for memoize cache *)
-val emit_properties :
-  memoize_info ->
-  Ast.method_ list ->
-  Hhas_property.t list

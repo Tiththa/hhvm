@@ -48,18 +48,12 @@ bool HHVM_FUNCTION(array_key_exists,
 bool HHVM_FUNCTION(key_exists,
                    const Variant& key,
                    const Variant& search);
-Variant array_keys_helper(const Variant& input,
-                          const Variant& search_value = uninit_variant,
-                          bool strict = false);
+TypedValue HHVM_FUNCTION(array_keys,
+                         TypedValue input);
 TypedValue HHVM_FUNCTION(array_map,
                          const Variant& callback,
                          const Variant& arr1,
                          const Array& _argv = null_array);
-TypedValue HHVM_FUNCTION(array_merge_recursive,
-                         int64_t numArgs,
-                         const Variant& array1,
-                         const Variant& array2 = uninit_variant,
-                         const Array& args = null_array);
 TypedValue HHVM_FUNCTION(array_replace_recursive,
                          const Variant& array1,
                          const Variant& array2 = uninit_variant,
@@ -103,17 +97,6 @@ TypedValue HHVM_FUNCTION(array_unshift,
                          const Array& args = null_array);
 TypedValue HHVM_FUNCTION(array_values,
                          const Variant& input);
-bool HHVM_FUNCTION(array_walk_recursive,
-                   VRefParam input,
-                   const Variant& funcname,
-                   const Variant& userdata = uninit_variant);
-bool HHVM_FUNCTION(array_walk,
-                   VRefParam input,
-                   const Variant& funcname,
-                    const Variant& userdata = uninit_variant);
-Array HHVM_FUNCTION(compact,
-                    const Variant& varname,
-                    const Array& args = null_array);
 bool HHVM_FUNCTION(shuffle,
                    VRefParam array);
 int64_t HHVM_FUNCTION(count,
@@ -277,23 +260,29 @@ inline int64_t countHelper(TypedValue tv) {
 ///////////////////////////////////////////////////////////////////////////////
 
 #define getCheckedArrayRet(input, fail)                                  \
-  auto const cell_##input = static_cast<const Variant&>(input).asCell(); \
-  if (UNLIKELY(!isArrayLikeType(cell_##input->m_type))) {                \
+  auto const cell_##input = static_cast<const Variant&>(input).toCell(); \
+  if (UNLIKELY(!isArrayLikeType(cell_##input->m_type) &&                 \
+    !isClsMethType(cell_##input->m_type))) {                             \
     throw_expected_array_exception();                                    \
     return fail;                                                         \
   }                                                                      \
-  ArrNR arrNR_##input{cell_##input->m_data.parr};                        \
+  if (isClsMethType(cell_##input->m_type)) raiseClsMethToVecWarningHelper(); \
+  ArrNR arrNR_##input{isClsMethType(cell_##input->m_type) ?              \
+    clsMethToVecHelper(cell_##input->m_data.pclsmeth).detach() :         \
+    cell_##input->m_data.parr};                                          \
   const Array& arr_##input = arrNR_##input.asArray();
 
 #define getCheckedContainer(input)                                       \
-  if (UNLIKELY(!isContainer(input))) {                                   \
+  if (UNLIKELY(!isContainer(input) && !input.isClsMeth())) {             \
     throw_expected_array_or_collection_exception();                      \
     return make_tv<KindOfNull>();                                        \
   }                                                                      \
   Variant var_##input(input);                                            \
-  tvCastToArrayInPlace(var_##input.asTypedValue());                      \
-  assert(var_##input.isArray());                                         \
-  auto arr_##input = var_##input.toArray();
+  tvCastToArrayInPlace<TypedValue*, IntishCast::Cast>(           \
+    var_##input.asTypedValue()                                           \
+  );                                                                     \
+  assertx(var_##input.isArray());                                        \
+  auto arr_##input = var_##input.toArray<IntishCast::Cast>();
 
 #define getCheckedArray(input)        \
   getCheckedArrayRet(input, make_tv<KindOfNull>())

@@ -1,44 +1,69 @@
-<?hh // decl /* -*- php -*- */
+<?hh /* -*- php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
 
 const int WNOHANG   = 0b001;
 const int WUNTRACED = 0b010;
 
-function pcntl_alarm($seconds);
-function pcntl_exec($path, $args = null, $envs = null);
+<<__PHPStdLib>>
+function pcntl_alarm(int $seconds);
+<<__PHPStdLib>>
+function pcntl_exec(string $path, $args = null, $envs = null);
+<<__PHPStdLib>>
 function pcntl_fork();
-function pcntl_getpriority($pid = 0, $process_identifier = 0);
-function pcntl_setpriority($priority, $pid = 0, $process_identifier = 0);
-function pcntl_signal($signo, $handler, $restart_syscalls = true);
+<<__PHPStdLib>>
+function pcntl_getpriority(int $pid = 0, int $process_identifier = 0);
+<<__PHPStdLib>>
+function pcntl_setpriority(int $priority, int $pid = 0, int $process_identifier = 0);
+<<__PHPStdLib>>
+function pcntl_signal(int $signo, $handler, bool $restart_syscalls = true);
 
-function pcntl_wait(&$status, $options = 0);
-function pcntl_waitpid($pid, &$status, $options = 0);
-function pcntl_wexitstatus($status);
-function pcntl_wifexited($status);
-function pcntl_wifsignaled($status);
-function pcntl_wifstopped($status);
-function pcntl_wstopsig($status);
-function pcntl_wtermsig($status);
+<<__PHPStdLib>>
+function pcntl_wait(&$status, int $options = 0);
+<<__PHPStdLib>>
+function pcntl_waitpid(int $pid, &$status, int $options = 0);
+<<__PHPStdLib>>
+function pcntl_wexitstatus(int $status);
+<<__PHPStdLib>>
+function pcntl_wifexited(int $status);
+<<__PHPStdLib>>
+function pcntl_wifsignaled(int $status);
+<<__PHPStdLib>>
+function pcntl_wifstopped(int $status);
+<<__PHPStdLib>>
+function pcntl_wstopsig(int $status);
+<<__PHPStdLib>>
+function pcntl_wtermsig(int $status);
+<<__PHPStdLib>>
 function pcntl_signal_dispatch();
-function shell_exec($cmd);
-function exec($command, &$output = null, &$return_var = null);
-function passthru($command, &$return_var = null);
-function system($command, &$return_var = null);
-function proc_open($cmd, $descriptorspec, &$pipes, $cwd = null, $env = null, $other_options = null);
-function proc_terminate($process, $signal = 0);
-function proc_close($process);
-function proc_get_status($process);
-function proc_nice($increment);
-function escapeshellarg($arg);
-function escapeshellcmd($command);
+<<__PHPStdLib>>
+function shell_exec(string $cmd);
+<<__PHPStdLib>>
+function exec(string $command, &$output = null, &$return_var = null);
+<<__PHPStdLib>>
+function passthru(string $command, &$return_var = null);
+<<__PHPStdLib>>
+function system(string $command, &$return_var = null);
+<<__PHPStdLib>>
+function proc_open(string $cmd, darray<int, mixed> $descriptorspec, &$pipes, $cwd = null, $env = null, $other_options = null);
+<<__PHPStdLib>>
+function proc_terminate(resource $process, int $signal = 0);
+<<__PHPStdLib>>
+function proc_close(resource $process);
+<<__PHPStdLib>>
+function proc_get_status(resource $process);
+<<__PHPStdLib>>
+function proc_nice(int $increment);
+<<__PHPStdLib>>
+function escapeshellarg(string $arg);
+<<__PHPStdLib>>
+function escapeshellcmd(string $command);
 
 const int SIGABRT = 6;
 const int SIGALRM = 14;

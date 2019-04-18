@@ -49,12 +49,13 @@ struct StringData;
 namespace jit {
 
 struct Block;
-struct IRGS;
 struct IRInstruction;
 struct NormalizedInstruction;
 struct SSATmp;
 
 namespace irgen {
+
+struct IRGS;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -121,14 +122,6 @@ void assertTypeLocation(IRGS&, const Location&, Type);
 void predictType(IRGS&, const Location&, Type);
 
 /*
- * Special type of guards for param-passing reffiness. These checks are needed
- * when an FPush* instruction is in a different region from its FCall, and we
- * don't know statically whether the callee will want arguments by reference.
- */
-void checkRefs(IRGS&, int64_t entryArDelta, const std::vector<bool>& mask,
-               const std::vector<bool>& vals, Offset);
-
-/*
  * After all initial guards instructions have been emitted, the client of this
  * module calls the following function to allow some "region header" code to be
  * emitted.
@@ -152,6 +145,7 @@ void incProfCounter(IRGS&, TransID);
 void checkCold(IRGS&, TransID);
 
 uint64_t curProfCount(const IRGS& env);
+uint64_t calleeProfCount(const IRGS& env, const RegionDesc& calleeRegion);
 
 /*
  * If ringbuffer tracing is enabled, generate a ringbuffer entry associated
@@ -239,8 +233,10 @@ bool beginInlining(IRGS& env,
                    unsigned numParams,
                    const Func* target,
                    SrcKey startSk,
-                   Offset returnBcOffset,
-                   ReturnTarget returnTarget);
+                   Offset callBcOffset,
+                   ReturnTarget returnTarget,
+                   int cost,
+                   bool conjure);
 
 /*
  * End the current inlined frame, after all its blocks have been emitted.
@@ -249,7 +245,7 @@ bool beginInlining(IRGS& env,
  * eval stack, in addition to the actual control transfer and bookkeeping done
  * by implInlineReturn().
  */
-void endInlining(IRGS& env);
+bool endInlining(IRGS& env, const RegionDesc& calleeRegion);
 
 /*
  * Begin inlining func into a dummy region used to measure the cost of
@@ -273,18 +269,41 @@ bool conjureBeginInlining(IRGS& env,
  * conjureBeginInlining, this function should not be used in a region that will
  * be executed.
  */
-void conjureEndInlining(IRGS& env, bool builtin);
+bool conjureEndInlining(IRGS& env,
+                        const RegionDesc& calleeRegion,
+                        bool builtin);
 
 /*
- * We do two special-case optimizations to partially inline 'singleton'
- * accessor functions (functions that just return a static local or static
- * property if it's not null).
+ * We do a special-case optimization to partially inline 'singleton' accessor
+ * functions (functions that just return a static property if it's not null).
  *
  * This is exposed publically because the region translator drives inlining
  * decisions.
  */
 void inlSingletonSProp(IRGS&, const Func*, PC clsOp, PC propOp);
-void inlSingletonSLoc(IRGS&, const Func*, PC op);
+
+/*
+ * In PGO mode, we use profiling to try to determine the most likely target
+ * function at each call site.  profiledCalledFunc() returns the most likely
+ * called function based on profiling, as long as it was seen at least
+ * Eval.JitPGOCalledFuncThreshold percent of the times during profiling.  When a
+ * callee satisfies this condition, profiledCalledFunc() returns such callee and
+ * it also returns in checkInst a pointer to the runtime check that is inserted
+ * in HHIR.  The following code sequence is emitted in the HHIR unit:
+ *
+ *   t1 = LdARFuncPtr <CalleeFrame>
+ *   t2 = EqFunc t1, <ProfiledFunc>
+ *   JmpZero t2, <SideExit>               <== checkInst points here
+ *   AssertARFunc <CalleeFrame>, <ProfiledFunc>
+ *
+ * If this check is later regarded as not profitable, because it didn't enable
+ * inlining the callee, it can be removed by calling dropCalledFuncCheck()
+ * passing that same checkInst.
+ */
+const Func* profiledCalledFunc(IRGS& env, uint32_t numArgs,
+                               IRInstruction*& checkInst);
+
+void dropCalledFuncCheck(IRGS& env, IRInstruction* checkInst);
 
 ///////////////////////////////////////////////////////////////////////////////
 /*
@@ -315,7 +334,8 @@ Type predictedType(const IRGS&, const Location&);
 
 #define IMM_BLA        const ImmVector&
 #define IMM_SLA        const ImmVector&
-#define IMM_ILA        const ImmVector&
+#define IMM_ILA        const IterTable&
+#define IMM_I32LA      const ImmVector&
 #define IMM_VSA        const ImmVector&
 #define IMM_IVA        uint32_t
 #define IMM_I64A       int64_t
@@ -331,12 +351,14 @@ Type predictedType(const IRGS&, const Location&);
 #define IMM_OA(subop)  subop
 #define IMM_KA         MemberKey
 #define IMM_LAR        LocalRange
+#define IMM_FCA        FCallArgs
 
 #define NA /*  */
 #define ONE(x0)              , IMM_##x0
 #define TWO(x0, x1)          , IMM_##x0, IMM_##x1
 #define THREE(x0, x1, x2)    , IMM_##x0, IMM_##x1, IMM_##x2
 #define FOUR(x0, x1, x2, x3) , IMM_##x0, IMM_##x1, IMM_##x2, IMM_##x3
+#define FIVE(x0, x1, x2, x3, x4) , IMM_##x0, IMM_##x1, IMM_##x2, IMM_##x3, IMM_##x4
 
 #define O(name, imms, ...) void emit##name(IRGS& imms);
   OPCODES
@@ -347,11 +369,13 @@ Type predictedType(const IRGS&, const Location&);
 #undef TWO
 #undef THREE
 #undef FOUR
+#undef FIVE
 
 #undef IMM_MA
 #undef IMM_BLA
 #undef IMM_SLA
 #undef IMM_ILA
+#undef IMM_I32LA
 #undef IMM_VSA
 #undef IMM_IVA
 #undef IMM_I64A
@@ -367,6 +391,7 @@ Type predictedType(const IRGS&, const Location&);
 #undef IMM_OA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_FCA
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -47,8 +47,10 @@ ProfTransRec::ProfTransRec(SrcKey sk, int nArgs)
     : m_kind(TransKind::ProfPrologue)
     , m_prologueArgs(nArgs)
     , m_sk(sk)
-    , m_callers()
-{}
+    , m_callers{}
+{
+  m_callers = std::make_unique<CallerRec>();
+}
 
 ProfTransRec::~ProfTransRec() {
   if (m_kind == TransKind::Profile) {
@@ -56,7 +58,7 @@ ProfTransRec::~ProfTransRec() {
     return;
   }
   assertx(m_kind == TransKind::ProfPrologue);
-  m_callers.~CallerRec();
+  m_callers.~CallerRecPtr();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -159,13 +161,30 @@ void ProfData::addTransProfPrologue(TransID transID, SrcKey sk, int nArgs) {
   m_transRecs[transID].reset(new ProfTransRec(sk, nArgs));
 }
 
+void ProfData::addProfTrans(TransID transID,
+                            std::unique_ptr<ProfTransRec> ptr) {
+  assertx(transID >= m_transRecs.size());
+  if (transID > m_transRecs.size()) m_transRecs.resize(transID);
+  auto const sk = ptr->srcKey();
+  if (ptr->kind() == TransKind::Profile) {
+    if (sk.func()->isDVEntry(sk.offset())) {
+      m_dvFuncletDB.emplace(sk.toAtomicInt(), transID);
+    }
+    m_funcProfTrans[sk.funcID()].push_back(transID);
+  } else {
+    m_proflogueDB.emplace(PrologueID{sk.funcID(), ptr->prologueArgs()},
+                          transID);
+  }
+  m_transRecs.emplace_back(std::move(ptr));
+}
+
 bool ProfData::anyBlockEndsAt(const Func* func, Offset offset) {
   auto it = m_blockEndOffsets.find(func->getFuncId());
   if (it == m_blockEndOffsets.end()) {
     Arena arena;
     Verifier::GraphBuilder builder{arena, func};
     auto cfg = builder.build();
-    std::unordered_set<Offset> offsets;
+    jit::fast_set<Offset> offsets;
 
     for (auto blocks = linearBlocks(cfg); !blocks.empty(); ) {
       auto last = blocks.popFront()->last - func->unit()->entry();
@@ -206,7 +225,12 @@ struct ProfDataTreadmillDeleter {
 };
 }
 
-__thread ProfData* tl_profData{nullptr};
+std::atomic_bool ProfData::s_triedDeserialization{false};
+std::atomic_bool ProfData::s_wasDeserialized{false};
+std::atomic<StringData*> ProfData::s_buildHost{nullptr};
+std::atomic<int64_t> ProfData::s_buildTime{0};
+
+RDS_LOCAL_NO_CHECK(ProfData*, rl_profData)(nullptr);
 
 void processInitProfData() {
   if (!RuntimeOption::EvalJitPGO) return;
@@ -215,11 +239,11 @@ void processInitProfData() {
 }
 
 void requestInitProfData() {
-  tl_profData = s_profData.load(std::memory_order_relaxed);
+  *rl_profData = s_profData.load(std::memory_order_relaxed);
 }
 
 void requestExitProfData() {
-  tl_profData = nullptr;
+  *rl_profData = nullptr;
 }
 
 const ProfData* globalProfData() {
@@ -266,12 +290,6 @@ std::vector<ProfData::TargetProfileInfo> ProfData::getTargetProfiles(
   } else {
     return std::vector<TargetProfileInfo>{};
   }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-bool hasEnoughProfDataToRetranslateAll() {
-  return requestCount() >= RuntimeOption::EvalJitRetranslateAllRequest;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_1803() {
 $directory = __DIR__."/../../sample_dir";
 $fileSPLObjects = new RecursiveIteratorIterator(
   new RecursiveDirectoryIterator($directory),
@@ -10,7 +13,7 @@ foreach( $fileSPLObjects as $fullFileName => $fileSPLObject ) {
   if (substr($fullFileName,-1)=='.') continue;
   $files[] = $fullFileName . " " .$fileSPLObject->getFilename(). "\n";
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
 
 $fileSPLObjects = new RecursiveIteratorIterator(
@@ -22,7 +25,7 @@ foreach( $fileSPLObjects as $fullFileName => $fileSPLObject ) {
   if (substr($fullFileName,-1)=='.') continue;
   $files[] = $fullFileName . " " .$fileSPLObject->getFilename(). "\n";
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
 
 $fileSPLObjects = new RecursiveIteratorIterator(
@@ -34,7 +37,7 @@ foreach( $fileSPLObjects as $fullFileName => $fileSPLObject ) {
   if (substr($fullFileName,-1)=='.') continue;
   $files[] = $fullFileName . " " .$fileSPLObject->getFilename(). "\n";
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
 
 // invalid mode -100
@@ -46,7 +49,7 @@ foreach( $fileSPLObjects as $fullFileName => $fileSPLObject ) {
   if (substr($fullFileName,-1)=='.') continue;
   $files[] = $fullFileName . " " .$fileSPLObject->getFilename(). "\n";
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
 
 // two foreaches
@@ -62,5 +65,6 @@ foreach( $fileSPLObjects as $fullFileName => $fileSPLObject ) {
   if (substr($fullFileName,-1)=='.') continue;
   $files[] = $fullFileName . " " .$fileSPLObject->getFilename(). "\n";
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
+}

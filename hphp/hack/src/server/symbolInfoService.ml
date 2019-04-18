@@ -2,30 +2,28 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
-open SymbolInfoServiceTypes
+open Hh_core
+open ServerCommandTypes.Symbol_info_service
 
 (* This module dumps all the symbol info(like fun-calls) in input files *)
 
-let recheck_naming filename_l tcopt =
+let recheck_naming filename_l =
   List.iter filename_l begin fun file ->
     match Parser_heap.ParserHeap.get file with
     | Some (ast, _) -> begin
-      let tcopt = TypecheckerOptions.make_permissive tcopt in
         Errors.ignore_ begin fun () ->
           (* We only need to name to find references to locals *)
           List.iter ast begin function
             | Ast.Fun f ->
-                let _ = Naming.fun_ tcopt f in
+                let _ = Naming.fun_ f in
                 ()
             | Ast.Class c ->
-                let _ = Naming.class_ tcopt c in
+                let _ = Naming.class_ c in
                 ()
             | _ -> ()
           end
@@ -34,23 +32,12 @@ let recheck_naming filename_l tcopt =
     | None -> () (* Do nothing if the file is not in parser heap *)
   end
 
-let recheck_typing filetuple_l tcopt =
-  let tcopt = TypecheckerOptions.make_permissive tcopt in
-  ignore(ServerIdeUtils.recheck tcopt filetuple_l)
-
 let helper tcopt acc filetuple_l  =
-  let fun_call_map = ref Pos.Map.empty in
-  SymbolFunCallService.attach_hooks fun_call_map;
-  let type_map = ref Pos.Map.empty in
-  let lvar_map = ref Pos.Map.empty in
-  SymbolTypeService.attach_hooks type_map lvar_map;
   let filename_l = List.rev_map filetuple_l fst in
-  recheck_naming filename_l tcopt;
-  recheck_typing filetuple_l tcopt;
-  SymbolFunCallService.detach_hooks ();
-  SymbolTypeService.detach_hooks ();
-  let fun_calls = Pos.Map.values !fun_call_map in
-  let symbol_types = SymbolTypeService.generate_types !lvar_map !type_map in
+  recheck_naming filename_l;
+  let tasts = ServerIdeUtils.recheck tcopt filetuple_l |> List.map ~f:snd in
+  let fun_calls = SymbolFunCallService.find_fun_calls tasts in
+  let symbol_types = SymbolTypeService.generate_types tasts in
   (fun_calls, symbol_types) :: acc
 
 let parallel_helper workers filetuple_l tcopt =
@@ -80,7 +67,7 @@ let go workers file_list env =
   (* Convert 'string list' into 'fileinfo list' *)
   let filetuple_l = List.fold_left file_list ~f:begin fun acc file_path ->
     let fn = Relative_path.create Relative_path.Root file_path in
-    match Relative_path.Map.get env.ServerEnv.files_info fn with
+    match Naming_table.get_file_info env.ServerEnv.naming_table fn with
     | Some fileinfo -> (fn, fileinfo) :: acc
     | None -> acc
   end ~init:[]

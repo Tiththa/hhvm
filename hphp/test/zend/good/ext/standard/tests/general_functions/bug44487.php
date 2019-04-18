@@ -11,7 +11,6 @@ class Foo
 
 try {
         $bar = new Foo();
-        call_user_method_array('test', $bar, array()) ;
+        call_user_method_array('test', &$bar, array()) ;
 } catch (Exception $e) {
 }
-?>

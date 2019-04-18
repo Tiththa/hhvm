@@ -2,9 +2,13 @@
 
 function foo() {
   $lol = new stdclass;
-  $x[$lol] = 2;
+  $x = [$lol => 2];
   var_dump($x);
 }
 
-foo();
 
+
+<<__EntryPoint>>
+function main_minstr_001() {
+foo();
+}

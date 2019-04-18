@@ -1,9 +1,6 @@
 """
 GDB commands related to the HHVM stack.
 """
-# @lint-avoid-python-3-compatibility-imports
-# @lint-avoid-pyflakes3
-# @lint-avoid-pyflakes2
 
 from compatibility import *
 
@@ -79,7 +76,7 @@ The output backtrace has the following format:
 
         # Set fp = $rbp, rip = $rip.
         fp_type = T('uintptr_t').pointer()
-        fp = native_frame.read_register('rbp').cast(fp_type)
+        fp = native_frame.read_register(arch_regs()['fp']).cast(fp_type)
         rip = native_frame.pc()
 
         if len(argv) == 1:
@@ -196,8 +193,8 @@ The output backtrace has the following format:
             return
 
         fp_type = T('uintptr_t').pointer()
-        fp = gdb.parse_and_eval('$rbp').cast(fp_type)
-        rip = gdb.parse_and_eval('$rip').cast(T('uintptr_t'))
+        fp = gdb.parse_and_eval('$' + arch_regs()['fp']).cast(fp_type)
+        rip = gdb.parse_and_eval('$' + arch_regs()['ip']).cast(T('uintptr_t'))
 
         if len(argv) >= 1:
             fp = argv[0].cast(fp_type)

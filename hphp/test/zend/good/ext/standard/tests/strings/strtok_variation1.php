@@ -86,7 +86,7 @@ for($index = 0; $index < count($values); $index ++) {
   echo "-- Iteration $counter --\n";
   $str = $values [$index];
 
-  var_dump( strtok($str, $token) );
+  try { var_dump( strtok($str, $token) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
   $counter ++;
 }
@@ -95,4 +95,3 @@ for($index = 0; $index < count($values); $index ++) {
 fclose($file_handle);
 
 echo "Done\n";
-?>

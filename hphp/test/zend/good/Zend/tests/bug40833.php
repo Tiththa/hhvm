@@ -8,12 +8,15 @@
 		{
 			if ( isset($this->data[$name]) )
 				return $this->data[$name];
-			else
+			else {
+				$this->data = array();
 				return $this->data[$name] = new set($this);
+			}
 		}
 
 		function __set($name, $value)
 		{
+			if ($this->modified === null) $this->modified = array();
 			$this->modified[$name] = $value;
 		}
 	}
@@ -64,4 +67,3 @@
 
 	echo($entity->whatever[0]);
 	echo "ok\n";
-?>

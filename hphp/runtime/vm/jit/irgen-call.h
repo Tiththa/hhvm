@@ -18,6 +18,9 @@
 
 #include <cstdint>
 
+#include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/jit/stack-offsets.h"
+
 namespace HPHP {
 
 struct StringData;
@@ -34,18 +37,27 @@ struct IRGS;
 
 //////////////////////////////////////////////////////////////////////
 
-void fpushActRec(IRGS& env,
-                 SSATmp* func,
-                 SSATmp* objOrClass,
-                 uint32_t numArgs,
-                 const StringData* invName);
+IRSPRelOffset fsetActRec(
+  IRGS& env,
+  SSATmp* func,
+  SSATmp* objOrClass,
+  uint32_t numArgs,
+  const StringData* invName,
+  bool dynamicCall,
+  SSATmp* tsList
+);
 
 void emitDirectCall(IRGS& env, Func* callee, uint32_t numParams,
                     SSATmp* const* const args);
 
-SSATmp* implFCall(IRGS& env, uint32_t numParams);
+void emitCallerDynamicCallChecks(IRGS& env,
+                                 const Func* callee,
+                                 IRSPRelOffset actRecOff);
+void emitCallerDynamicConstructChecks(IRGS& env, SSATmp* cls);
+void emitCallerRxChecks(IRGS& env, const Func* callee, IRSPRelOffset actRecOff);
 
 Type callReturnType(const Func* callee);
+Type awaitedCallReturnType(const Func* callee);
 
 //////////////////////////////////////////////////////////////////////
 

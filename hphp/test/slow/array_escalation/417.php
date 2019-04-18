@@ -9,7 +9,11 @@ function test() {
   }
   unset($a[16]);
   $b = $a;
-  array_unshift($a, 'foo');
+  array_unshift(&$a, 'foo');
   var_dump(count($a), count($b));
 }
+
+<<__EntryPoint>>
+function main_417() {
 test();
+}

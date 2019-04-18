@@ -9,8 +9,6 @@ $gflags = 0;
 
 foreach($files as $name => $cont)
 {
-	global $gflags, $files;
-
 	$comp = NULL;
 	$crc32= NULL;
 	$clen = NULL;
@@ -22,14 +20,16 @@ foreach($files as $name => $cont)
 
 	// overwrite if array
 	if (is_array($cont))
-	{
-		foreach(array('comp','crc32','clen','ulen','time','flags','perm','meta','cont') as $what)
-		{
-			if (isset($cont[$what]))
-			{
-				$$what = $cont[$what];
-			}
-		}
+  {
+    if (isset($cont['comp']))  $comp  = $cont['comp'];
+    if (isset($cont['crc32'])) $crc32 = $cont['crc32'];
+    if (isset($cont['clen']))  $clen  = $cont['clen'];
+    if (isset($cont['ulen']))  $ulen  = $cont['ulen'];
+    if (isset($cont['time']))  $time  = $cont['time'];
+    if (isset($cont['flags'])) $flags = $cont['flags'];
+    if (isset($cont['perm']))  $perm  = $cont['perm'];
+    if (isset($cont['meta']))  $meta  = $cont['meta'];
+    if (isset($cont['cont']))  $cont  = $cont['cont'];
 	}
 
 	// create if not yet done
@@ -41,7 +41,7 @@ foreach($files as $name => $cont)
 
 	// write manifest entry
 	$manifest .= pack('V', strlen($name)) . (binary)$name;
-	$manifest .= pack('VVVVVV', $ulen, $time, $clen, $crc32, $flags|$perm, strlen($meta)) . (binary)$meta;
+	$manifest .= pack('VVVVVV', $ulen, $time, $clen, $crc32, $flags|$perm, $meta === null ? 0 : strlen($meta)) . (binary)$meta;
 
 	// globals
 	$gflags |= $flags;
@@ -75,4 +75,3 @@ if (@$bz2) {
 	fclose($fp);
 }
 
-?>

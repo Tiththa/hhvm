@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -39,15 +38,15 @@ module Typedef = struct
 end
 
 module GConst = struct
-  type t = decl ty
+  type t = decl ty * Errors.t
   let prefix = Prefix.make()
   let description = "GConst"
 end
 
-module Funs = SharedMem.WithCache (StringKey) (Fun)
-module Classes = SharedMem.WithCache (StringKey) (Class)
-module Typedefs = SharedMem.WithCache (StringKey) (Typedef)
-module GConsts = SharedMem.WithCache (StringKey) (GConst)
+module Funs = SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Fun)
+module Classes = SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Class)
+module Typedefs = SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Typedef)
+module GConsts = SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (GConst)
 
 module Property = struct
   type t = decl ty
@@ -89,8 +88,8 @@ module ClassEltKey = struct
   let to_string (cls, elt) = cls ^ "::" ^ elt
 end
 
-module Props = SharedMem.WithCache (ClassEltKey) (Property)
-module StaticProps = SharedMem.WithCache (ClassEltKey) (StaticProperty)
-module Methods = SharedMem.WithCache (ClassEltKey) (Method)
-module StaticMethods = SharedMem.WithCache (ClassEltKey) (StaticMethod)
-module Constructors = SharedMem.WithCache (StringKey) (Constructor)
+module Props = SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (Property)
+module StaticProps = SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (StaticProperty)
+module Methods = SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (Method)
+module StaticMethods = SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (StaticMethod)
+module Constructors = SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Constructor)

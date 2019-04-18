@@ -19,9 +19,8 @@
 
 #include <folly/Memory.h>
 
-#include "hphp/parser/parser.h"
-
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/blob-helper.h"
 #include "hphp/runtime/vm/native.h"
@@ -29,14 +28,17 @@
 
 namespace HPHP {
 
+std::string NewAnonymousClassName(const std::string& name) {
+  static std::atomic<uint32_t> next_anon_class;
+  return folly::sformat("{};{}", name, next_anon_class.fetch_add(1));
+}
+
 namespace {
 
 const StringData* preClassName(const std::string& name) {
-  static std::atomic<uint32_t> next_anon_class;
-  if (ParserBase::IsAnonymousClassName(name)) {
+  if (PreClassEmitter::IsAnonymousClassName(name)) {
     if (name.find(';') == std::string::npos) {
-      return makeStaticString(
-        folly::sformat("{};{}", name, next_anon_class.fetch_add(1)));
+      return makeStaticString(NewAnonymousClassName(name));
     }
   }
   return makeStaticString(name);
@@ -50,15 +52,19 @@ const StringData* preClassName(const std::string& name) {
 PreClassEmitter::Prop::Prop(const PreClassEmitter* pce,
                             const StringData* n,
                             Attr attrs,
-                            const StringData* typeConstraint,
+                            const StringData* userType,
+                            const TypeConstraint& typeConstraint,
                             const StringData* docComment,
                             const TypedValue* val,
-                            RepoAuthType repoAuthType)
+                            RepoAuthType repoAuthType,
+                            UserAttributeMap userAttributes)
   : m_name(n)
   , m_attrs(attrs)
-  , m_typeConstraint(typeConstraint)
+  , m_userType(userType)
   , m_docComment(docComment)
   , m_repoAuthType(repoAuthType)
+  , m_typeConstraint(typeConstraint)
+  , m_userAttributes(userAttributes)
 {
   m_mangledName = PreClass::manglePropName(pce->name(), n, attrs);
   memcpy(&m_val, val, sizeof(TypedValue));
@@ -70,8 +76,6 @@ PreClassEmitter::Prop::~Prop() {
 //=============================================================================
 // PreClassEmitter.
 
-extern const StaticString s_Closure;
-
 PreClassEmitter::PreClassEmitter(UnitEmitter& ue,
                                  Id id,
                                  const std::string& n,
@@ -79,11 +83,7 @@ PreClassEmitter::PreClassEmitter(UnitEmitter& ue,
   : m_ue(ue)
   , m_name(preClassName(n))
   , m_id(id)
-  , m_hoistable(hoistable) {
-  if (m_name->isame(s_Closure.get())) {
-    setClosurePreClass();
-  }
-}
+  , m_hoistable(hoistable) {}
 
 void PreClassEmitter::init(int line1, int line2, Offset offset, Attr attrs,
                            const StringData* parent,
@@ -122,34 +122,41 @@ bool PreClassEmitter::addMethod(FuncEmitter* method) {
 
 void PreClassEmitter::renameMethod(const StringData* oldName,
                                    const StringData* newName) {
-  MethodMap::const_iterator it = m_methodMap.find(oldName);
-  assert(it != m_methodMap.end());
-  it->second->name = newName;
-  m_methodMap[newName] = it->second;
-  m_methodMap.erase(oldName);
+  assertx(m_methodMap.count(oldName));
+  auto it = m_methodMap.find(oldName);
+  auto fe = it->second;
+  m_methodMap.erase(it);
+  fe->name = newName;
+  m_methodMap[newName] = fe;
 }
 
 bool PreClassEmitter::addProperty(const StringData* n, Attr attrs,
-                                  const StringData* typeConstraint,
+                                  const StringData* userType,
+                                  const TypeConstraint& typeConstraint,
                                   const StringData* docComment,
                                   const TypedValue* val,
-                                  RepoAuthType repoAuthType) {
+                                  RepoAuthType repoAuthType,
+                                  UserAttributeMap userAttributes) {
+  assertx(typeConstraint.validForProp());
   PropMap::Builder::const_iterator it = m_propMap.find(n);
   if (it != m_propMap.end()) {
     return false;
   }
-  PreClassEmitter::Prop prop(this, n, attrs, typeConstraint, docComment, val,
-    repoAuthType);
+  // LateInitSoft implies LateInit
+  if (attrs & AttrLateInitSoft) attrs |= AttrLateInit;
+  PreClassEmitter::Prop prop{
+    this,
+    n,
+    attrs,
+    userType,
+    typeConstraint,
+    docComment,
+    val,
+    repoAuthType,
+    userAttributes
+  };
   m_propMap.add(prop.name(), prop);
   return true;
-}
-
-const PreClassEmitter::Prop&
-PreClassEmitter::lookupProp(const StringData* propName) const {
-  PropMap::Builder::const_iterator it = m_propMap.find(propName);
-  assert(it != m_propMap.end());
-  Slot idx = it->second;
-  return m_propMap[idx];
 }
 
 bool PreClassEmitter::addAbstractConstant(const StringData* n,
@@ -176,8 +183,9 @@ bool PreClassEmitter::addConstant(const StringData* n,
   }
   TypedValue tvVal;
   if (typeconst && !typeStructure.empty())  {
-    tvVal = make_tv<KindOfPersistentArray>(typeStructure.get());
-    assert(tvIsPlausible(tvVal));
+    assertx(typeStructure.isDictOrDArray());
+    tvVal = make_persistent_array_like_tv(typeStructure.get());
+    assertx(tvIsPlausible(tvVal));
   } else {
     tvVal = *val;
   }
@@ -198,10 +206,6 @@ void PreClassEmitter::addTraitPrecRule(
 void PreClassEmitter::addTraitAliasRule(
     const PreClass::TraitAliasRule &rule) {
   m_traitAliasRules.push_back(rule);
-}
-
-void PreClassEmitter::addUserAttribute(const StringData* name, TypedValue tv) {
-  m_userAttributes[name] = tv;
 }
 
 void PreClassEmitter::commit(RepoTxn& txn) const {
@@ -227,19 +231,19 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     attrs = Attr(attrs & ~AttrPersistent);
   }
 
+  assertx(attrs & AttrPersistent || SystemLib::s_inited);
+
   auto pc = std::make_unique<PreClass>(
     &unit, m_line1, m_line2, m_offset, m_name,
     attrs, m_parent, m_docComment, m_id,
     m_hoistable);
-  pc->m_instanceCtor = m_instanceCtor;
-  pc->m_instanceDtor = m_instanceDtor;
   pc->m_interfaces = m_interfaces;
   pc->m_usedTraits = m_usedTraits;
   pc->m_requirements = m_requirements;
   pc->m_traitPrecRules = m_traitPrecRules;
   pc->m_traitAliasRules = m_traitAliasRules;
   pc->m_enumBaseTy = m_enumBaseTy;
-  pc->m_numDeclMethods = m_numDeclMethods;
+  pc->m_numDeclMethods = -1;
   pc->m_ifaceVtableSlot = m_ifaceVtableSlot;
 
   // Set user attributes.
@@ -253,7 +257,7 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     if (it == m_userAttributes.end()) return;
 
     TypedValue ndiInfo = it->second;
-    if (!isArrayType(ndiInfo.m_type)) return;
+    if (!isArrayLikeType(ndiInfo.m_type)) return;
 
     // Use the first string label which references a registered type.  In
     // practice, there should generally only be one item and it should be a
@@ -271,6 +275,13 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
   for (MethodVec::const_iterator it = m_methods.begin();
        it != m_methods.end(); ++it) {
     Func* f = (*it)->create(unit, pc.get());
+    if (f->attrs() & AttrTrait) {
+      if (pc->m_numDeclMethods == -1) {
+        pc->m_numDeclMethods = it - m_methods.begin();
+      }
+    } else if (!f->isGenerated()) {
+      assertx(pc->m_numDeclMethods == -1);
+    }
     methodBuild.add(f->name(), f);
   }
   pc->m_methods.create(methodBuild);
@@ -281,10 +292,12 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     propBuild.add(prop.name(), PreClass::Prop(pc.get(),
                                               prop.name(),
                                               prop.attrs(),
+                                              prop.userType(),
                                               prop.typeConstraint(),
                                               prop.docComment(),
                                               prop.val(),
-                                              prop.repoAuthType()));
+                                              prop.repoAuthType(),
+                                              prop.userAttributes()));
   }
   pc->m_properties.create(propBuild);
 
@@ -293,7 +306,7 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     const Const& const_ = m_constMap[i];
     TypedValueAux tvaux;
     if (const_.isAbstract()) {
-      tvWriteUninit(&tvaux);
+      tvWriteUninit(tvaux);
       tvaux.constModifiers().isAbstract = true;
     } else {
       tvCopy(const_.val(), tvaux);
@@ -330,7 +343,6 @@ template<class SerDe> void PreClassEmitter::serdeMetaData(SerDe& sd) {
     (m_attrs)
     (m_parent)
     (m_docComment)
-    (m_numDeclMethods)
     (m_ifaceVtableSlot)
 
     (m_interfaces)
@@ -343,6 +355,12 @@ template<class SerDe> void PreClassEmitter::serdeMetaData(SerDe& sd) {
     (m_constMap)
     (m_enumBaseTy)
     ;
+
+    if (SerDe::deserializing) {
+      for (unsigned i = 0; i < m_propMap.size(); ++i) {
+        m_propMap[i].resolveArray(this);
+      }
+    }
 }
 
 //=============================================================================
@@ -359,12 +377,12 @@ PreClassRepoProxy::~PreClassRepoProxy() {
 
 void PreClassRepoProxy::createSchema(int repoId, RepoTxn& txn) {
   {
-    std::stringstream ssCreate;
-    ssCreate << "CREATE TABLE " << m_repo.table(repoId, "PreClass")
-             << "(unitSn INTEGER, preClassId INTEGER, name TEXT,"
-                " hoistable INTEGER, extraData BLOB,"
-                " PRIMARY KEY (unitSn, preClassId));";
-    txn.exec(ssCreate.str());
+    auto createQuery = folly::sformat(
+      "CREATE TABLE {} "
+      "(unitSn INTEGER, preClassId INTEGER, name TEXT, hoistable INTEGER, "
+      " extraData BLOB, PRIMARY KEY (unitSn, preClassId));",
+      m_repo.table(repoId, "PreClass"));
+    txn.exec(createQuery);
   }
 }
 
@@ -374,11 +392,11 @@ void PreClassRepoProxy::InsertPreClassStmt
                                const StringData* name,
                                PreClass::Hoistable hoistable) {
   if (!prepared()) {
-    std::stringstream ssInsert;
-    ssInsert << "INSERT INTO " << m_repo.table(m_repoId, "PreClass")
-             << " VALUES(@unitSn, @preClassId, @name, @hoistable, "
-                "@extraData);";
-    txn.prepare(*this, ssInsert.str());
+    auto insertQuery = folly::sformat(
+      "INSERT INTO {} "
+      "VALUES(@unitSn, @preClassId, @name, @hoistable, @extraData);",
+      m_repo.table(m_repoId, "PreClass"));
+    txn.prepare(*this, insertQuery);
   }
 
   auto n = name->slice();
@@ -386,7 +404,7 @@ void PreClassRepoProxy::InsertPreClassStmt
     std::string::npos : qfind(n, ';');
   auto const nm = pos == std::string::npos ?
     n : folly::StringPiece{n.data(), pos};
-  BlobEncoder extraBlob;
+  BlobEncoder extraBlob{pce.useGlobalIds()};
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", unitSn);
   query.bindId("@preClassId", preClassId);
@@ -399,13 +417,14 @@ void PreClassRepoProxy::InsertPreClassStmt
 
 void PreClassRepoProxy::GetPreClassesStmt
                       ::get(UnitEmitter& ue) {
-  RepoTxn txn(m_repo);
+  auto txn = RepoTxn{m_repo.begin()};
   if (!prepared()) {
-    std::stringstream ssSelect;
-    ssSelect << "SELECT preClassId,name,hoistable,extraData FROM "
-             << m_repo.table(m_repoId, "PreClass")
-             << " WHERE unitSn == @unitSn ORDER BY preClassId ASC;";
-    txn.prepare(*this, ssSelect.str());
+    auto selectQuery = folly::sformat(
+      "SELECT preClassId, name, hoistable, extraData "
+      "FROM {} "
+      "WHERE unitSn == @unitSn ORDER BY preClassId ASC;",
+      m_repo.table(m_repoId, "PreClass"));
+    txn.prepare(*this, selectQuery);
   }
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", ue.m_sn);
@@ -415,15 +434,15 @@ void PreClassRepoProxy::GetPreClassesStmt
       Id preClassId;          /**/ query.getId(0, preClassId);
       std::string name;       /**/ query.getStdString(1, name);
       int hoistable;          /**/ query.getInt(2, hoistable);
-      BlobDecoder extraBlob = /**/ query.getBlob(3);
+      BlobDecoder extraBlob = /**/ query.getBlob(3, ue.useGlobalIds());
       PreClassEmitter* pce = ue.newPreClassEmitter(
         name, (PreClass::Hoistable)hoistable);
       pce->serdeMetaData(extraBlob);
       if (!SystemLib::s_inited) {
-        assert(pce->attrs() & AttrPersistent);
-        assert(pce->attrs() & AttrUnique);
+        assertx(pce->attrs() & AttrPersistent);
+        assertx(pce->attrs() & AttrUnique);
       }
-      assert(pce->id() == preClassId);
+      assertx(pce->id() == preClassId);
     }
   } while (!query.done());
   txn.commit();

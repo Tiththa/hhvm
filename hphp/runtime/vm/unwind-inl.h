@@ -32,20 +32,6 @@ inline void exception_handler(Action action) {
     return;
   }
 
-  /*
-   * Unwind (repropagating from a fault funclet) is slightly different
-   * from the throw cases, because we need to re-raise the exception
-   * as if it came from the same offset to handle nested fault
-   * handlers correctly, and we continue propagating the current Fault
-   * instead of pushing a new one.
-   */
-  catch (const VMPrepareUnwind&) {
-    checkVMRegState();
-    ITRACE_MOD(Trace::unwind, 1, "unwind: restoring offset {}\n", vmpc());
-    unwindPhp();
-    return;
-  }
-
   catch (const Object& o) {
     checkVMRegState();
     ITRACE_MOD(Trace::unwind, 1, "unwind: Object of class {}\n",
@@ -57,7 +43,7 @@ inline void exception_handler(Action action) {
       return;
     }
 
-    assert(!vmpc());
+    assertx(!vmpc());
     // o will be destroyed at the end of the catch block
     // so we have to make sure the vm state is valid in
     // case a __destruct method needs to run.
@@ -80,14 +66,6 @@ inline void exception_handler(Action action) {
     return;
   }
 
-  catch (VMSuspendStack&) {
-    checkVMRegState();
-    ITRACE_MOD(Trace::unwind, 1, "unwind: VMSuspendStack from {}\n",
-               vmfp()->m_func->fullName()->data());
-    suspendStack(vmpc());
-    return;
-  }
-
   catch (VMStackOverflow&) {
     checkVMRegState();
     ITRACE_MOD(Trace::unwind, 1, "unwind: VMStackOverflow\n");
@@ -101,12 +79,11 @@ inline void exception_handler(Action action) {
        * details.
        */
       auto const outer = fp->m_sfp;
-      auto const off = outer->func()->base() + fp->m_soff;
-      auto const fe = outer->func()->findPrecedingFPI(off);
-      vmpc() = outer->func()->unit()->at(fe->m_fpiEndOff);
+      auto const off = outer->func()->base() + fp->m_callOff;
+      vmpc() = outer->func()->unit()->at(off);
       assertx(isFCallStar(peek_op(vmpc())));
       vmfp() = outer;
-      assert(vmsp() == reinterpret_cast<Cell*>(fp) - fp->numArgs());
+      assertx(vmsp() == reinterpret_cast<Cell*>(fp) - fp->numArgs());
     } else {
       vmsp() = reinterpret_cast<Cell*>(fp + 1);
     }

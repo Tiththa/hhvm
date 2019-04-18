@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 
 (*****************************************************************************)
 (* Table containing all the HH_FIXMEs found in the source code.
@@ -20,11 +19,22 @@ open Core
  *)
 (*****************************************************************************)
 
-module HH_FIXMES = SharedMem.WithCache (Relative_path.S) (struct
+module HH_FIXMES = SharedMem.WithCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
   type t = Pos.t IMap.t IMap.t
   let prefix = Prefix.make()
   let description = "HH_FIXMES"
   end)
+
+module DECL_HH_FIXMES = SharedMem.WithCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
+  type t = Pos.t IMap.t IMap.t
+  let prefix = Prefix.make()
+  let description = "DECL_HH_FIXMES"
+  end)
+
+let get_fixmes_from_heap filename =
+  match HH_FIXMES.get filename with
+  | None -> DECL_HH_FIXMES.get filename
+  | Some x -> Some x
 
 (*****************************************************************************)
 (* We register the function that can look up a position and determine if
@@ -39,7 +49,7 @@ let () =
   Errors.get_hh_fixme_pos := begin fun err_pos err_code ->
     let filename = Pos.filename err_pos in
     let err_line, _, _ = Pos.info_pos err_pos in
-    HH_FIXMES.get filename
+    get_fixmes_from_heap filename
     |> Option.value_map ~f:(IMap.get err_line) ~default:None
     |> Option.value_map ~f:(IMap.get err_code) ~default:None
     end;
@@ -70,22 +80,22 @@ let add_applied_fixme applied_fixmes err_code fn err_line =
     (add_applied_fixme_file file_value err_code err_line)
 
 let get_unused_fixmes_for codes applied_fixme_map fn acc =
-  match HH_FIXMES.get fn with
+  match get_fixmes_from_heap fn with
   | None -> acc
   | Some fixme_map ->
     IMap.fold (fun line code_map acc ->
       IMap.fold (fun code fixme_pos acc ->
-        if (List.mem codes code || (List.is_empty codes && code < 5000))
+        if (List.mem codes code ~equal:(=) || (List.is_empty codes && code < 5000))
            && not (fixme_was_applied applied_fixme_map fn line code)
         then fixme_pos :: acc
         else acc) code_map acc) fixme_map acc
 
-let get_unused_fixmes codes applied_fixmes files_info  =
+let get_unused_fixmes codes applied_fixmes fold files_info  =
   let applied_fixme_map =
     List.fold_left applied_fixmes ~init:Relative_path.Map.empty
       ~f:begin fun acc (pos,code) ->
       let fn = Pos.filename pos in
       let line, _, _ = Pos.info_pos pos in
       add_applied_fixme acc code fn line end in
-  Relative_path.Map.fold files_info ~f:(fun fn _ acc ->
-    get_unused_fixmes_for codes applied_fixme_map fn acc) ~init:[]
+  fold files_info ~init:[] ~f:(fun fn _ acc ->
+    get_unused_fixmes_for codes applied_fixme_map fn acc)

@@ -1,31 +1,17 @@
 <?php
+const pass3 = 1;
+const pass2 = 1;
+function errorHandler($errorNumber, $errorMessage, $fileName, $lineNumber) {
+  include(__FILE__);
+  die("Error: $errorMessage ($fileName:$lineNumber)\n");
+}
 if (defined("pass3")) {
-
-  class ErrorClass {
-  }
-
+  include 'bug35634-1.inc';
 } else if (defined("pass2")) {
-
-  class TestClass {
-    function __construct() {
-    }
-    function TestClass() {
-      $this->__construct();
-    }
-  }
-
+  include 'bug35634-2.inc';
 } else {
-
-  function errorHandler($errorNumber, $errorMessage, $fileName, $lineNumber) {
-    define("pass3", 1);
-    include(__FILE__);
-    die("Error: $errorMessage ($fileName:$lineNumber)\n");
-  }
-
   set_error_handler('errorHandler');
-  define("pass2", 1);
   include(__FILE__);
   print "ok\n";
 }
 
-?>

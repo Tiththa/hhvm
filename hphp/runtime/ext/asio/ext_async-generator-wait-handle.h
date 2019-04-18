@@ -59,12 +59,16 @@ struct c_AsyncGeneratorWaitHandle final : c_ResumableWaitHandle {
     return offsetof(c_AsyncGeneratorWaitHandle, m_blockable);
   }
 
-  static req::ptr<c_AsyncGeneratorWaitHandle>
-  Create(AsyncGenerator* gen, c_WaitableWaitHandle* child);
+  static c_AsyncGeneratorWaitHandle* Create(
+    const ActRec* fp,
+    jit::TCA resumeAddr,
+    Offset resumeOffset,
+    c_WaitableWaitHandle* child
+  ); // nothrow
 
   void resume();
   void onUnblocked();
-  void await(c_WaitableWaitHandle* child);
+  void await(req::ptr<c_WaitableWaitHandle>&& child);
   void ret(Cell& result);
   void fail(ObjectData* exception);
   void failCpp();
@@ -93,8 +97,8 @@ struct c_AsyncGeneratorWaitHandle final : c_ResumableWaitHandle {
   }
 };
 
-inline c_AsyncGeneratorWaitHandle* c_WaitHandle::asAsyncGenerator() {
-  assert(getKind() == Kind::AsyncGenerator);
+inline c_AsyncGeneratorWaitHandle* c_Awaitable::asAsyncGenerator() {
+  assertx(getKind() == Kind::AsyncGenerator);
   return static_cast<c_AsyncGeneratorWaitHandle*>(this);
 }
 

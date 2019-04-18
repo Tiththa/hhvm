@@ -13,14 +13,17 @@ function still_working()
 	return "I'm still alive";
 }
 
+abstract final class DafnaStatics {
+  public static $foo = 0;
+}
+
 function dafna()
 {
-	static $foo = 0;
-	
+
 	print "Dafna!\n";
 	print call_user_func("still_working")."\n";
-	$foo++;
-	return (string) $foo;
+	DafnaStatics::$foo++;
+	return (string) DafnaStatics::$foo;
 }
 
 
@@ -46,7 +49,5 @@ endfor;
 
 $dafna = new dafna_class();
 
-print $name=call_user_func(array(&$dafna,"GetMyName"));
+print $name=call_user_func(array($dafna,"GetMyName"));
 print "\n";
-
-?>

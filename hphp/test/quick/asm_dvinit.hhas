@@ -7,9 +7,11 @@
   Print
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  UnboxR
+  FCall <> 0 1 "" - "" ""
   RetC
 }
 
@@ -64,35 +66,44 @@
 }
 
 .function main() {
+  NullUninit
+  NullUninit
+  NullUninit
+  String "sup: "
   FPushFuncD 1 "foo"
-  String "sup: "
-  FPassC 0
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
-  FPushFuncD 2 "foo"
+  NullUninit
+  NullUninit
+  NullUninit
   String "sup: "
-  FPassC 0
   String " non-default y value\n"
-  FPassC 1
-  FCall 2
-  PopR
+  FPushFuncD 2 "foo"
+  FCall <> 2 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "multiple"
-  FCall 0
-  PopR
-  FPushFuncD 1 "multiple"
+  FCall <> 0 1 "" - "" ""
+  PopC
+  NullUninit
+  NullUninit
+  NullUninit
   String "nondef\n"
-  FPassC 0
-  FCall 1
-  PopR
-  FPushFuncD 2 "multiple"
+  FPushFuncD 1 "multiple"
+  FCall <> 1 1 "" - "" ""
+  PopC
+  NullUninit
+  NullUninit
+  NullUninit
   String "nondef1\n"
-  FPassC 0
   String "nondef2\n"
-  FPassC 1
-  FCall 2
-  PopR
+  FPushFuncD 2 "multiple"
+  FCall <> 2 1 "" - "" ""
+  PopC
 
   String "done\n"
   Print

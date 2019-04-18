@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
+ * This source code is licensed under the MIT license found in the
  * LICENSE file in the "hack" directory of this source tree. An additional
- * grant of patent rights can be found in the PATENTS file in the same
  * directory.
  *
  **
@@ -13,8 +12,6 @@
  * To regenerate this file, run
  *
  *   buck run //hphp/hack/src:generate_full_fidelity
- *
- * This module contains the type describing the structure of a syntax tree.
  *
  **
  *
@@ -82,6 +79,8 @@ class EditableSyntax
       return FallThrough.from_json(json, position, source);
     case 'extra_token_error':
       return ExtraTokenError.from_json(json, position, source);
+    case 'after_halt_compiler':
+      return AfterHaltCompiler.from_json(json, position, source);
 
     case 'missing':
       return Missing.missing;
@@ -89,20 +88,28 @@ class EditableSyntax
       return EndOfFile.from_json(json, position, source);
     case 'script':
       return Script.from_json(json, position, source);
+    case 'qualified_name':
+      return QualifiedName.from_json(json, position, source);
     case 'simple_type_specifier':
       return SimpleTypeSpecifier.from_json(json, position, source);
     case 'literal':
       return LiteralExpression.from_json(json, position, source);
+    case 'prefixed_string':
+      return PrefixedStringExpression.from_json(json, position, source);
     case 'variable':
       return VariableExpression.from_json(json, position, source);
-    case 'qualified_name':
-      return QualifiedNameExpression.from_json(json, position, source);
     case 'pipe_variable':
       return PipeVariableExpression.from_json(json, position, source);
+    case 'file_attribute_specification':
+      return FileAttributeSpecification.from_json(json, position, source);
     case 'enum_declaration':
       return EnumDeclaration.from_json(json, position, source);
     case 'enumerator':
       return Enumerator.from_json(json, position, source);
+    case 'record_declaration':
+      return RecordDeclaration.from_json(json, position, source);
+    case 'record_field':
+      return RecordField.from_json(json, position, source);
     case 'alias_declaration':
       return AliasDeclaration.from_json(json, position, source);
     case 'property_declaration':
@@ -131,6 +138,8 @@ class EditableSyntax
       return WhereConstraint.from_json(json, position, source);
     case 'methodish_declaration':
       return MethodishDeclaration.from_json(json, position, source);
+    case 'methodish_trait_resolution':
+      return MethodishTraitResolution.from_json(json, position, source);
     case 'classish_declaration':
       return ClassishDeclaration.from_json(json, position, source);
     case 'classish_body':
@@ -159,14 +168,14 @@ class EditableSyntax
       return VariadicParameter.from_json(json, position, source);
     case 'attribute_specification':
       return AttributeSpecification.from_json(json, position, source);
-    case 'attribute':
-      return Attribute.from_json(json, position, source);
     case 'inclusion_expression':
       return InclusionExpression.from_json(json, position, source);
     case 'inclusion_directive':
       return InclusionDirective.from_json(json, position, source);
     case 'compound_statement':
       return CompoundStatement.from_json(json, position, source);
+    case 'alternate_loop_statement':
+      return AlternateLoopStatement.from_json(json, position, source);
     case 'expression_statement':
       return ExpressionStatement.from_json(json, position, source);
     case 'markup_section':
@@ -175,6 +184,16 @@ class EditableSyntax
       return MarkupSuffix.from_json(json, position, source);
     case 'unset_statement':
       return UnsetStatement.from_json(json, position, source);
+    case 'let_statement':
+      return LetStatement.from_json(json, position, source);
+    case 'using_statement_block_scoped':
+      return UsingStatementBlockScoped.from_json(json, position, source);
+    case 'using_statement_function_scoped':
+      return UsingStatementFunctionScoped.from_json(json, position, source);
+    case 'declare_directive_statement':
+      return DeclareDirectiveStatement.from_json(json, position, source);
+    case 'declare_block_statement':
+      return DeclareBlockStatement.from_json(json, position, source);
     case 'while_statement':
       return WhileStatement.from_json(json, position, source);
     case 'if_statement':
@@ -183,6 +202,12 @@ class EditableSyntax
       return ElseifClause.from_json(json, position, source);
     case 'else_clause':
       return ElseClause.from_json(json, position, source);
+    case 'alternate_if_statement':
+      return AlternateIfStatement.from_json(json, position, source);
+    case 'alternate_elseif_clause':
+      return AlternateElseifClause.from_json(json, position, source);
+    case 'alternate_else_clause':
+      return AlternateElseClause.from_json(json, position, source);
     case 'try_statement':
       return TryStatement.from_json(json, position, source);
     case 'catch_clause':
@@ -197,6 +222,8 @@ class EditableSyntax
       return ForeachStatement.from_json(json, position, source);
     case 'switch_statement':
       return SwitchStatement.from_json(json, position, source);
+    case 'alternate_switch_statement':
+      return AlternateSwitchStatement.from_json(json, position, source);
     case 'switch_section':
       return SwitchSection.from_json(json, position, source);
     case 'switch_fallthrough':
@@ -217,18 +244,18 @@ class EditableSyntax
       return BreakStatement.from_json(json, position, source);
     case 'continue_statement':
       return ContinueStatement.from_json(json, position, source);
-    case 'function_static_statement':
-      return FunctionStaticStatement.from_json(json, position, source);
-    case 'static_declarator':
-      return StaticDeclarator.from_json(json, position, source);
     case 'echo_statement':
       return EchoStatement.from_json(json, position, source);
-    case 'global_statement':
-      return GlobalStatement.from_json(json, position, source);
+    case 'concurrent_statement':
+      return ConcurrentStatement.from_json(json, position, source);
     case 'simple_initializer':
       return SimpleInitializer.from_json(json, position, source);
+    case 'anonymous_class':
+      return AnonymousClass.from_json(json, position, source);
     case 'anonymous_function':
       return AnonymousFunction.from_json(json, position, source);
+    case 'php7_anonymous_function':
+      return Php7AnonymousFunction.from_json(json, position, source);
     case 'anonymous_function_use_clause':
       return AnonymousFunctionUseClause.from_json(json, position, source);
     case 'lambda_expression':
@@ -257,6 +284,12 @@ class EditableSyntax
       return BinaryExpression.from_json(json, position, source);
     case 'instanceof_expression':
       return InstanceofExpression.from_json(json, position, source);
+    case 'is_expression':
+      return IsExpression.from_json(json, position, source);
+    case 'as_expression':
+      return AsExpression.from_json(json, position, source);
+    case 'nullable_as_expression':
+      return NullableAsExpression.from_json(json, position, source);
     case 'conditional_expression':
       return ConditionalExpression.from_json(json, position, source);
     case 'eval_expression':
@@ -265,6 +298,8 @@ class EditableSyntax
       return EmptyExpression.from_json(json, position, source);
     case 'define_expression':
       return DefineExpression.from_json(json, position, source);
+    case 'halt_compiler_expression':
+      return HaltCompilerExpression.from_json(json, position, source);
     case 'isset_expression':
       return IssetExpression.from_json(json, position, source);
     case 'function_call_expression':
@@ -281,6 +316,10 @@ class EditableSyntax
       return CollectionLiteralExpression.from_json(json, position, source);
     case 'object_creation_expression':
       return ObjectCreationExpression.from_json(json, position, source);
+    case 'constructor_call':
+      return ConstructorCall.from_json(json, position, source);
+    case 'record_creation_expression':
+      return RecordCreationExpression.from_json(json, position, source);
     case 'array_creation_expression':
       return ArrayCreationExpression.from_json(json, position, source);
     case 'array_intrinsic_expression':
@@ -319,8 +358,10 @@ class EditableSyntax
       return XHPClassAttribute.from_json(json, position, source);
     case 'xhp_simple_class_attribute':
       return XHPSimpleClassAttribute.from_json(json, position, source);
-    case 'xhp_attribute':
-      return XHPAttribute.from_json(json, position, source);
+    case 'xhp_simple_attribute':
+      return XHPSimpleAttribute.from_json(json, position, source);
+    case 'xhp_spread_attribute':
+      return XHPSpreadAttribute.from_json(json, position, source);
     case 'xhp_open':
       return XHPOpen.from_json(json, position, source);
     case 'xhp_expression':
@@ -351,6 +392,8 @@ class EditableSyntax
       return DictionaryTypeSpecifier.from_json(json, position, source);
     case 'closure_type_specifier':
       return ClosureTypeSpecifier.from_json(json, position, source);
+    case 'closure_parameter_type_specifier':
+      return ClosureParameterTypeSpecifier.from_json(json, position, source);
     case 'classname_type_specifier':
       return ClassnameTypeSpecifier.from_json(json, position, source);
     case 'field_specifier':
@@ -367,8 +410,12 @@ class EditableSyntax
       return GenericTypeSpecifier.from_json(json, position, source);
     case 'nullable_type_specifier':
       return NullableTypeSpecifier.from_json(json, position, source);
+    case 'like_type_specifier':
+      return LikeTypeSpecifier.from_json(json, position, source);
     case 'soft_type_specifier':
       return SoftTypeSpecifier.from_json(json, position, source);
+    case 'reified_type_argument':
+      return ReifiedTypeArgument.from_json(json, position, source);
     case 'type_arguments':
       return TypeArguments.from_json(json, position, source);
     case 'type_parameters':
@@ -379,6 +426,22 @@ class EditableSyntax
       return ErrorSyntax.from_json(json, position, source);
     case 'list_item':
       return ListItem.from_json(json, position, source);
+    case 'pocket_atom':
+      return PocketAtomExpression.from_json(json, position, source);
+    case 'pocket_identifier':
+      return PocketIdentifierExpression.from_json(json, position, source);
+    case 'pocket_atom_mapping':
+      return PocketAtomMappingDeclaration.from_json(json, position, source);
+    case 'pocket_enum_declaration':
+      return PocketEnumDeclaration.from_json(json, position, source);
+    case 'pocket_field_type_expr_declaration':
+      return PocketFieldTypeExprDeclaration.from_json(json, position, source);
+    case 'pocket_field_type_declaration':
+      return PocketFieldTypeDeclaration.from_json(json, position, source);
+    case 'pocket_mapping_id_declaration':
+      return PocketMappingIdDeclaration.from_json(json, position, source);
+    case 'pocket_mapping_type_declaration':
+      return PocketMappingTypeDeclaration.from_json(json, position, source);
 
     default:
       throw 'unexpected json kind: ' + json.kind; // TODO: Better exception
@@ -684,8 +747,14 @@ class EditableToken extends EditableSyntax
        return new AttributeToken(leading, trailing);
     case 'await':
        return new AwaitToken(leading, trailing);
+    case '\':
+       return new BackslashToken(leading, trailing);
+    case 'binary':
+       return new BinaryToken(leading, trailing);
     case 'bool':
        return new BoolToken(leading, trailing);
+    case 'boolean':
+       return new BooleanToken(leading, trailing);
     case 'break':
        return new BreakToken(leading, trailing);
     case 'case':
@@ -712,6 +781,8 @@ class EditableToken extends EditableSyntax
        return new CoroutineToken(leading, trailing);
     case 'darray':
        return new DarrayToken(leading, trailing);
+    case 'declare':
+       return new DeclareToken(leading, trailing);
     case 'default':
        return new DefaultToken(leading, trailing);
     case 'define':
@@ -732,6 +803,18 @@ class EditableToken extends EditableSyntax
        return new ElseifToken(leading, trailing);
     case 'empty':
        return new EmptyToken(leading, trailing);
+    case 'endfor':
+       return new EndforToken(leading, trailing);
+    case 'endforeach':
+       return new EndforeachToken(leading, trailing);
+    case 'enddeclare':
+       return new EnddeclareToken(leading, trailing);
+    case 'endif':
+       return new EndifToken(leading, trailing);
+    case 'endswitch':
+       return new EndswitchToken(leading, trailing);
+    case 'endwhile':
+       return new EndwhileToken(leading, trailing);
     case 'enum':
        return new EnumToken(leading, trailing);
     case 'eval':
@@ -742,6 +825,8 @@ class EditableToken extends EditableSyntax
        return new FallthroughToken(leading, trailing);
     case 'float':
        return new FloatToken(leading, trailing);
+    case 'file':
+       return new FileToken(leading, trailing);
     case 'final':
        return new FinalToken(leading, trailing);
     case 'finally':
@@ -756,8 +841,12 @@ class EditableToken extends EditableSyntax
        return new FunctionToken(leading, trailing);
     case 'global':
        return new GlobalToken(leading, trailing);
+    case 'concurrent':
+       return new ConcurrentToken(leading, trailing);
     case 'goto':
        return new GotoToken(leading, trailing);
+    case '__halt_compiler':
+       return new HaltCompilerToken(leading, trailing);
     case 'if':
        return new IfToken(leading, trailing);
     case 'implements':
@@ -766,18 +855,26 @@ class EditableToken extends EditableSyntax
        return new IncludeToken(leading, trailing);
     case 'include_once':
        return new Include_onceToken(leading, trailing);
+    case 'inout':
+       return new InoutToken(leading, trailing);
     case 'instanceof':
        return new InstanceofToken(leading, trailing);
     case 'insteadof':
        return new InsteadofToken(leading, trailing);
     case 'int':
        return new IntToken(leading, trailing);
+    case 'integer':
+       return new IntegerToken(leading, trailing);
     case 'interface':
        return new InterfaceToken(leading, trailing);
+    case 'is':
+       return new IsToken(leading, trailing);
     case 'isset':
        return new IssetToken(leading, trailing);
     case 'keyset':
        return new KeysetToken(leading, trailing);
+    case 'let':
+       return new LetToken(leading, trailing);
     case 'list':
        return new ListToken(leading, trailing);
     case 'mixed':
@@ -806,6 +903,14 @@ class EditableToken extends EditableSyntax
        return new ProtectedToken(leading, trailing);
     case 'public':
        return new PublicToken(leading, trailing);
+    case 'real':
+       return new RealToken(leading, trailing);
+    case 'reify':
+       return new ReifyToken(leading, trailing);
+    case 'recordname':
+       return new RecordToken(leading, trailing);
+    case 'record':
+       return new RecordDecToken(leading, trailing);
     case 'require':
        return new RequireToken(leading, trailing);
     case 'require_once':
@@ -846,6 +951,8 @@ class EditableToken extends EditableSyntax
        return new UnsetToken(leading, trailing);
     case 'use':
        return new UseToken(leading, trailing);
+    case 'using':
+       return new UsingToken(leading, trailing);
     case 'var':
        return new VarToken(leading, trailing);
     case 'varray':
@@ -862,6 +969,8 @@ class EditableToken extends EditableSyntax
        return new XorToken(leading, trailing);
     case 'yield':
        return new YieldToken(leading, trailing);
+    case 'null':
+       return new NullLiteralToken(leading, trailing);
     case '[':
        return new LeftBracketToken(leading, trailing);
     case ']':
@@ -936,8 +1045,14 @@ class EditableToken extends EditableSyntax
        return new BarBarToken(leading, trailing);
     case '?':
        return new QuestionToken(leading, trailing);
+    case '?as':
+       return new QuestionAsToken(leading, trailing);
+    case '?:':
+       return new QuestionColonToken(leading, trailing);
     case '??':
        return new QuestionQuestionToken(leading, trailing);
+    case '??=':
+       return new QuestionQuestionEqualToken(leading, trailing);
     case ':':
        return new ColonToken(leading, trailing);
     case ';':
@@ -986,8 +1101,6 @@ class EditableToken extends EditableSyntax
        return new DollarDollarToken(leading, trailing);
     case '|>':
        return new BarGreaterThanToken(leading, trailing);
-    case 'null':
-       return new NullLiteralToken(leading, trailing);
     case '/>':
        return new SlashGreaterThanToken(leading, trailing);
     case '</':
@@ -996,17 +1109,15 @@ class EditableToken extends EditableSyntax
        return new LessThanQuestionToken(leading, trailing);
     case '?>':
        return new QuestionGreaterThanToken(leading, trailing);
+    case ':@':
+       return new ColonAtToken(leading, trailing);
 
     case 'error_token':
        return new ErrorTokenToken(leading, trailing, token_text);
     case 'name':
        return new NameToken(leading, trailing, token_text);
-    case 'qualified_name':
-       return new QualifiedNameToken(leading, trailing, token_text);
     case 'variable':
        return new VariableToken(leading, trailing, token_text);
-    case 'namespace_prefix':
-       return new NamespacePrefixToken(leading, trailing, token_text);
     case 'decimal_literal':
        return new DecimalLiteralToken(leading, trailing, token_text);
     case 'octal_literal':
@@ -1017,8 +1128,6 @@ class EditableToken extends EditableSyntax
        return new BinaryLiteralToken(leading, trailing, token_text);
     case 'floating_literal':
        return new FloatingLiteralToken(leading, trailing, token_text);
-    case 'execution_string':
-       return new ExecutionStringToken(leading, trailing, token_text);
     case 'single_quoted_string_literal':
        return new SingleQuotedStringLiteralToken(leading, trailing, token_text);
     case 'double_quoted_string_literal':
@@ -1173,11 +1282,32 @@ class AwaitToken extends EditableToken
     super('await', leading, trailing, 'await');
   }
 }
+class BackslashToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('\', leading, trailing, '\');
+  }
+}
+class BinaryToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('binary', leading, trailing, 'binary');
+  }
+}
 class BoolToken extends EditableToken
 {
   constructor(leading, trailing)
   {
     super('bool', leading, trailing, 'bool');
+  }
+}
+class BooleanToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('boolean', leading, trailing, 'boolean');
   }
 }
 class BreakToken extends EditableToken
@@ -1271,6 +1401,13 @@ class DarrayToken extends EditableToken
     super('darray', leading, trailing, 'darray');
   }
 }
+class DeclareToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('declare', leading, trailing, 'declare');
+  }
+}
 class DefaultToken extends EditableToken
 {
   constructor(leading, trailing)
@@ -1341,6 +1478,48 @@ class EmptyToken extends EditableToken
     super('empty', leading, trailing, 'empty');
   }
 }
+class EndforToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('endfor', leading, trailing, 'endfor');
+  }
+}
+class EndforeachToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('endforeach', leading, trailing, 'endforeach');
+  }
+}
+class EnddeclareToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('enddeclare', leading, trailing, 'enddeclare');
+  }
+}
+class EndifToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('endif', leading, trailing, 'endif');
+  }
+}
+class EndswitchToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('endswitch', leading, trailing, 'endswitch');
+  }
+}
+class EndwhileToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('endwhile', leading, trailing, 'endwhile');
+  }
+}
 class EnumToken extends EditableToken
 {
   constructor(leading, trailing)
@@ -1374,6 +1553,13 @@ class FloatToken extends EditableToken
   constructor(leading, trailing)
   {
     super('float', leading, trailing, 'float');
+  }
+}
+class FileToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('file', leading, trailing, 'file');
   }
 }
 class FinalToken extends EditableToken
@@ -1425,11 +1611,25 @@ class GlobalToken extends EditableToken
     super('global', leading, trailing, 'global');
   }
 }
+class ConcurrentToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('concurrent', leading, trailing, 'concurrent');
+  }
+}
 class GotoToken extends EditableToken
 {
   constructor(leading, trailing)
   {
     super('goto', leading, trailing, 'goto');
+  }
+}
+class HaltCompilerToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('__halt_compiler', leading, trailing, '__halt_compiler');
   }
 }
 class IfToken extends EditableToken
@@ -1460,6 +1660,13 @@ class Include_onceToken extends EditableToken
     super('include_once', leading, trailing, 'include_once');
   }
 }
+class InoutToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('inout', leading, trailing, 'inout');
+  }
+}
 class InstanceofToken extends EditableToken
 {
   constructor(leading, trailing)
@@ -1481,11 +1688,25 @@ class IntToken extends EditableToken
     super('int', leading, trailing, 'int');
   }
 }
+class IntegerToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('integer', leading, trailing, 'integer');
+  }
+}
 class InterfaceToken extends EditableToken
 {
   constructor(leading, trailing)
   {
     super('interface', leading, trailing, 'interface');
+  }
+}
+class IsToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('is', leading, trailing, 'is');
   }
 }
 class IssetToken extends EditableToken
@@ -1500,6 +1721,13 @@ class KeysetToken extends EditableToken
   constructor(leading, trailing)
   {
     super('keyset', leading, trailing, 'keyset');
+  }
+}
+class LetToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('let', leading, trailing, 'let');
   }
 }
 class ListToken extends EditableToken
@@ -1598,6 +1826,34 @@ class PublicToken extends EditableToken
   constructor(leading, trailing)
   {
     super('public', leading, trailing, 'public');
+  }
+}
+class RealToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('real', leading, trailing, 'real');
+  }
+}
+class ReifyToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('reify', leading, trailing, 'reify');
+  }
+}
+class RecordToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('recordname', leading, trailing, 'recordname');
+  }
+}
+class RecordDecToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('record', leading, trailing, 'record');
   }
 }
 class RequireToken extends EditableToken
@@ -1740,6 +1996,13 @@ class UseToken extends EditableToken
     super('use', leading, trailing, 'use');
   }
 }
+class UsingToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('using', leading, trailing, 'using');
+  }
+}
 class VarToken extends EditableToken
 {
   constructor(leading, trailing)
@@ -1794,6 +2057,13 @@ class YieldToken extends EditableToken
   constructor(leading, trailing)
   {
     super('yield', leading, trailing, 'yield');
+  }
+}
+class NullLiteralToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('null', leading, trailing, 'null');
   }
 }
 class LeftBracketToken extends EditableToken
@@ -2055,11 +2325,32 @@ class QuestionToken extends EditableToken
     super('?', leading, trailing, '?');
   }
 }
+class QuestionAsToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('?as', leading, trailing, '?as');
+  }
+}
+class QuestionColonToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('?:', leading, trailing, '?:');
+  }
+}
 class QuestionQuestionToken extends EditableToken
 {
   constructor(leading, trailing)
   {
     super('??', leading, trailing, '??');
+  }
+}
+class QuestionQuestionEqualToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super('??=', leading, trailing, '??=');
   }
 }
 class ColonToken extends EditableToken
@@ -2230,13 +2521,6 @@ class BarGreaterThanToken extends EditableToken
     super('|>', leading, trailing, '|>');
   }
 }
-class NullLiteralToken extends EditableToken
-{
-  constructor(leading, trailing)
-  {
-    super('null', leading, trailing, 'null');
-  }
-}
 class SlashGreaterThanToken extends EditableToken
 {
   constructor(leading, trailing)
@@ -2265,6 +2549,13 @@ class QuestionGreaterThanToken extends EditableToken
     super('?>', leading, trailing, '?>');
   }
 }
+class ColonAtToken extends EditableToken
+{
+  constructor(leading, trailing)
+  {
+    super(':@', leading, trailing, ':@');
+  }
+}
 
 class ErrorTokenToken extends EditableToken
 {
@@ -2290,18 +2581,6 @@ class NameToken extends EditableToken
   }
 
 }
-class QualifiedNameToken extends EditableToken
-{
-  constructor(leading, trailing, text)
-  {
-    super('qualified_name', leading, trailing, text);
-  }
-  with_text(text)
-  {
-    return new QualifiedNameToken(this.leading, this.trailing, text);
-  }
-
-}
 class VariableToken extends EditableToken
 {
   constructor(leading, trailing, text)
@@ -2311,18 +2590,6 @@ class VariableToken extends EditableToken
   with_text(text)
   {
     return new VariableToken(this.leading, this.trailing, text);
-  }
-
-}
-class NamespacePrefixToken extends EditableToken
-{
-  constructor(leading, trailing, text)
-  {
-    super('namespace_prefix', leading, trailing, text);
-  }
-  with_text(text)
-  {
-    return new NamespacePrefixToken(this.leading, this.trailing, text);
   }
 
 }
@@ -2383,18 +2650,6 @@ class FloatingLiteralToken extends EditableToken
   with_text(text)
   {
     return new FloatingLiteralToken(this.leading, this.trailing, text);
-  }
-
-}
-class ExecutionStringToken extends EditableToken
-{
-  constructor(leading, trailing, text)
-  {
-    super('execution_string', leading, trailing, text);
-  }
-  with_text(text)
-  {
-    return new ExecutionStringToken(this.leading, this.trailing, text);
   }
 
 }
@@ -2641,6 +2896,8 @@ class EditableTrivia extends EditableSyntax
         return new FallThrough(trivia_text);
       case 'extra_token_error':
         return new ExtraTokenError(trivia_text);
+      case 'after_halt_compiler':
+        return new AfterHaltCompiler(trivia_text);
 
       default: throw 'unexpected json kind: ' + json.kind; // TODO: Better error
     }
@@ -2743,6 +3000,15 @@ class ExtraTokenError extends EditableTrivia
   with_text(text)
   {
     return new ExtraTokenError(text);
+  }
+}
+
+class AfterHaltCompiler extends EditableTrivia
+{
+  constructor(text) { super('after_halt_compiler', text); }
+  with_text(text)
+  {
+    return new AfterHaltCompiler(text);
   }
 }
 
@@ -2865,6 +3131,53 @@ class Script extends EditableSyntax
     return Script._children_keys;
   }
 }
+class QualifiedName extends EditableSyntax
+{
+  constructor(
+    parts)
+  {
+    super('qualified_name', {
+      parts: parts });
+  }
+  get parts() { return this.children.parts; }
+  with_parts(parts){
+    return new QualifiedName(
+      parts);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var parts = this.parts.rewrite(rewriter, new_parents);
+    if (
+      parts === this.parts)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new QualifiedName(
+        parts), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let parts = EditableSyntax.from_json(
+      json.qualified_name_parts, position, source);
+    position += parts.width;
+    return new QualifiedName(
+        parts);
+  }
+  get children_keys()
+  {
+    if (QualifiedName._children_keys == null)
+      QualifiedName._children_keys = [
+        'parts'];
+    return QualifiedName._children_keys;
+  }
+}
 class SimpleTypeSpecifier extends EditableSyntax
 {
   constructor(
@@ -2959,6 +3272,70 @@ class LiteralExpression extends EditableSyntax
     return LiteralExpression._children_keys;
   }
 }
+class PrefixedStringExpression extends EditableSyntax
+{
+  constructor(
+    name,
+    str)
+  {
+    super('prefixed_string', {
+      name: name,
+      str: str });
+  }
+  get name() { return this.children.name; }
+  get str() { return this.children.str; }
+  with_name(name){
+    return new PrefixedStringExpression(
+      name,
+      this.str);
+  }
+  with_str(str){
+    return new PrefixedStringExpression(
+      this.name,
+      str);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var str = this.str.rewrite(rewriter, new_parents);
+    if (
+      name === this.name &&
+      str === this.str)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PrefixedStringExpression(
+        name,
+        str), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let name = EditableSyntax.from_json(
+      json.prefixed_string_name, position, source);
+    position += name.width;
+    let str = EditableSyntax.from_json(
+      json.prefixed_string_str, position, source);
+    position += str.width;
+    return new PrefixedStringExpression(
+        name,
+        str);
+  }
+  get children_keys()
+  {
+    if (PrefixedStringExpression._children_keys == null)
+      PrefixedStringExpression._children_keys = [
+        'name',
+        'str'];
+    return PrefixedStringExpression._children_keys;
+  }
+}
 class VariableExpression extends EditableSyntax
 {
   constructor(
@@ -3006,53 +3383,6 @@ class VariableExpression extends EditableSyntax
     return VariableExpression._children_keys;
   }
 }
-class QualifiedNameExpression extends EditableSyntax
-{
-  constructor(
-    expression)
-  {
-    super('qualified_name', {
-      expression: expression });
-  }
-  get expression() { return this.children.expression; }
-  with_expression(expression){
-    return new QualifiedNameExpression(
-      expression);
-  }
-  rewrite(rewriter, parents)
-  {
-    if (parents == undefined)
-      parents = [];
-    let new_parents = parents.slice();
-    new_parents.push(this);
-    var expression = this.expression.rewrite(rewriter, new_parents);
-    if (
-      expression === this.expression)
-    {
-      return rewriter(this, parents);
-    }
-    else
-    {
-      return rewriter(new QualifiedNameExpression(
-        expression), parents);
-    }
-  }
-  static from_json(json, position, source)
-  {
-    let expression = EditableSyntax.from_json(
-      json.qualified_name_expression, position, source);
-    position += expression.width;
-    return new QualifiedNameExpression(
-        expression);
-  }
-  get children_keys()
-  {
-    if (QualifiedNameExpression._children_keys == null)
-      QualifiedNameExpression._children_keys = [
-        'expression'];
-    return QualifiedNameExpression._children_keys;
-  }
-}
 class PipeVariableExpression extends EditableSyntax
 {
   constructor(
@@ -3098,6 +3428,133 @@ class PipeVariableExpression extends EditableSyntax
       PipeVariableExpression._children_keys = [
         'expression'];
     return PipeVariableExpression._children_keys;
+  }
+}
+class FileAttributeSpecification extends EditableSyntax
+{
+  constructor(
+    left_double_angle,
+    keyword,
+    colon,
+    attributes,
+    right_double_angle)
+  {
+    super('file_attribute_specification', {
+      left_double_angle: left_double_angle,
+      keyword: keyword,
+      colon: colon,
+      attributes: attributes,
+      right_double_angle: right_double_angle });
+  }
+  get left_double_angle() { return this.children.left_double_angle; }
+  get keyword() { return this.children.keyword; }
+  get colon() { return this.children.colon; }
+  get attributes() { return this.children.attributes; }
+  get right_double_angle() { return this.children.right_double_angle; }
+  with_left_double_angle(left_double_angle){
+    return new FileAttributeSpecification(
+      left_double_angle,
+      this.keyword,
+      this.colon,
+      this.attributes,
+      this.right_double_angle);
+  }
+  with_keyword(keyword){
+    return new FileAttributeSpecification(
+      this.left_double_angle,
+      keyword,
+      this.colon,
+      this.attributes,
+      this.right_double_angle);
+  }
+  with_colon(colon){
+    return new FileAttributeSpecification(
+      this.left_double_angle,
+      this.keyword,
+      colon,
+      this.attributes,
+      this.right_double_angle);
+  }
+  with_attributes(attributes){
+    return new FileAttributeSpecification(
+      this.left_double_angle,
+      this.keyword,
+      this.colon,
+      attributes,
+      this.right_double_angle);
+  }
+  with_right_double_angle(right_double_angle){
+    return new FileAttributeSpecification(
+      this.left_double_angle,
+      this.keyword,
+      this.colon,
+      this.attributes,
+      right_double_angle);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var left_double_angle = this.left_double_angle.rewrite(rewriter, new_parents);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var attributes = this.attributes.rewrite(rewriter, new_parents);
+    var right_double_angle = this.right_double_angle.rewrite(rewriter, new_parents);
+    if (
+      left_double_angle === this.left_double_angle &&
+      keyword === this.keyword &&
+      colon === this.colon &&
+      attributes === this.attributes &&
+      right_double_angle === this.right_double_angle)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new FileAttributeSpecification(
+        left_double_angle,
+        keyword,
+        colon,
+        attributes,
+        right_double_angle), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let left_double_angle = EditableSyntax.from_json(
+      json.file_attribute_specification_left_double_angle, position, source);
+    position += left_double_angle.width;
+    let keyword = EditableSyntax.from_json(
+      json.file_attribute_specification_keyword, position, source);
+    position += keyword.width;
+    let colon = EditableSyntax.from_json(
+      json.file_attribute_specification_colon, position, source);
+    position += colon.width;
+    let attributes = EditableSyntax.from_json(
+      json.file_attribute_specification_attributes, position, source);
+    position += attributes.width;
+    let right_double_angle = EditableSyntax.from_json(
+      json.file_attribute_specification_right_double_angle, position, source);
+    position += right_double_angle.width;
+    return new FileAttributeSpecification(
+        left_double_angle,
+        keyword,
+        colon,
+        attributes,
+        right_double_angle);
+  }
+  get children_keys()
+  {
+    if (FileAttributeSpecification._children_keys == null)
+      FileAttributeSpecification._children_keys = [
+        'left_double_angle',
+        'keyword',
+        'colon',
+        'attributes',
+        'right_double_angle'];
+    return FileAttributeSpecification._children_keys;
   }
 }
 class EnumDeclaration extends EditableSyntax
@@ -3443,6 +3900,285 @@ class Enumerator extends EditableSyntax
     return Enumerator._children_keys;
   }
 }
+class RecordDeclaration extends EditableSyntax
+{
+  constructor(
+    attribute_spec,
+    keyword,
+    name,
+    left_brace,
+    fields,
+    right_brace)
+  {
+    super('record_declaration', {
+      attribute_spec: attribute_spec,
+      keyword: keyword,
+      name: name,
+      left_brace: left_brace,
+      fields: fields,
+      right_brace: right_brace });
+  }
+  get attribute_spec() { return this.children.attribute_spec; }
+  get keyword() { return this.children.keyword; }
+  get name() { return this.children.name; }
+  get left_brace() { return this.children.left_brace; }
+  get fields() { return this.children.fields; }
+  get right_brace() { return this.children.right_brace; }
+  with_attribute_spec(attribute_spec){
+    return new RecordDeclaration(
+      attribute_spec,
+      this.keyword,
+      this.name,
+      this.left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_keyword(keyword){
+    return new RecordDeclaration(
+      this.attribute_spec,
+      keyword,
+      this.name,
+      this.left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_name(name){
+    return new RecordDeclaration(
+      this.attribute_spec,
+      this.keyword,
+      name,
+      this.left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_left_brace(left_brace){
+    return new RecordDeclaration(
+      this.attribute_spec,
+      this.keyword,
+      this.name,
+      left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_fields(fields){
+    return new RecordDeclaration(
+      this.attribute_spec,
+      this.keyword,
+      this.name,
+      this.left_brace,
+      fields,
+      this.right_brace);
+  }
+  with_right_brace(right_brace){
+    return new RecordDeclaration(
+      this.attribute_spec,
+      this.keyword,
+      this.name,
+      this.left_brace,
+      this.fields,
+      right_brace);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var left_brace = this.left_brace.rewrite(rewriter, new_parents);
+    var fields = this.fields.rewrite(rewriter, new_parents);
+    var right_brace = this.right_brace.rewrite(rewriter, new_parents);
+    if (
+      attribute_spec === this.attribute_spec &&
+      keyword === this.keyword &&
+      name === this.name &&
+      left_brace === this.left_brace &&
+      fields === this.fields &&
+      right_brace === this.right_brace)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new RecordDeclaration(
+        attribute_spec,
+        keyword,
+        name,
+        left_brace,
+        fields,
+        right_brace), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let attribute_spec = EditableSyntax.from_json(
+      json.record_attribute_spec, position, source);
+    position += attribute_spec.width;
+    let keyword = EditableSyntax.from_json(
+      json.record_keyword, position, source);
+    position += keyword.width;
+    let name = EditableSyntax.from_json(
+      json.record_name, position, source);
+    position += name.width;
+    let left_brace = EditableSyntax.from_json(
+      json.record_left_brace, position, source);
+    position += left_brace.width;
+    let fields = EditableSyntax.from_json(
+      json.record_fields, position, source);
+    position += fields.width;
+    let right_brace = EditableSyntax.from_json(
+      json.record_right_brace, position, source);
+    position += right_brace.width;
+    return new RecordDeclaration(
+        attribute_spec,
+        keyword,
+        name,
+        left_brace,
+        fields,
+        right_brace);
+  }
+  get children_keys()
+  {
+    if (RecordDeclaration._children_keys == null)
+      RecordDeclaration._children_keys = [
+        'attribute_spec',
+        'keyword',
+        'name',
+        'left_brace',
+        'fields',
+        'right_brace'];
+    return RecordDeclaration._children_keys;
+  }
+}
+class RecordField extends EditableSyntax
+{
+  constructor(
+    name,
+    colon,
+    type,
+    init,
+    comma)
+  {
+    super('record_field', {
+      name: name,
+      colon: colon,
+      type: type,
+      init: init,
+      comma: comma });
+  }
+  get name() { return this.children.name; }
+  get colon() { return this.children.colon; }
+  get type() { return this.children.type; }
+  get init() { return this.children.init; }
+  get comma() { return this.children.comma; }
+  with_name(name){
+    return new RecordField(
+      name,
+      this.colon,
+      this.type,
+      this.init,
+      this.comma);
+  }
+  with_colon(colon){
+    return new RecordField(
+      this.name,
+      colon,
+      this.type,
+      this.init,
+      this.comma);
+  }
+  with_type(type){
+    return new RecordField(
+      this.name,
+      this.colon,
+      type,
+      this.init,
+      this.comma);
+  }
+  with_init(init){
+    return new RecordField(
+      this.name,
+      this.colon,
+      this.type,
+      init,
+      this.comma);
+  }
+  with_comma(comma){
+    return new RecordField(
+      this.name,
+      this.colon,
+      this.type,
+      this.init,
+      comma);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    var init = this.init.rewrite(rewriter, new_parents);
+    var comma = this.comma.rewrite(rewriter, new_parents);
+    if (
+      name === this.name &&
+      colon === this.colon &&
+      type === this.type &&
+      init === this.init &&
+      comma === this.comma)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new RecordField(
+        name,
+        colon,
+        type,
+        init,
+        comma), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let name = EditableSyntax.from_json(
+      json.record_field_name, position, source);
+    position += name.width;
+    let colon = EditableSyntax.from_json(
+      json.record_field_colon, position, source);
+    position += colon.width;
+    let type = EditableSyntax.from_json(
+      json.record_field_type, position, source);
+    position += type.width;
+    let init = EditableSyntax.from_json(
+      json.record_field_init, position, source);
+    position += init.width;
+    let comma = EditableSyntax.from_json(
+      json.record_field_comma, position, source);
+    position += comma.width;
+    return new RecordField(
+        name,
+        colon,
+        type,
+        init,
+        comma);
+  }
+  get children_keys()
+  {
+    if (RecordField._children_keys == null)
+      RecordField._children_keys = [
+        'name',
+        'colon',
+        'type',
+        'init',
+        'comma'];
+    return RecordField._children_keys;
+  }
+}
 class AliasDeclaration extends EditableSyntax
 {
   constructor(
@@ -3654,23 +4390,35 @@ class AliasDeclaration extends EditableSyntax
 class PropertyDeclaration extends EditableSyntax
 {
   constructor(
+    attribute_spec,
     modifiers,
     type,
     declarators,
     semicolon)
   {
     super('property_declaration', {
+      attribute_spec: attribute_spec,
       modifiers: modifiers,
       type: type,
       declarators: declarators,
       semicolon: semicolon });
   }
+  get attribute_spec() { return this.children.attribute_spec; }
   get modifiers() { return this.children.modifiers; }
   get type() { return this.children.type; }
   get declarators() { return this.children.declarators; }
   get semicolon() { return this.children.semicolon; }
+  with_attribute_spec(attribute_spec){
+    return new PropertyDeclaration(
+      attribute_spec,
+      this.modifiers,
+      this.type,
+      this.declarators,
+      this.semicolon);
+  }
   with_modifiers(modifiers){
     return new PropertyDeclaration(
+      this.attribute_spec,
       modifiers,
       this.type,
       this.declarators,
@@ -3678,6 +4426,7 @@ class PropertyDeclaration extends EditableSyntax
   }
   with_type(type){
     return new PropertyDeclaration(
+      this.attribute_spec,
       this.modifiers,
       type,
       this.declarators,
@@ -3685,6 +4434,7 @@ class PropertyDeclaration extends EditableSyntax
   }
   with_declarators(declarators){
     return new PropertyDeclaration(
+      this.attribute_spec,
       this.modifiers,
       this.type,
       declarators,
@@ -3692,6 +4442,7 @@ class PropertyDeclaration extends EditableSyntax
   }
   with_semicolon(semicolon){
     return new PropertyDeclaration(
+      this.attribute_spec,
       this.modifiers,
       this.type,
       this.declarators,
@@ -3703,11 +4454,13 @@ class PropertyDeclaration extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
     var modifiers = this.modifiers.rewrite(rewriter, new_parents);
     var type = this.type.rewrite(rewriter, new_parents);
     var declarators = this.declarators.rewrite(rewriter, new_parents);
     var semicolon = this.semicolon.rewrite(rewriter, new_parents);
     if (
+      attribute_spec === this.attribute_spec &&
       modifiers === this.modifiers &&
       type === this.type &&
       declarators === this.declarators &&
@@ -3718,6 +4471,7 @@ class PropertyDeclaration extends EditableSyntax
     else
     {
       return rewriter(new PropertyDeclaration(
+        attribute_spec,
         modifiers,
         type,
         declarators,
@@ -3726,6 +4480,9 @@ class PropertyDeclaration extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let attribute_spec = EditableSyntax.from_json(
+      json.property_attribute_spec, position, source);
+    position += attribute_spec.width;
     let modifiers = EditableSyntax.from_json(
       json.property_modifiers, position, source);
     position += modifiers.width;
@@ -3739,6 +4496,7 @@ class PropertyDeclaration extends EditableSyntax
       json.property_semicolon, position, source);
     position += semicolon.width;
     return new PropertyDeclaration(
+        attribute_spec,
         modifiers,
         type,
         declarators,
@@ -3748,6 +4506,7 @@ class PropertyDeclaration extends EditableSyntax
   {
     if (PropertyDeclaration._children_keys == null)
       PropertyDeclaration._children_keys = [
+        'attribute_spec',
         'modifiers',
         'type',
         'declarators',
@@ -4505,10 +5264,8 @@ class FunctionDeclaration extends EditableSyntax
 class FunctionDeclarationHeader extends EditableSyntax
 {
   constructor(
-    async,
-    coroutine,
+    modifiers,
     keyword,
-    ampersand,
     name,
     type_parameter_list,
     left_paren,
@@ -4519,10 +5276,8 @@ class FunctionDeclarationHeader extends EditableSyntax
     where_clause)
   {
     super('function_declaration_header', {
-      async: async,
-      coroutine: coroutine,
+      modifiers: modifiers,
       keyword: keyword,
-      ampersand: ampersand,
       name: name,
       type_parameter_list: type_parameter_list,
       left_paren: left_paren,
@@ -4532,10 +5287,8 @@ class FunctionDeclarationHeader extends EditableSyntax
       type: type,
       where_clause: where_clause });
   }
-  get async() { return this.children.async; }
-  get coroutine() { return this.children.coroutine; }
+  get modifiers() { return this.children.modifiers; }
   get keyword() { return this.children.keyword; }
-  get ampersand() { return this.children.ampersand; }
   get name() { return this.children.name; }
   get type_parameter_list() { return this.children.type_parameter_list; }
   get left_paren() { return this.children.left_paren; }
@@ -4544,27 +5297,10 @@ class FunctionDeclarationHeader extends EditableSyntax
   get colon() { return this.children.colon; }
   get type() { return this.children.type; }
   get where_clause() { return this.children.where_clause; }
-  with_async(async){
+  with_modifiers(modifiers){
     return new FunctionDeclarationHeader(
-      async,
-      this.coroutine,
+      modifiers,
       this.keyword,
-      this.ampersand,
-      this.name,
-      this.type_parameter_list,
-      this.left_paren,
-      this.parameter_list,
-      this.right_paren,
-      this.colon,
-      this.type,
-      this.where_clause);
-  }
-  with_coroutine(coroutine){
-    return new FunctionDeclarationHeader(
-      this.async,
-      coroutine,
-      this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4576,25 +5312,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_keyword(keyword){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       keyword,
-      this.ampersand,
-      this.name,
-      this.type_parameter_list,
-      this.left_paren,
-      this.parameter_list,
-      this.right_paren,
-      this.colon,
-      this.type,
-      this.where_clause);
-  }
-  with_ampersand(ampersand){
-    return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
-      this.keyword,
-      ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4606,10 +5325,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_name(name){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       name,
       this.type_parameter_list,
       this.left_paren,
@@ -4621,10 +5338,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_type_parameter_list(type_parameter_list){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       type_parameter_list,
       this.left_paren,
@@ -4636,10 +5351,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_left_paren(left_paren){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       left_paren,
@@ -4651,10 +5364,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_parameter_list(parameter_list){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4666,10 +5377,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_right_paren(right_paren){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4681,10 +5390,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_colon(colon){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4696,10 +5403,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_type(type){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4711,10 +5416,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   with_where_clause(where_clause){
     return new FunctionDeclarationHeader(
-      this.async,
-      this.coroutine,
+      this.modifiers,
       this.keyword,
-      this.ampersand,
       this.name,
       this.type_parameter_list,
       this.left_paren,
@@ -4730,10 +5433,8 @@ class FunctionDeclarationHeader extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
-    var async = this.async.rewrite(rewriter, new_parents);
-    var coroutine = this.coroutine.rewrite(rewriter, new_parents);
+    var modifiers = this.modifiers.rewrite(rewriter, new_parents);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
-    var ampersand = this.ampersand.rewrite(rewriter, new_parents);
     var name = this.name.rewrite(rewriter, new_parents);
     var type_parameter_list = this.type_parameter_list.rewrite(rewriter, new_parents);
     var left_paren = this.left_paren.rewrite(rewriter, new_parents);
@@ -4743,10 +5444,8 @@ class FunctionDeclarationHeader extends EditableSyntax
     var type = this.type.rewrite(rewriter, new_parents);
     var where_clause = this.where_clause.rewrite(rewriter, new_parents);
     if (
-      async === this.async &&
-      coroutine === this.coroutine &&
+      modifiers === this.modifiers &&
       keyword === this.keyword &&
-      ampersand === this.ampersand &&
       name === this.name &&
       type_parameter_list === this.type_parameter_list &&
       left_paren === this.left_paren &&
@@ -4761,10 +5460,8 @@ class FunctionDeclarationHeader extends EditableSyntax
     else
     {
       return rewriter(new FunctionDeclarationHeader(
-        async,
-        coroutine,
+        modifiers,
         keyword,
-        ampersand,
         name,
         type_parameter_list,
         left_paren,
@@ -4777,18 +5474,12 @@ class FunctionDeclarationHeader extends EditableSyntax
   }
   static from_json(json, position, source)
   {
-    let async = EditableSyntax.from_json(
-      json.function_async, position, source);
-    position += async.width;
-    let coroutine = EditableSyntax.from_json(
-      json.function_coroutine, position, source);
-    position += coroutine.width;
+    let modifiers = EditableSyntax.from_json(
+      json.function_modifiers, position, source);
+    position += modifiers.width;
     let keyword = EditableSyntax.from_json(
       json.function_keyword, position, source);
     position += keyword.width;
-    let ampersand = EditableSyntax.from_json(
-      json.function_ampersand, position, source);
-    position += ampersand.width;
     let name = EditableSyntax.from_json(
       json.function_name, position, source);
     position += name.width;
@@ -4814,10 +5505,8 @@ class FunctionDeclarationHeader extends EditableSyntax
       json.function_where_clause, position, source);
     position += where_clause.width;
     return new FunctionDeclarationHeader(
-        async,
-        coroutine,
+        modifiers,
         keyword,
-        ampersand,
         name,
         type_parameter_list,
         left_paren,
@@ -4831,10 +5520,8 @@ class FunctionDeclarationHeader extends EditableSyntax
   {
     if (FunctionDeclarationHeader._children_keys == null)
       FunctionDeclarationHeader._children_keys = [
-        'async',
-        'coroutine',
+        'modifiers',
         'keyword',
-        'ampersand',
         'name',
         'type_parameter_list',
         'left_paren',
@@ -4997,35 +5684,23 @@ class MethodishDeclaration extends EditableSyntax
 {
   constructor(
     attribute,
-    modifiers,
     function_decl_header,
     function_body,
     semicolon)
   {
     super('methodish_declaration', {
       attribute: attribute,
-      modifiers: modifiers,
       function_decl_header: function_decl_header,
       function_body: function_body,
       semicolon: semicolon });
   }
   get attribute() { return this.children.attribute; }
-  get modifiers() { return this.children.modifiers; }
   get function_decl_header() { return this.children.function_decl_header; }
   get function_body() { return this.children.function_body; }
   get semicolon() { return this.children.semicolon; }
   with_attribute(attribute){
     return new MethodishDeclaration(
       attribute,
-      this.modifiers,
-      this.function_decl_header,
-      this.function_body,
-      this.semicolon);
-  }
-  with_modifiers(modifiers){
-    return new MethodishDeclaration(
-      this.attribute,
-      modifiers,
       this.function_decl_header,
       this.function_body,
       this.semicolon);
@@ -5033,7 +5708,6 @@ class MethodishDeclaration extends EditableSyntax
   with_function_decl_header(function_decl_header){
     return new MethodishDeclaration(
       this.attribute,
-      this.modifiers,
       function_decl_header,
       this.function_body,
       this.semicolon);
@@ -5041,7 +5715,6 @@ class MethodishDeclaration extends EditableSyntax
   with_function_body(function_body){
     return new MethodishDeclaration(
       this.attribute,
-      this.modifiers,
       this.function_decl_header,
       function_body,
       this.semicolon);
@@ -5049,7 +5722,6 @@ class MethodishDeclaration extends EditableSyntax
   with_semicolon(semicolon){
     return new MethodishDeclaration(
       this.attribute,
-      this.modifiers,
       this.function_decl_header,
       this.function_body,
       semicolon);
@@ -5061,13 +5733,11 @@ class MethodishDeclaration extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var attribute = this.attribute.rewrite(rewriter, new_parents);
-    var modifiers = this.modifiers.rewrite(rewriter, new_parents);
     var function_decl_header = this.function_decl_header.rewrite(rewriter, new_parents);
     var function_body = this.function_body.rewrite(rewriter, new_parents);
     var semicolon = this.semicolon.rewrite(rewriter, new_parents);
     if (
       attribute === this.attribute &&
-      modifiers === this.modifiers &&
       function_decl_header === this.function_decl_header &&
       function_body === this.function_body &&
       semicolon === this.semicolon)
@@ -5078,7 +5748,6 @@ class MethodishDeclaration extends EditableSyntax
     {
       return rewriter(new MethodishDeclaration(
         attribute,
-        modifiers,
         function_decl_header,
         function_body,
         semicolon), parents);
@@ -5089,9 +5758,6 @@ class MethodishDeclaration extends EditableSyntax
     let attribute = EditableSyntax.from_json(
       json.methodish_attribute, position, source);
     position += attribute.width;
-    let modifiers = EditableSyntax.from_json(
-      json.methodish_modifiers, position, source);
-    position += modifiers.width;
     let function_decl_header = EditableSyntax.from_json(
       json.methodish_function_decl_header, position, source);
     position += function_decl_header.width;
@@ -5103,7 +5769,6 @@ class MethodishDeclaration extends EditableSyntax
     position += semicolon.width;
     return new MethodishDeclaration(
         attribute,
-        modifiers,
         function_decl_header,
         function_body,
         semicolon);
@@ -5113,11 +5778,137 @@ class MethodishDeclaration extends EditableSyntax
     if (MethodishDeclaration._children_keys == null)
       MethodishDeclaration._children_keys = [
         'attribute',
-        'modifiers',
         'function_decl_header',
         'function_body',
         'semicolon'];
     return MethodishDeclaration._children_keys;
+  }
+}
+class MethodishTraitResolution extends EditableSyntax
+{
+  constructor(
+    attribute,
+    function_decl_header,
+    equal,
+    name,
+    semicolon)
+  {
+    super('methodish_trait_resolution', {
+      attribute: attribute,
+      function_decl_header: function_decl_header,
+      equal: equal,
+      name: name,
+      semicolon: semicolon });
+  }
+  get attribute() { return this.children.attribute; }
+  get function_decl_header() { return this.children.function_decl_header; }
+  get equal() { return this.children.equal; }
+  get name() { return this.children.name; }
+  get semicolon() { return this.children.semicolon; }
+  with_attribute(attribute){
+    return new MethodishTraitResolution(
+      attribute,
+      this.function_decl_header,
+      this.equal,
+      this.name,
+      this.semicolon);
+  }
+  with_function_decl_header(function_decl_header){
+    return new MethodishTraitResolution(
+      this.attribute,
+      function_decl_header,
+      this.equal,
+      this.name,
+      this.semicolon);
+  }
+  with_equal(equal){
+    return new MethodishTraitResolution(
+      this.attribute,
+      this.function_decl_header,
+      equal,
+      this.name,
+      this.semicolon);
+  }
+  with_name(name){
+    return new MethodishTraitResolution(
+      this.attribute,
+      this.function_decl_header,
+      this.equal,
+      name,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new MethodishTraitResolution(
+      this.attribute,
+      this.function_decl_header,
+      this.equal,
+      this.name,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var attribute = this.attribute.rewrite(rewriter, new_parents);
+    var function_decl_header = this.function_decl_header.rewrite(rewriter, new_parents);
+    var equal = this.equal.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      attribute === this.attribute &&
+      function_decl_header === this.function_decl_header &&
+      equal === this.equal &&
+      name === this.name &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new MethodishTraitResolution(
+        attribute,
+        function_decl_header,
+        equal,
+        name,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let attribute = EditableSyntax.from_json(
+      json.methodish_trait_attribute, position, source);
+    position += attribute.width;
+    let function_decl_header = EditableSyntax.from_json(
+      json.methodish_trait_function_decl_header, position, source);
+    position += function_decl_header.width;
+    let equal = EditableSyntax.from_json(
+      json.methodish_trait_equal, position, source);
+    position += equal.width;
+    let name = EditableSyntax.from_json(
+      json.methodish_trait_name, position, source);
+    position += name.width;
+    let semicolon = EditableSyntax.from_json(
+      json.methodish_trait_semicolon, position, source);
+    position += semicolon.width;
+    return new MethodishTraitResolution(
+        attribute,
+        function_decl_header,
+        equal,
+        name,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (MethodishTraitResolution._children_keys == null)
+      MethodishTraitResolution._children_keys = [
+        'attribute',
+        'function_decl_header',
+        'equal',
+        'name',
+        'semicolon'];
+    return MethodishTraitResolution._children_keys;
   }
 }
 class ClassishDeclaration extends EditableSyntax
@@ -5563,45 +6354,45 @@ class TraitUseAliasItem extends EditableSyntax
   constructor(
     aliasing_name,
     keyword,
-    visibility,
+    modifiers,
     aliased_name)
   {
     super('trait_use_alias_item', {
       aliasing_name: aliasing_name,
       keyword: keyword,
-      visibility: visibility,
+      modifiers: modifiers,
       aliased_name: aliased_name });
   }
   get aliasing_name() { return this.children.aliasing_name; }
   get keyword() { return this.children.keyword; }
-  get visibility() { return this.children.visibility; }
+  get modifiers() { return this.children.modifiers; }
   get aliased_name() { return this.children.aliased_name; }
   with_aliasing_name(aliasing_name){
     return new TraitUseAliasItem(
       aliasing_name,
       this.keyword,
-      this.visibility,
+      this.modifiers,
       this.aliased_name);
   }
   with_keyword(keyword){
     return new TraitUseAliasItem(
       this.aliasing_name,
       keyword,
-      this.visibility,
+      this.modifiers,
       this.aliased_name);
   }
-  with_visibility(visibility){
+  with_modifiers(modifiers){
     return new TraitUseAliasItem(
       this.aliasing_name,
       this.keyword,
-      visibility,
+      modifiers,
       this.aliased_name);
   }
   with_aliased_name(aliased_name){
     return new TraitUseAliasItem(
       this.aliasing_name,
       this.keyword,
-      this.visibility,
+      this.modifiers,
       aliased_name);
   }
   rewrite(rewriter, parents)
@@ -5612,12 +6403,12 @@ class TraitUseAliasItem extends EditableSyntax
     new_parents.push(this);
     var aliasing_name = this.aliasing_name.rewrite(rewriter, new_parents);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
-    var visibility = this.visibility.rewrite(rewriter, new_parents);
+    var modifiers = this.modifiers.rewrite(rewriter, new_parents);
     var aliased_name = this.aliased_name.rewrite(rewriter, new_parents);
     if (
       aliasing_name === this.aliasing_name &&
       keyword === this.keyword &&
-      visibility === this.visibility &&
+      modifiers === this.modifiers &&
       aliased_name === this.aliased_name)
     {
       return rewriter(this, parents);
@@ -5627,7 +6418,7 @@ class TraitUseAliasItem extends EditableSyntax
       return rewriter(new TraitUseAliasItem(
         aliasing_name,
         keyword,
-        visibility,
+        modifiers,
         aliased_name), parents);
     }
   }
@@ -5639,16 +6430,16 @@ class TraitUseAliasItem extends EditableSyntax
     let keyword = EditableSyntax.from_json(
       json.trait_use_alias_item_keyword, position, source);
     position += keyword.width;
-    let visibility = EditableSyntax.from_json(
-      json.trait_use_alias_item_visibility, position, source);
-    position += visibility.width;
+    let modifiers = EditableSyntax.from_json(
+      json.trait_use_alias_item_modifiers, position, source);
+    position += modifiers.width;
     let aliased_name = EditableSyntax.from_json(
       json.trait_use_alias_item_aliased_name, position, source);
     position += aliased_name.width;
     return new TraitUseAliasItem(
         aliasing_name,
         keyword,
-        visibility,
+        modifiers,
         aliased_name);
   }
   get children_keys()
@@ -5657,7 +6448,7 @@ class TraitUseAliasItem extends EditableSyntax
       TraitUseAliasItem._children_keys = [
         'aliasing_name',
         'keyword',
-        'visibility',
+        'modifiers',
         'aliased_name'];
     return TraitUseAliasItem._children_keys;
   }
@@ -5979,6 +6770,7 @@ class RequireClause extends EditableSyntax
 class ConstDeclaration extends EditableSyntax
 {
   constructor(
+    visibility,
     abstract,
     keyword,
     type_specifier,
@@ -5986,19 +6778,31 @@ class ConstDeclaration extends EditableSyntax
     semicolon)
   {
     super('const_declaration', {
+      visibility: visibility,
       abstract: abstract,
       keyword: keyword,
       type_specifier: type_specifier,
       declarators: declarators,
       semicolon: semicolon });
   }
+  get visibility() { return this.children.visibility; }
   get abstract() { return this.children.abstract; }
   get keyword() { return this.children.keyword; }
   get type_specifier() { return this.children.type_specifier; }
   get declarators() { return this.children.declarators; }
   get semicolon() { return this.children.semicolon; }
+  with_visibility(visibility){
+    return new ConstDeclaration(
+      visibility,
+      this.abstract,
+      this.keyword,
+      this.type_specifier,
+      this.declarators,
+      this.semicolon);
+  }
   with_abstract(abstract){
     return new ConstDeclaration(
+      this.visibility,
       abstract,
       this.keyword,
       this.type_specifier,
@@ -6007,6 +6811,7 @@ class ConstDeclaration extends EditableSyntax
   }
   with_keyword(keyword){
     return new ConstDeclaration(
+      this.visibility,
       this.abstract,
       keyword,
       this.type_specifier,
@@ -6015,6 +6820,7 @@ class ConstDeclaration extends EditableSyntax
   }
   with_type_specifier(type_specifier){
     return new ConstDeclaration(
+      this.visibility,
       this.abstract,
       this.keyword,
       type_specifier,
@@ -6023,6 +6829,7 @@ class ConstDeclaration extends EditableSyntax
   }
   with_declarators(declarators){
     return new ConstDeclaration(
+      this.visibility,
       this.abstract,
       this.keyword,
       this.type_specifier,
@@ -6031,6 +6838,7 @@ class ConstDeclaration extends EditableSyntax
   }
   with_semicolon(semicolon){
     return new ConstDeclaration(
+      this.visibility,
       this.abstract,
       this.keyword,
       this.type_specifier,
@@ -6043,12 +6851,14 @@ class ConstDeclaration extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var visibility = this.visibility.rewrite(rewriter, new_parents);
     var abstract = this.abstract.rewrite(rewriter, new_parents);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
     var type_specifier = this.type_specifier.rewrite(rewriter, new_parents);
     var declarators = this.declarators.rewrite(rewriter, new_parents);
     var semicolon = this.semicolon.rewrite(rewriter, new_parents);
     if (
+      visibility === this.visibility &&
       abstract === this.abstract &&
       keyword === this.keyword &&
       type_specifier === this.type_specifier &&
@@ -6060,6 +6870,7 @@ class ConstDeclaration extends EditableSyntax
     else
     {
       return rewriter(new ConstDeclaration(
+        visibility,
         abstract,
         keyword,
         type_specifier,
@@ -6069,6 +6880,9 @@ class ConstDeclaration extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let visibility = EditableSyntax.from_json(
+      json.const_visibility, position, source);
+    position += visibility.width;
     let abstract = EditableSyntax.from_json(
       json.const_abstract, position, source);
     position += abstract.width;
@@ -6085,6 +6899,7 @@ class ConstDeclaration extends EditableSyntax
       json.const_semicolon, position, source);
     position += semicolon.width;
     return new ConstDeclaration(
+        visibility,
         abstract,
         keyword,
         type_specifier,
@@ -6095,6 +6910,7 @@ class ConstDeclaration extends EditableSyntax
   {
     if (ConstDeclaration._children_keys == null)
       ConstDeclaration._children_keys = [
+        'visibility',
         'abstract',
         'keyword',
         'type_specifier',
@@ -6170,39 +6986,60 @@ class ConstantDeclarator extends EditableSyntax
 class TypeConstDeclaration extends EditableSyntax
 {
   constructor(
+    attribute_spec,
     abstract,
     keyword,
     type_keyword,
     name,
+    type_parameters,
     type_constraint,
     equal,
     type_specifier,
     semicolon)
   {
     super('type_const_declaration', {
+      attribute_spec: attribute_spec,
       abstract: abstract,
       keyword: keyword,
       type_keyword: type_keyword,
       name: name,
+      type_parameters: type_parameters,
       type_constraint: type_constraint,
       equal: equal,
       type_specifier: type_specifier,
       semicolon: semicolon });
   }
+  get attribute_spec() { return this.children.attribute_spec; }
   get abstract() { return this.children.abstract; }
   get keyword() { return this.children.keyword; }
   get type_keyword() { return this.children.type_keyword; }
   get name() { return this.children.name; }
+  get type_parameters() { return this.children.type_parameters; }
   get type_constraint() { return this.children.type_constraint; }
   get equal() { return this.children.equal; }
   get type_specifier() { return this.children.type_specifier; }
   get semicolon() { return this.children.semicolon; }
+  with_attribute_spec(attribute_spec){
+    return new TypeConstDeclaration(
+      attribute_spec,
+      this.abstract,
+      this.keyword,
+      this.type_keyword,
+      this.name,
+      this.type_parameters,
+      this.type_constraint,
+      this.equal,
+      this.type_specifier,
+      this.semicolon);
+  }
   with_abstract(abstract){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       abstract,
       this.keyword,
       this.type_keyword,
       this.name,
+      this.type_parameters,
       this.type_constraint,
       this.equal,
       this.type_specifier,
@@ -6210,10 +7047,12 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_keyword(keyword){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       keyword,
       this.type_keyword,
       this.name,
+      this.type_parameters,
       this.type_constraint,
       this.equal,
       this.type_specifier,
@@ -6221,10 +7060,12 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_type_keyword(type_keyword){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       this.keyword,
       type_keyword,
       this.name,
+      this.type_parameters,
       this.type_constraint,
       this.equal,
       this.type_specifier,
@@ -6232,10 +7073,25 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_name(name){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       this.keyword,
       this.type_keyword,
       name,
+      this.type_parameters,
+      this.type_constraint,
+      this.equal,
+      this.type_specifier,
+      this.semicolon);
+  }
+  with_type_parameters(type_parameters){
+    return new TypeConstDeclaration(
+      this.attribute_spec,
+      this.abstract,
+      this.keyword,
+      this.type_keyword,
+      this.name,
+      type_parameters,
       this.type_constraint,
       this.equal,
       this.type_specifier,
@@ -6243,10 +7099,12 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_type_constraint(type_constraint){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       this.keyword,
       this.type_keyword,
       this.name,
+      this.type_parameters,
       type_constraint,
       this.equal,
       this.type_specifier,
@@ -6254,10 +7112,12 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_equal(equal){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       this.keyword,
       this.type_keyword,
       this.name,
+      this.type_parameters,
       this.type_constraint,
       equal,
       this.type_specifier,
@@ -6265,10 +7125,12 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_type_specifier(type_specifier){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       this.keyword,
       this.type_keyword,
       this.name,
+      this.type_parameters,
       this.type_constraint,
       this.equal,
       type_specifier,
@@ -6276,10 +7138,12 @@ class TypeConstDeclaration extends EditableSyntax
   }
   with_semicolon(semicolon){
     return new TypeConstDeclaration(
+      this.attribute_spec,
       this.abstract,
       this.keyword,
       this.type_keyword,
       this.name,
+      this.type_parameters,
       this.type_constraint,
       this.equal,
       this.type_specifier,
@@ -6291,19 +7155,23 @@ class TypeConstDeclaration extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
     var abstract = this.abstract.rewrite(rewriter, new_parents);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
     var type_keyword = this.type_keyword.rewrite(rewriter, new_parents);
     var name = this.name.rewrite(rewriter, new_parents);
+    var type_parameters = this.type_parameters.rewrite(rewriter, new_parents);
     var type_constraint = this.type_constraint.rewrite(rewriter, new_parents);
     var equal = this.equal.rewrite(rewriter, new_parents);
     var type_specifier = this.type_specifier.rewrite(rewriter, new_parents);
     var semicolon = this.semicolon.rewrite(rewriter, new_parents);
     if (
+      attribute_spec === this.attribute_spec &&
       abstract === this.abstract &&
       keyword === this.keyword &&
       type_keyword === this.type_keyword &&
       name === this.name &&
+      type_parameters === this.type_parameters &&
       type_constraint === this.type_constraint &&
       equal === this.equal &&
       type_specifier === this.type_specifier &&
@@ -6314,10 +7182,12 @@ class TypeConstDeclaration extends EditableSyntax
     else
     {
       return rewriter(new TypeConstDeclaration(
+        attribute_spec,
         abstract,
         keyword,
         type_keyword,
         name,
+        type_parameters,
         type_constraint,
         equal,
         type_specifier,
@@ -6326,6 +7196,9 @@ class TypeConstDeclaration extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let attribute_spec = EditableSyntax.from_json(
+      json.type_const_attribute_spec, position, source);
+    position += attribute_spec.width;
     let abstract = EditableSyntax.from_json(
       json.type_const_abstract, position, source);
     position += abstract.width;
@@ -6338,6 +7211,9 @@ class TypeConstDeclaration extends EditableSyntax
     let name = EditableSyntax.from_json(
       json.type_const_name, position, source);
     position += name.width;
+    let type_parameters = EditableSyntax.from_json(
+      json.type_const_type_parameters, position, source);
+    position += type_parameters.width;
     let type_constraint = EditableSyntax.from_json(
       json.type_const_type_constraint, position, source);
     position += type_constraint.width;
@@ -6351,10 +7227,12 @@ class TypeConstDeclaration extends EditableSyntax
       json.type_const_semicolon, position, source);
     position += semicolon.width;
     return new TypeConstDeclaration(
+        attribute_spec,
         abstract,
         keyword,
         type_keyword,
         name,
+        type_parameters,
         type_constraint,
         equal,
         type_specifier,
@@ -6364,10 +7242,12 @@ class TypeConstDeclaration extends EditableSyntax
   {
     if (TypeConstDeclaration._children_keys == null)
       TypeConstDeclaration._children_keys = [
+        'attribute_spec',
         'abstract',
         'keyword',
         'type_keyword',
         'name',
+        'type_parameters',
         'type_constraint',
         'equal',
         'type_specifier',
@@ -6444,6 +7324,7 @@ class ParameterDeclaration extends EditableSyntax
   constructor(
     attribute,
     visibility,
+    call_convention,
     type,
     name,
     default_value)
@@ -6451,12 +7332,14 @@ class ParameterDeclaration extends EditableSyntax
     super('parameter_declaration', {
       attribute: attribute,
       visibility: visibility,
+      call_convention: call_convention,
       type: type,
       name: name,
       default_value: default_value });
   }
   get attribute() { return this.children.attribute; }
   get visibility() { return this.children.visibility; }
+  get call_convention() { return this.children.call_convention; }
   get type() { return this.children.type; }
   get name() { return this.children.name; }
   get default_value() { return this.children.default_value; }
@@ -6464,6 +7347,7 @@ class ParameterDeclaration extends EditableSyntax
     return new ParameterDeclaration(
       attribute,
       this.visibility,
+      this.call_convention,
       this.type,
       this.name,
       this.default_value);
@@ -6472,6 +7356,16 @@ class ParameterDeclaration extends EditableSyntax
     return new ParameterDeclaration(
       this.attribute,
       visibility,
+      this.call_convention,
+      this.type,
+      this.name,
+      this.default_value);
+  }
+  with_call_convention(call_convention){
+    return new ParameterDeclaration(
+      this.attribute,
+      this.visibility,
+      call_convention,
       this.type,
       this.name,
       this.default_value);
@@ -6480,6 +7374,7 @@ class ParameterDeclaration extends EditableSyntax
     return new ParameterDeclaration(
       this.attribute,
       this.visibility,
+      this.call_convention,
       type,
       this.name,
       this.default_value);
@@ -6488,6 +7383,7 @@ class ParameterDeclaration extends EditableSyntax
     return new ParameterDeclaration(
       this.attribute,
       this.visibility,
+      this.call_convention,
       this.type,
       name,
       this.default_value);
@@ -6496,6 +7392,7 @@ class ParameterDeclaration extends EditableSyntax
     return new ParameterDeclaration(
       this.attribute,
       this.visibility,
+      this.call_convention,
       this.type,
       this.name,
       default_value);
@@ -6508,12 +7405,14 @@ class ParameterDeclaration extends EditableSyntax
     new_parents.push(this);
     var attribute = this.attribute.rewrite(rewriter, new_parents);
     var visibility = this.visibility.rewrite(rewriter, new_parents);
+    var call_convention = this.call_convention.rewrite(rewriter, new_parents);
     var type = this.type.rewrite(rewriter, new_parents);
     var name = this.name.rewrite(rewriter, new_parents);
     var default_value = this.default_value.rewrite(rewriter, new_parents);
     if (
       attribute === this.attribute &&
       visibility === this.visibility &&
+      call_convention === this.call_convention &&
       type === this.type &&
       name === this.name &&
       default_value === this.default_value)
@@ -6525,6 +7424,7 @@ class ParameterDeclaration extends EditableSyntax
       return rewriter(new ParameterDeclaration(
         attribute,
         visibility,
+        call_convention,
         type,
         name,
         default_value), parents);
@@ -6538,6 +7438,9 @@ class ParameterDeclaration extends EditableSyntax
     let visibility = EditableSyntax.from_json(
       json.parameter_visibility, position, source);
     position += visibility.width;
+    let call_convention = EditableSyntax.from_json(
+      json.parameter_call_convention, position, source);
+    position += call_convention.width;
     let type = EditableSyntax.from_json(
       json.parameter_type, position, source);
     position += type.width;
@@ -6550,6 +7453,7 @@ class ParameterDeclaration extends EditableSyntax
     return new ParameterDeclaration(
         attribute,
         visibility,
+        call_convention,
         type,
         name,
         default_value);
@@ -6560,6 +7464,7 @@ class ParameterDeclaration extends EditableSyntax
       ParameterDeclaration._children_keys = [
         'attribute',
         'visibility',
+        'call_convention',
         'type',
         'name',
         'default_value'];
@@ -6569,14 +7474,34 @@ class ParameterDeclaration extends EditableSyntax
 class VariadicParameter extends EditableSyntax
 {
   constructor(
+    call_convention,
+    type,
     ellipsis)
   {
     super('variadic_parameter', {
+      call_convention: call_convention,
+      type: type,
       ellipsis: ellipsis });
   }
+  get call_convention() { return this.children.call_convention; }
+  get type() { return this.children.type; }
   get ellipsis() { return this.children.ellipsis; }
+  with_call_convention(call_convention){
+    return new VariadicParameter(
+      call_convention,
+      this.type,
+      this.ellipsis);
+  }
+  with_type(type){
+    return new VariadicParameter(
+      this.call_convention,
+      type,
+      this.ellipsis);
+  }
   with_ellipsis(ellipsis){
     return new VariadicParameter(
+      this.call_convention,
+      this.type,
       ellipsis);
   }
   rewrite(rewriter, parents)
@@ -6585,8 +7510,12 @@ class VariadicParameter extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var call_convention = this.call_convention.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
     var ellipsis = this.ellipsis.rewrite(rewriter, new_parents);
     if (
+      call_convention === this.call_convention &&
+      type === this.type &&
       ellipsis === this.ellipsis)
     {
       return rewriter(this, parents);
@@ -6594,21 +7523,33 @@ class VariadicParameter extends EditableSyntax
     else
     {
       return rewriter(new VariadicParameter(
+        call_convention,
+        type,
         ellipsis), parents);
     }
   }
   static from_json(json, position, source)
   {
+    let call_convention = EditableSyntax.from_json(
+      json.variadic_parameter_call_convention, position, source);
+    position += call_convention.width;
+    let type = EditableSyntax.from_json(
+      json.variadic_parameter_type, position, source);
+    position += type.width;
     let ellipsis = EditableSyntax.from_json(
       json.variadic_parameter_ellipsis, position, source);
     position += ellipsis.width;
     return new VariadicParameter(
+        call_convention,
+        type,
         ellipsis);
   }
   get children_keys()
   {
     if (VariadicParameter._children_keys == null)
       VariadicParameter._children_keys = [
+        'call_convention',
+        'type',
         'ellipsis'];
     return VariadicParameter._children_keys;
   }
@@ -6694,110 +7635,6 @@ class AttributeSpecification extends EditableSyntax
         'attributes',
         'right_double_angle'];
     return AttributeSpecification._children_keys;
-  }
-}
-class Attribute extends EditableSyntax
-{
-  constructor(
-    name,
-    left_paren,
-    values,
-    right_paren)
-  {
-    super('attribute', {
-      name: name,
-      left_paren: left_paren,
-      values: values,
-      right_paren: right_paren });
-  }
-  get name() { return this.children.name; }
-  get left_paren() { return this.children.left_paren; }
-  get values() { return this.children.values; }
-  get right_paren() { return this.children.right_paren; }
-  with_name(name){
-    return new Attribute(
-      name,
-      this.left_paren,
-      this.values,
-      this.right_paren);
-  }
-  with_left_paren(left_paren){
-    return new Attribute(
-      this.name,
-      left_paren,
-      this.values,
-      this.right_paren);
-  }
-  with_values(values){
-    return new Attribute(
-      this.name,
-      this.left_paren,
-      values,
-      this.right_paren);
-  }
-  with_right_paren(right_paren){
-    return new Attribute(
-      this.name,
-      this.left_paren,
-      this.values,
-      right_paren);
-  }
-  rewrite(rewriter, parents)
-  {
-    if (parents == undefined)
-      parents = [];
-    let new_parents = parents.slice();
-    new_parents.push(this);
-    var name = this.name.rewrite(rewriter, new_parents);
-    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
-    var values = this.values.rewrite(rewriter, new_parents);
-    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
-    if (
-      name === this.name &&
-      left_paren === this.left_paren &&
-      values === this.values &&
-      right_paren === this.right_paren)
-    {
-      return rewriter(this, parents);
-    }
-    else
-    {
-      return rewriter(new Attribute(
-        name,
-        left_paren,
-        values,
-        right_paren), parents);
-    }
-  }
-  static from_json(json, position, source)
-  {
-    let name = EditableSyntax.from_json(
-      json.attribute_name, position, source);
-    position += name.width;
-    let left_paren = EditableSyntax.from_json(
-      json.attribute_left_paren, position, source);
-    position += left_paren.width;
-    let values = EditableSyntax.from_json(
-      json.attribute_values, position, source);
-    position += values.width;
-    let right_paren = EditableSyntax.from_json(
-      json.attribute_right_paren, position, source);
-    position += right_paren.width;
-    return new Attribute(
-        name,
-        left_paren,
-        values,
-        right_paren);
-  }
-  get children_keys()
-  {
-    if (Attribute._children_keys == null)
-      Attribute._children_keys = [
-        'name',
-        'left_paren',
-        'values',
-        'right_paren'];
-    return Attribute._children_keys;
   }
 }
 class InclusionExpression extends EditableSyntax
@@ -7009,6 +7846,110 @@ class CompoundStatement extends EditableSyntax
         'statements',
         'right_brace'];
     return CompoundStatement._children_keys;
+  }
+}
+class AlternateLoopStatement extends EditableSyntax
+{
+  constructor(
+    opening_colon,
+    statements,
+    closing_keyword,
+    closing_semicolon)
+  {
+    super('alternate_loop_statement', {
+      opening_colon: opening_colon,
+      statements: statements,
+      closing_keyword: closing_keyword,
+      closing_semicolon: closing_semicolon });
+  }
+  get opening_colon() { return this.children.opening_colon; }
+  get statements() { return this.children.statements; }
+  get closing_keyword() { return this.children.closing_keyword; }
+  get closing_semicolon() { return this.children.closing_semicolon; }
+  with_opening_colon(opening_colon){
+    return new AlternateLoopStatement(
+      opening_colon,
+      this.statements,
+      this.closing_keyword,
+      this.closing_semicolon);
+  }
+  with_statements(statements){
+    return new AlternateLoopStatement(
+      this.opening_colon,
+      statements,
+      this.closing_keyword,
+      this.closing_semicolon);
+  }
+  with_closing_keyword(closing_keyword){
+    return new AlternateLoopStatement(
+      this.opening_colon,
+      this.statements,
+      closing_keyword,
+      this.closing_semicolon);
+  }
+  with_closing_semicolon(closing_semicolon){
+    return new AlternateLoopStatement(
+      this.opening_colon,
+      this.statements,
+      this.closing_keyword,
+      closing_semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var opening_colon = this.opening_colon.rewrite(rewriter, new_parents);
+    var statements = this.statements.rewrite(rewriter, new_parents);
+    var closing_keyword = this.closing_keyword.rewrite(rewriter, new_parents);
+    var closing_semicolon = this.closing_semicolon.rewrite(rewriter, new_parents);
+    if (
+      opening_colon === this.opening_colon &&
+      statements === this.statements &&
+      closing_keyword === this.closing_keyword &&
+      closing_semicolon === this.closing_semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AlternateLoopStatement(
+        opening_colon,
+        statements,
+        closing_keyword,
+        closing_semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let opening_colon = EditableSyntax.from_json(
+      json.alternate_loop_opening_colon, position, source);
+    position += opening_colon.width;
+    let statements = EditableSyntax.from_json(
+      json.alternate_loop_statements, position, source);
+    position += statements.width;
+    let closing_keyword = EditableSyntax.from_json(
+      json.alternate_loop_closing_keyword, position, source);
+    position += closing_keyword.width;
+    let closing_semicolon = EditableSyntax.from_json(
+      json.alternate_loop_closing_semicolon, position, source);
+    position += closing_semicolon.width;
+    return new AlternateLoopStatement(
+        opening_colon,
+        statements,
+        closing_keyword,
+        closing_semicolon);
+  }
+  get children_keys()
+  {
+    if (AlternateLoopStatement._children_keys == null)
+      AlternateLoopStatement._children_keys = [
+        'opening_colon',
+        'statements',
+        'closing_keyword',
+        'closing_semicolon'];
+    return AlternateLoopStatement._children_keys;
   }
 }
 class ExpressionStatement extends EditableSyntax
@@ -7368,6 +8309,668 @@ class UnsetStatement extends EditableSyntax
         'right_paren',
         'semicolon'];
     return UnsetStatement._children_keys;
+  }
+}
+class LetStatement extends EditableSyntax
+{
+  constructor(
+    keyword,
+    name,
+    colon,
+    type,
+    initializer,
+    semicolon)
+  {
+    super('let_statement', {
+      keyword: keyword,
+      name: name,
+      colon: colon,
+      type: type,
+      initializer: initializer,
+      semicolon: semicolon });
+  }
+  get keyword() { return this.children.keyword; }
+  get name() { return this.children.name; }
+  get colon() { return this.children.colon; }
+  get type() { return this.children.type; }
+  get initializer() { return this.children.initializer; }
+  get semicolon() { return this.children.semicolon; }
+  with_keyword(keyword){
+    return new LetStatement(
+      keyword,
+      this.name,
+      this.colon,
+      this.type,
+      this.initializer,
+      this.semicolon);
+  }
+  with_name(name){
+    return new LetStatement(
+      this.keyword,
+      name,
+      this.colon,
+      this.type,
+      this.initializer,
+      this.semicolon);
+  }
+  with_colon(colon){
+    return new LetStatement(
+      this.keyword,
+      this.name,
+      colon,
+      this.type,
+      this.initializer,
+      this.semicolon);
+  }
+  with_type(type){
+    return new LetStatement(
+      this.keyword,
+      this.name,
+      this.colon,
+      type,
+      this.initializer,
+      this.semicolon);
+  }
+  with_initializer(initializer){
+    return new LetStatement(
+      this.keyword,
+      this.name,
+      this.colon,
+      this.type,
+      initializer,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new LetStatement(
+      this.keyword,
+      this.name,
+      this.colon,
+      this.type,
+      this.initializer,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    var initializer = this.initializer.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      name === this.name &&
+      colon === this.colon &&
+      type === this.type &&
+      initializer === this.initializer &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new LetStatement(
+        keyword,
+        name,
+        colon,
+        type,
+        initializer,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.let_statement_keyword, position, source);
+    position += keyword.width;
+    let name = EditableSyntax.from_json(
+      json.let_statement_name, position, source);
+    position += name.width;
+    let colon = EditableSyntax.from_json(
+      json.let_statement_colon, position, source);
+    position += colon.width;
+    let type = EditableSyntax.from_json(
+      json.let_statement_type, position, source);
+    position += type.width;
+    let initializer = EditableSyntax.from_json(
+      json.let_statement_initializer, position, source);
+    position += initializer.width;
+    let semicolon = EditableSyntax.from_json(
+      json.let_statement_semicolon, position, source);
+    position += semicolon.width;
+    return new LetStatement(
+        keyword,
+        name,
+        colon,
+        type,
+        initializer,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (LetStatement._children_keys == null)
+      LetStatement._children_keys = [
+        'keyword',
+        'name',
+        'colon',
+        'type',
+        'initializer',
+        'semicolon'];
+    return LetStatement._children_keys;
+  }
+}
+class UsingStatementBlockScoped extends EditableSyntax
+{
+  constructor(
+    await_keyword,
+    using_keyword,
+    left_paren,
+    expressions,
+    right_paren,
+    body)
+  {
+    super('using_statement_block_scoped', {
+      await_keyword: await_keyword,
+      using_keyword: using_keyword,
+      left_paren: left_paren,
+      expressions: expressions,
+      right_paren: right_paren,
+      body: body });
+  }
+  get await_keyword() { return this.children.await_keyword; }
+  get using_keyword() { return this.children.using_keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get expressions() { return this.children.expressions; }
+  get right_paren() { return this.children.right_paren; }
+  get body() { return this.children.body; }
+  with_await_keyword(await_keyword){
+    return new UsingStatementBlockScoped(
+      await_keyword,
+      this.using_keyword,
+      this.left_paren,
+      this.expressions,
+      this.right_paren,
+      this.body);
+  }
+  with_using_keyword(using_keyword){
+    return new UsingStatementBlockScoped(
+      this.await_keyword,
+      using_keyword,
+      this.left_paren,
+      this.expressions,
+      this.right_paren,
+      this.body);
+  }
+  with_left_paren(left_paren){
+    return new UsingStatementBlockScoped(
+      this.await_keyword,
+      this.using_keyword,
+      left_paren,
+      this.expressions,
+      this.right_paren,
+      this.body);
+  }
+  with_expressions(expressions){
+    return new UsingStatementBlockScoped(
+      this.await_keyword,
+      this.using_keyword,
+      this.left_paren,
+      expressions,
+      this.right_paren,
+      this.body);
+  }
+  with_right_paren(right_paren){
+    return new UsingStatementBlockScoped(
+      this.await_keyword,
+      this.using_keyword,
+      this.left_paren,
+      this.expressions,
+      right_paren,
+      this.body);
+  }
+  with_body(body){
+    return new UsingStatementBlockScoped(
+      this.await_keyword,
+      this.using_keyword,
+      this.left_paren,
+      this.expressions,
+      this.right_paren,
+      body);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var await_keyword = this.await_keyword.rewrite(rewriter, new_parents);
+    var using_keyword = this.using_keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var expressions = this.expressions.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var body = this.body.rewrite(rewriter, new_parents);
+    if (
+      await_keyword === this.await_keyword &&
+      using_keyword === this.using_keyword &&
+      left_paren === this.left_paren &&
+      expressions === this.expressions &&
+      right_paren === this.right_paren &&
+      body === this.body)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new UsingStatementBlockScoped(
+        await_keyword,
+        using_keyword,
+        left_paren,
+        expressions,
+        right_paren,
+        body), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let await_keyword = EditableSyntax.from_json(
+      json.using_block_await_keyword, position, source);
+    position += await_keyword.width;
+    let using_keyword = EditableSyntax.from_json(
+      json.using_block_using_keyword, position, source);
+    position += using_keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.using_block_left_paren, position, source);
+    position += left_paren.width;
+    let expressions = EditableSyntax.from_json(
+      json.using_block_expressions, position, source);
+    position += expressions.width;
+    let right_paren = EditableSyntax.from_json(
+      json.using_block_right_paren, position, source);
+    position += right_paren.width;
+    let body = EditableSyntax.from_json(
+      json.using_block_body, position, source);
+    position += body.width;
+    return new UsingStatementBlockScoped(
+        await_keyword,
+        using_keyword,
+        left_paren,
+        expressions,
+        right_paren,
+        body);
+  }
+  get children_keys()
+  {
+    if (UsingStatementBlockScoped._children_keys == null)
+      UsingStatementBlockScoped._children_keys = [
+        'await_keyword',
+        'using_keyword',
+        'left_paren',
+        'expressions',
+        'right_paren',
+        'body'];
+    return UsingStatementBlockScoped._children_keys;
+  }
+}
+class UsingStatementFunctionScoped extends EditableSyntax
+{
+  constructor(
+    await_keyword,
+    using_keyword,
+    expression,
+    semicolon)
+  {
+    super('using_statement_function_scoped', {
+      await_keyword: await_keyword,
+      using_keyword: using_keyword,
+      expression: expression,
+      semicolon: semicolon });
+  }
+  get await_keyword() { return this.children.await_keyword; }
+  get using_keyword() { return this.children.using_keyword; }
+  get expression() { return this.children.expression; }
+  get semicolon() { return this.children.semicolon; }
+  with_await_keyword(await_keyword){
+    return new UsingStatementFunctionScoped(
+      await_keyword,
+      this.using_keyword,
+      this.expression,
+      this.semicolon);
+  }
+  with_using_keyword(using_keyword){
+    return new UsingStatementFunctionScoped(
+      this.await_keyword,
+      using_keyword,
+      this.expression,
+      this.semicolon);
+  }
+  with_expression(expression){
+    return new UsingStatementFunctionScoped(
+      this.await_keyword,
+      this.using_keyword,
+      expression,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new UsingStatementFunctionScoped(
+      this.await_keyword,
+      this.using_keyword,
+      this.expression,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var await_keyword = this.await_keyword.rewrite(rewriter, new_parents);
+    var using_keyword = this.using_keyword.rewrite(rewriter, new_parents);
+    var expression = this.expression.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      await_keyword === this.await_keyword &&
+      using_keyword === this.using_keyword &&
+      expression === this.expression &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new UsingStatementFunctionScoped(
+        await_keyword,
+        using_keyword,
+        expression,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let await_keyword = EditableSyntax.from_json(
+      json.using_function_await_keyword, position, source);
+    position += await_keyword.width;
+    let using_keyword = EditableSyntax.from_json(
+      json.using_function_using_keyword, position, source);
+    position += using_keyword.width;
+    let expression = EditableSyntax.from_json(
+      json.using_function_expression, position, source);
+    position += expression.width;
+    let semicolon = EditableSyntax.from_json(
+      json.using_function_semicolon, position, source);
+    position += semicolon.width;
+    return new UsingStatementFunctionScoped(
+        await_keyword,
+        using_keyword,
+        expression,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (UsingStatementFunctionScoped._children_keys == null)
+      UsingStatementFunctionScoped._children_keys = [
+        'await_keyword',
+        'using_keyword',
+        'expression',
+        'semicolon'];
+    return UsingStatementFunctionScoped._children_keys;
+  }
+}
+class DeclareDirectiveStatement extends EditableSyntax
+{
+  constructor(
+    keyword,
+    left_paren,
+    expression,
+    right_paren,
+    semicolon)
+  {
+    super('declare_directive_statement', {
+      keyword: keyword,
+      left_paren: left_paren,
+      expression: expression,
+      right_paren: right_paren,
+      semicolon: semicolon });
+  }
+  get keyword() { return this.children.keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get expression() { return this.children.expression; }
+  get right_paren() { return this.children.right_paren; }
+  get semicolon() { return this.children.semicolon; }
+  with_keyword(keyword){
+    return new DeclareDirectiveStatement(
+      keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_left_paren(left_paren){
+    return new DeclareDirectiveStatement(
+      this.keyword,
+      left_paren,
+      this.expression,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_expression(expression){
+    return new DeclareDirectiveStatement(
+      this.keyword,
+      this.left_paren,
+      expression,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_right_paren(right_paren){
+    return new DeclareDirectiveStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      right_paren,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new DeclareDirectiveStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var expression = this.expression.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      left_paren === this.left_paren &&
+      expression === this.expression &&
+      right_paren === this.right_paren &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new DeclareDirectiveStatement(
+        keyword,
+        left_paren,
+        expression,
+        right_paren,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.declare_directive_keyword, position, source);
+    position += keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.declare_directive_left_paren, position, source);
+    position += left_paren.width;
+    let expression = EditableSyntax.from_json(
+      json.declare_directive_expression, position, source);
+    position += expression.width;
+    let right_paren = EditableSyntax.from_json(
+      json.declare_directive_right_paren, position, source);
+    position += right_paren.width;
+    let semicolon = EditableSyntax.from_json(
+      json.declare_directive_semicolon, position, source);
+    position += semicolon.width;
+    return new DeclareDirectiveStatement(
+        keyword,
+        left_paren,
+        expression,
+        right_paren,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (DeclareDirectiveStatement._children_keys == null)
+      DeclareDirectiveStatement._children_keys = [
+        'keyword',
+        'left_paren',
+        'expression',
+        'right_paren',
+        'semicolon'];
+    return DeclareDirectiveStatement._children_keys;
+  }
+}
+class DeclareBlockStatement extends EditableSyntax
+{
+  constructor(
+    keyword,
+    left_paren,
+    expression,
+    right_paren,
+    body)
+  {
+    super('declare_block_statement', {
+      keyword: keyword,
+      left_paren: left_paren,
+      expression: expression,
+      right_paren: right_paren,
+      body: body });
+  }
+  get keyword() { return this.children.keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get expression() { return this.children.expression; }
+  get right_paren() { return this.children.right_paren; }
+  get body() { return this.children.body; }
+  with_keyword(keyword){
+    return new DeclareBlockStatement(
+      keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      this.body);
+  }
+  with_left_paren(left_paren){
+    return new DeclareBlockStatement(
+      this.keyword,
+      left_paren,
+      this.expression,
+      this.right_paren,
+      this.body);
+  }
+  with_expression(expression){
+    return new DeclareBlockStatement(
+      this.keyword,
+      this.left_paren,
+      expression,
+      this.right_paren,
+      this.body);
+  }
+  with_right_paren(right_paren){
+    return new DeclareBlockStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      right_paren,
+      this.body);
+  }
+  with_body(body){
+    return new DeclareBlockStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      body);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var expression = this.expression.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var body = this.body.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      left_paren === this.left_paren &&
+      expression === this.expression &&
+      right_paren === this.right_paren &&
+      body === this.body)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new DeclareBlockStatement(
+        keyword,
+        left_paren,
+        expression,
+        right_paren,
+        body), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.declare_block_keyword, position, source);
+    position += keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.declare_block_left_paren, position, source);
+    position += left_paren.width;
+    let expression = EditableSyntax.from_json(
+      json.declare_block_expression, position, source);
+    position += expression.width;
+    let right_paren = EditableSyntax.from_json(
+      json.declare_block_right_paren, position, source);
+    position += right_paren.width;
+    let body = EditableSyntax.from_json(
+      json.declare_block_body, position, source);
+    position += body.width;
+    return new DeclareBlockStatement(
+        keyword,
+        left_paren,
+        expression,
+        right_paren,
+        body);
+  }
+  get children_keys()
+  {
+    if (DeclareBlockStatement._children_keys == null)
+      DeclareBlockStatement._children_keys = [
+        'keyword',
+        'left_paren',
+        'expression',
+        'right_paren',
+        'body'];
+    return DeclareBlockStatement._children_keys;
   }
 }
 class WhileStatement extends EditableSyntax
@@ -7865,6 +9468,513 @@ class ElseClause extends EditableSyntax
         'keyword',
         'statement'];
     return ElseClause._children_keys;
+  }
+}
+class AlternateIfStatement extends EditableSyntax
+{
+  constructor(
+    keyword,
+    left_paren,
+    condition,
+    right_paren,
+    colon,
+    statement,
+    elseif_clauses,
+    else_clause,
+    endif_keyword,
+    semicolon)
+  {
+    super('alternate_if_statement', {
+      keyword: keyword,
+      left_paren: left_paren,
+      condition: condition,
+      right_paren: right_paren,
+      colon: colon,
+      statement: statement,
+      elseif_clauses: elseif_clauses,
+      else_clause: else_clause,
+      endif_keyword: endif_keyword,
+      semicolon: semicolon });
+  }
+  get keyword() { return this.children.keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get condition() { return this.children.condition; }
+  get right_paren() { return this.children.right_paren; }
+  get colon() { return this.children.colon; }
+  get statement() { return this.children.statement; }
+  get elseif_clauses() { return this.children.elseif_clauses; }
+  get else_clause() { return this.children.else_clause; }
+  get endif_keyword() { return this.children.endif_keyword; }
+  get semicolon() { return this.children.semicolon; }
+  with_keyword(keyword){
+    return new AlternateIfStatement(
+      keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_left_paren(left_paren){
+    return new AlternateIfStatement(
+      this.keyword,
+      left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_condition(condition){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_right_paren(right_paren){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_colon(colon){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_statement(statement){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_elseif_clauses(elseif_clauses){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_else_clause(else_clause){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      else_clause,
+      this.endif_keyword,
+      this.semicolon);
+  }
+  with_endif_keyword(endif_keyword){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      endif_keyword,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new AlternateIfStatement(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement,
+      this.elseif_clauses,
+      this.else_clause,
+      this.endif_keyword,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var condition = this.condition.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var statement = this.statement.rewrite(rewriter, new_parents);
+    var elseif_clauses = this.elseif_clauses.rewrite(rewriter, new_parents);
+    var else_clause = this.else_clause.rewrite(rewriter, new_parents);
+    var endif_keyword = this.endif_keyword.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      left_paren === this.left_paren &&
+      condition === this.condition &&
+      right_paren === this.right_paren &&
+      colon === this.colon &&
+      statement === this.statement &&
+      elseif_clauses === this.elseif_clauses &&
+      else_clause === this.else_clause &&
+      endif_keyword === this.endif_keyword &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AlternateIfStatement(
+        keyword,
+        left_paren,
+        condition,
+        right_paren,
+        colon,
+        statement,
+        elseif_clauses,
+        else_clause,
+        endif_keyword,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.alternate_if_keyword, position, source);
+    position += keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.alternate_if_left_paren, position, source);
+    position += left_paren.width;
+    let condition = EditableSyntax.from_json(
+      json.alternate_if_condition, position, source);
+    position += condition.width;
+    let right_paren = EditableSyntax.from_json(
+      json.alternate_if_right_paren, position, source);
+    position += right_paren.width;
+    let colon = EditableSyntax.from_json(
+      json.alternate_if_colon, position, source);
+    position += colon.width;
+    let statement = EditableSyntax.from_json(
+      json.alternate_if_statement, position, source);
+    position += statement.width;
+    let elseif_clauses = EditableSyntax.from_json(
+      json.alternate_if_elseif_clauses, position, source);
+    position += elseif_clauses.width;
+    let else_clause = EditableSyntax.from_json(
+      json.alternate_if_else_clause, position, source);
+    position += else_clause.width;
+    let endif_keyword = EditableSyntax.from_json(
+      json.alternate_if_endif_keyword, position, source);
+    position += endif_keyword.width;
+    let semicolon = EditableSyntax.from_json(
+      json.alternate_if_semicolon, position, source);
+    position += semicolon.width;
+    return new AlternateIfStatement(
+        keyword,
+        left_paren,
+        condition,
+        right_paren,
+        colon,
+        statement,
+        elseif_clauses,
+        else_clause,
+        endif_keyword,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (AlternateIfStatement._children_keys == null)
+      AlternateIfStatement._children_keys = [
+        'keyword',
+        'left_paren',
+        'condition',
+        'right_paren',
+        'colon',
+        'statement',
+        'elseif_clauses',
+        'else_clause',
+        'endif_keyword',
+        'semicolon'];
+    return AlternateIfStatement._children_keys;
+  }
+}
+class AlternateElseifClause extends EditableSyntax
+{
+  constructor(
+    keyword,
+    left_paren,
+    condition,
+    right_paren,
+    colon,
+    statement)
+  {
+    super('alternate_elseif_clause', {
+      keyword: keyword,
+      left_paren: left_paren,
+      condition: condition,
+      right_paren: right_paren,
+      colon: colon,
+      statement: statement });
+  }
+  get keyword() { return this.children.keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get condition() { return this.children.condition; }
+  get right_paren() { return this.children.right_paren; }
+  get colon() { return this.children.colon; }
+  get statement() { return this.children.statement; }
+  with_keyword(keyword){
+    return new AlternateElseifClause(
+      keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement);
+  }
+  with_left_paren(left_paren){
+    return new AlternateElseifClause(
+      this.keyword,
+      left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      this.statement);
+  }
+  with_condition(condition){
+    return new AlternateElseifClause(
+      this.keyword,
+      this.left_paren,
+      condition,
+      this.right_paren,
+      this.colon,
+      this.statement);
+  }
+  with_right_paren(right_paren){
+    return new AlternateElseifClause(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      right_paren,
+      this.colon,
+      this.statement);
+  }
+  with_colon(colon){
+    return new AlternateElseifClause(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      colon,
+      this.statement);
+  }
+  with_statement(statement){
+    return new AlternateElseifClause(
+      this.keyword,
+      this.left_paren,
+      this.condition,
+      this.right_paren,
+      this.colon,
+      statement);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var condition = this.condition.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var statement = this.statement.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      left_paren === this.left_paren &&
+      condition === this.condition &&
+      right_paren === this.right_paren &&
+      colon === this.colon &&
+      statement === this.statement)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AlternateElseifClause(
+        keyword,
+        left_paren,
+        condition,
+        right_paren,
+        colon,
+        statement), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.alternate_elseif_keyword, position, source);
+    position += keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.alternate_elseif_left_paren, position, source);
+    position += left_paren.width;
+    let condition = EditableSyntax.from_json(
+      json.alternate_elseif_condition, position, source);
+    position += condition.width;
+    let right_paren = EditableSyntax.from_json(
+      json.alternate_elseif_right_paren, position, source);
+    position += right_paren.width;
+    let colon = EditableSyntax.from_json(
+      json.alternate_elseif_colon, position, source);
+    position += colon.width;
+    let statement = EditableSyntax.from_json(
+      json.alternate_elseif_statement, position, source);
+    position += statement.width;
+    return new AlternateElseifClause(
+        keyword,
+        left_paren,
+        condition,
+        right_paren,
+        colon,
+        statement);
+  }
+  get children_keys()
+  {
+    if (AlternateElseifClause._children_keys == null)
+      AlternateElseifClause._children_keys = [
+        'keyword',
+        'left_paren',
+        'condition',
+        'right_paren',
+        'colon',
+        'statement'];
+    return AlternateElseifClause._children_keys;
+  }
+}
+class AlternateElseClause extends EditableSyntax
+{
+  constructor(
+    keyword,
+    colon,
+    statement)
+  {
+    super('alternate_else_clause', {
+      keyword: keyword,
+      colon: colon,
+      statement: statement });
+  }
+  get keyword() { return this.children.keyword; }
+  get colon() { return this.children.colon; }
+  get statement() { return this.children.statement; }
+  with_keyword(keyword){
+    return new AlternateElseClause(
+      keyword,
+      this.colon,
+      this.statement);
+  }
+  with_colon(colon){
+    return new AlternateElseClause(
+      this.keyword,
+      colon,
+      this.statement);
+  }
+  with_statement(statement){
+    return new AlternateElseClause(
+      this.keyword,
+      this.colon,
+      statement);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var statement = this.statement.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      colon === this.colon &&
+      statement === this.statement)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AlternateElseClause(
+        keyword,
+        colon,
+        statement), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.alternate_else_keyword, position, source);
+    position += keyword.width;
+    let colon = EditableSyntax.from_json(
+      json.alternate_else_colon, position, source);
+    position += colon.width;
+    let statement = EditableSyntax.from_json(
+      json.alternate_else_statement, position, source);
+    position += statement.width;
+    return new AlternateElseClause(
+        keyword,
+        colon,
+        statement);
+  }
+  get children_keys()
+  {
+    if (AlternateElseClause._children_keys == null)
+      AlternateElseClause._children_keys = [
+        'keyword',
+        'colon',
+        'statement'];
+    return AlternateElseClause._children_keys;
   }
 }
 class TryStatement extends EditableSyntax
@@ -9056,6 +11166,214 @@ class SwitchStatement extends EditableSyntax
     return SwitchStatement._children_keys;
   }
 }
+class AlternateSwitchStatement extends EditableSyntax
+{
+  constructor(
+    keyword,
+    left_paren,
+    expression,
+    right_paren,
+    opening_colon,
+    sections,
+    closing_endswitch,
+    closing_semicolon)
+  {
+    super('alternate_switch_statement', {
+      keyword: keyword,
+      left_paren: left_paren,
+      expression: expression,
+      right_paren: right_paren,
+      opening_colon: opening_colon,
+      sections: sections,
+      closing_endswitch: closing_endswitch,
+      closing_semicolon: closing_semicolon });
+  }
+  get keyword() { return this.children.keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get expression() { return this.children.expression; }
+  get right_paren() { return this.children.right_paren; }
+  get opening_colon() { return this.children.opening_colon; }
+  get sections() { return this.children.sections; }
+  get closing_endswitch() { return this.children.closing_endswitch; }
+  get closing_semicolon() { return this.children.closing_semicolon; }
+  with_keyword(keyword){
+    return new AlternateSwitchStatement(
+      keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      this.opening_colon,
+      this.sections,
+      this.closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_left_paren(left_paren){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      left_paren,
+      this.expression,
+      this.right_paren,
+      this.opening_colon,
+      this.sections,
+      this.closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_expression(expression){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      this.left_paren,
+      expression,
+      this.right_paren,
+      this.opening_colon,
+      this.sections,
+      this.closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_right_paren(right_paren){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      right_paren,
+      this.opening_colon,
+      this.sections,
+      this.closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_opening_colon(opening_colon){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      opening_colon,
+      this.sections,
+      this.closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_sections(sections){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      this.opening_colon,
+      sections,
+      this.closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_closing_endswitch(closing_endswitch){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      this.opening_colon,
+      this.sections,
+      closing_endswitch,
+      this.closing_semicolon);
+  }
+  with_closing_semicolon(closing_semicolon){
+    return new AlternateSwitchStatement(
+      this.keyword,
+      this.left_paren,
+      this.expression,
+      this.right_paren,
+      this.opening_colon,
+      this.sections,
+      this.closing_endswitch,
+      closing_semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var expression = this.expression.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var opening_colon = this.opening_colon.rewrite(rewriter, new_parents);
+    var sections = this.sections.rewrite(rewriter, new_parents);
+    var closing_endswitch = this.closing_endswitch.rewrite(rewriter, new_parents);
+    var closing_semicolon = this.closing_semicolon.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      left_paren === this.left_paren &&
+      expression === this.expression &&
+      right_paren === this.right_paren &&
+      opening_colon === this.opening_colon &&
+      sections === this.sections &&
+      closing_endswitch === this.closing_endswitch &&
+      closing_semicolon === this.closing_semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AlternateSwitchStatement(
+        keyword,
+        left_paren,
+        expression,
+        right_paren,
+        opening_colon,
+        sections,
+        closing_endswitch,
+        closing_semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.alternate_switch_keyword, position, source);
+    position += keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.alternate_switch_left_paren, position, source);
+    position += left_paren.width;
+    let expression = EditableSyntax.from_json(
+      json.alternate_switch_expression, position, source);
+    position += expression.width;
+    let right_paren = EditableSyntax.from_json(
+      json.alternate_switch_right_paren, position, source);
+    position += right_paren.width;
+    let opening_colon = EditableSyntax.from_json(
+      json.alternate_switch_opening_colon, position, source);
+    position += opening_colon.width;
+    let sections = EditableSyntax.from_json(
+      json.alternate_switch_sections, position, source);
+    position += sections.width;
+    let closing_endswitch = EditableSyntax.from_json(
+      json.alternate_switch_closing_endswitch, position, source);
+    position += closing_endswitch.width;
+    let closing_semicolon = EditableSyntax.from_json(
+      json.alternate_switch_closing_semicolon, position, source);
+    position += closing_semicolon.width;
+    return new AlternateSwitchStatement(
+        keyword,
+        left_paren,
+        expression,
+        right_paren,
+        opening_colon,
+        sections,
+        closing_endswitch,
+        closing_semicolon);
+  }
+  get children_keys()
+  {
+    if (AlternateSwitchStatement._children_keys == null)
+      AlternateSwitchStatement._children_keys = [
+        'keyword',
+        'left_paren',
+        'expression',
+        'right_paren',
+        'opening_colon',
+        'sections',
+        'closing_endswitch',
+        'closing_semicolon'];
+    return AlternateSwitchStatement._children_keys;
+  }
+}
 class SwitchSection extends EditableSyntax
 {
   constructor(
@@ -9829,153 +12147,6 @@ class ContinueStatement extends EditableSyntax
     return ContinueStatement._children_keys;
   }
 }
-class FunctionStaticStatement extends EditableSyntax
-{
-  constructor(
-    static_keyword,
-    declarations,
-    semicolon)
-  {
-    super('function_static_statement', {
-      static_keyword: static_keyword,
-      declarations: declarations,
-      semicolon: semicolon });
-  }
-  get static_keyword() { return this.children.static_keyword; }
-  get declarations() { return this.children.declarations; }
-  get semicolon() { return this.children.semicolon; }
-  with_static_keyword(static_keyword){
-    return new FunctionStaticStatement(
-      static_keyword,
-      this.declarations,
-      this.semicolon);
-  }
-  with_declarations(declarations){
-    return new FunctionStaticStatement(
-      this.static_keyword,
-      declarations,
-      this.semicolon);
-  }
-  with_semicolon(semicolon){
-    return new FunctionStaticStatement(
-      this.static_keyword,
-      this.declarations,
-      semicolon);
-  }
-  rewrite(rewriter, parents)
-  {
-    if (parents == undefined)
-      parents = [];
-    let new_parents = parents.slice();
-    new_parents.push(this);
-    var static_keyword = this.static_keyword.rewrite(rewriter, new_parents);
-    var declarations = this.declarations.rewrite(rewriter, new_parents);
-    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
-    if (
-      static_keyword === this.static_keyword &&
-      declarations === this.declarations &&
-      semicolon === this.semicolon)
-    {
-      return rewriter(this, parents);
-    }
-    else
-    {
-      return rewriter(new FunctionStaticStatement(
-        static_keyword,
-        declarations,
-        semicolon), parents);
-    }
-  }
-  static from_json(json, position, source)
-  {
-    let static_keyword = EditableSyntax.from_json(
-      json.static_static_keyword, position, source);
-    position += static_keyword.width;
-    let declarations = EditableSyntax.from_json(
-      json.static_declarations, position, source);
-    position += declarations.width;
-    let semicolon = EditableSyntax.from_json(
-      json.static_semicolon, position, source);
-    position += semicolon.width;
-    return new FunctionStaticStatement(
-        static_keyword,
-        declarations,
-        semicolon);
-  }
-  get children_keys()
-  {
-    if (FunctionStaticStatement._children_keys == null)
-      FunctionStaticStatement._children_keys = [
-        'static_keyword',
-        'declarations',
-        'semicolon'];
-    return FunctionStaticStatement._children_keys;
-  }
-}
-class StaticDeclarator extends EditableSyntax
-{
-  constructor(
-    name,
-    initializer)
-  {
-    super('static_declarator', {
-      name: name,
-      initializer: initializer });
-  }
-  get name() { return this.children.name; }
-  get initializer() { return this.children.initializer; }
-  with_name(name){
-    return new StaticDeclarator(
-      name,
-      this.initializer);
-  }
-  with_initializer(initializer){
-    return new StaticDeclarator(
-      this.name,
-      initializer);
-  }
-  rewrite(rewriter, parents)
-  {
-    if (parents == undefined)
-      parents = [];
-    let new_parents = parents.slice();
-    new_parents.push(this);
-    var name = this.name.rewrite(rewriter, new_parents);
-    var initializer = this.initializer.rewrite(rewriter, new_parents);
-    if (
-      name === this.name &&
-      initializer === this.initializer)
-    {
-      return rewriter(this, parents);
-    }
-    else
-    {
-      return rewriter(new StaticDeclarator(
-        name,
-        initializer), parents);
-    }
-  }
-  static from_json(json, position, source)
-  {
-    let name = EditableSyntax.from_json(
-      json.static_name, position, source);
-    position += name.width;
-    let initializer = EditableSyntax.from_json(
-      json.static_initializer, position, source);
-    position += initializer.width;
-    return new StaticDeclarator(
-        name,
-        initializer);
-  }
-  get children_keys()
-  {
-    if (StaticDeclarator._children_keys == null)
-      StaticDeclarator._children_keys = [
-        'name',
-        'initializer'];
-    return StaticDeclarator._children_keys;
-  }
-}
 class EchoStatement extends EditableSyntax
 {
   constructor(
@@ -10059,38 +12230,27 @@ class EchoStatement extends EditableSyntax
     return EchoStatement._children_keys;
   }
 }
-class GlobalStatement extends EditableSyntax
+class ConcurrentStatement extends EditableSyntax
 {
   constructor(
     keyword,
-    variables,
-    semicolon)
+    statement)
   {
-    super('global_statement', {
+    super('concurrent_statement', {
       keyword: keyword,
-      variables: variables,
-      semicolon: semicolon });
+      statement: statement });
   }
   get keyword() { return this.children.keyword; }
-  get variables() { return this.children.variables; }
-  get semicolon() { return this.children.semicolon; }
+  get statement() { return this.children.statement; }
   with_keyword(keyword){
-    return new GlobalStatement(
+    return new ConcurrentStatement(
       keyword,
-      this.variables,
-      this.semicolon);
+      this.statement);
   }
-  with_variables(variables){
-    return new GlobalStatement(
+  with_statement(statement){
+    return new ConcurrentStatement(
       this.keyword,
-      variables,
-      this.semicolon);
-  }
-  with_semicolon(semicolon){
-    return new GlobalStatement(
-      this.keyword,
-      this.variables,
-      semicolon);
+      statement);
   }
   rewrite(rewriter, parents)
   {
@@ -10099,47 +12259,39 @@ class GlobalStatement extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
-    var variables = this.variables.rewrite(rewriter, new_parents);
-    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    var statement = this.statement.rewrite(rewriter, new_parents);
     if (
       keyword === this.keyword &&
-      variables === this.variables &&
-      semicolon === this.semicolon)
+      statement === this.statement)
     {
       return rewriter(this, parents);
     }
     else
     {
-      return rewriter(new GlobalStatement(
+      return rewriter(new ConcurrentStatement(
         keyword,
-        variables,
-        semicolon), parents);
+        statement), parents);
     }
   }
   static from_json(json, position, source)
   {
     let keyword = EditableSyntax.from_json(
-      json.global_keyword, position, source);
+      json.concurrent_keyword, position, source);
     position += keyword.width;
-    let variables = EditableSyntax.from_json(
-      json.global_variables, position, source);
-    position += variables.width;
-    let semicolon = EditableSyntax.from_json(
-      json.global_semicolon, position, source);
-    position += semicolon.width;
-    return new GlobalStatement(
+    let statement = EditableSyntax.from_json(
+      json.concurrent_statement, position, source);
+    position += statement.width;
+    return new ConcurrentStatement(
         keyword,
-        variables,
-        semicolon);
+        statement);
   }
   get children_keys()
   {
-    if (GlobalStatement._children_keys == null)
-      GlobalStatement._children_keys = [
+    if (ConcurrentStatement._children_keys == null)
+      ConcurrentStatement._children_keys = [
         'keyword',
-        'variables',
-        'semicolon'];
-    return GlobalStatement._children_keys;
+        'statement'];
+    return ConcurrentStatement._children_keys;
   }
 }
 class SimpleInitializer extends EditableSyntax
@@ -10206,9 +12358,249 @@ class SimpleInitializer extends EditableSyntax
     return SimpleInitializer._children_keys;
   }
 }
+class AnonymousClass extends EditableSyntax
+{
+  constructor(
+    class_keyword,
+    left_paren,
+    argument_list,
+    right_paren,
+    extends_keyword,
+    extends_list,
+    implements_keyword,
+    implements_list,
+    body)
+  {
+    super('anonymous_class', {
+      class_keyword: class_keyword,
+      left_paren: left_paren,
+      argument_list: argument_list,
+      right_paren: right_paren,
+      extends_keyword: extends_keyword,
+      extends_list: extends_list,
+      implements_keyword: implements_keyword,
+      implements_list: implements_list,
+      body: body });
+  }
+  get class_keyword() { return this.children.class_keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get argument_list() { return this.children.argument_list; }
+  get right_paren() { return this.children.right_paren; }
+  get extends_keyword() { return this.children.extends_keyword; }
+  get extends_list() { return this.children.extends_list; }
+  get implements_keyword() { return this.children.implements_keyword; }
+  get implements_list() { return this.children.implements_list; }
+  get body() { return this.children.body; }
+  with_class_keyword(class_keyword){
+    return new AnonymousClass(
+      class_keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_left_paren(left_paren){
+    return new AnonymousClass(
+      this.class_keyword,
+      left_paren,
+      this.argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_argument_list(argument_list){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_right_paren(right_paren){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      this.argument_list,
+      right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_extends_keyword(extends_keyword){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren,
+      extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_extends_list(extends_list){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_implements_keyword(implements_keyword){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      implements_keyword,
+      this.implements_list,
+      this.body);
+  }
+  with_implements_list(implements_list){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      implements_list,
+      this.body);
+  }
+  with_body(body){
+    return new AnonymousClass(
+      this.class_keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren,
+      this.extends_keyword,
+      this.extends_list,
+      this.implements_keyword,
+      this.implements_list,
+      body);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var class_keyword = this.class_keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var argument_list = this.argument_list.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var extends_keyword = this.extends_keyword.rewrite(rewriter, new_parents);
+    var extends_list = this.extends_list.rewrite(rewriter, new_parents);
+    var implements_keyword = this.implements_keyword.rewrite(rewriter, new_parents);
+    var implements_list = this.implements_list.rewrite(rewriter, new_parents);
+    var body = this.body.rewrite(rewriter, new_parents);
+    if (
+      class_keyword === this.class_keyword &&
+      left_paren === this.left_paren &&
+      argument_list === this.argument_list &&
+      right_paren === this.right_paren &&
+      extends_keyword === this.extends_keyword &&
+      extends_list === this.extends_list &&
+      implements_keyword === this.implements_keyword &&
+      implements_list === this.implements_list &&
+      body === this.body)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AnonymousClass(
+        class_keyword,
+        left_paren,
+        argument_list,
+        right_paren,
+        extends_keyword,
+        extends_list,
+        implements_keyword,
+        implements_list,
+        body), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let class_keyword = EditableSyntax.from_json(
+      json.anonymous_class_class_keyword, position, source);
+    position += class_keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.anonymous_class_left_paren, position, source);
+    position += left_paren.width;
+    let argument_list = EditableSyntax.from_json(
+      json.anonymous_class_argument_list, position, source);
+    position += argument_list.width;
+    let right_paren = EditableSyntax.from_json(
+      json.anonymous_class_right_paren, position, source);
+    position += right_paren.width;
+    let extends_keyword = EditableSyntax.from_json(
+      json.anonymous_class_extends_keyword, position, source);
+    position += extends_keyword.width;
+    let extends_list = EditableSyntax.from_json(
+      json.anonymous_class_extends_list, position, source);
+    position += extends_list.width;
+    let implements_keyword = EditableSyntax.from_json(
+      json.anonymous_class_implements_keyword, position, source);
+    position += implements_keyword.width;
+    let implements_list = EditableSyntax.from_json(
+      json.anonymous_class_implements_list, position, source);
+    position += implements_list.width;
+    let body = EditableSyntax.from_json(
+      json.anonymous_class_body, position, source);
+    position += body.width;
+    return new AnonymousClass(
+        class_keyword,
+        left_paren,
+        argument_list,
+        right_paren,
+        extends_keyword,
+        extends_list,
+        implements_keyword,
+        implements_list,
+        body);
+  }
+  get children_keys()
+  {
+    if (AnonymousClass._children_keys == null)
+      AnonymousClass._children_keys = [
+        'class_keyword',
+        'left_paren',
+        'argument_list',
+        'right_paren',
+        'extends_keyword',
+        'extends_list',
+        'implements_keyword',
+        'implements_list',
+        'body'];
+    return AnonymousClass._children_keys;
+  }
+}
 class AnonymousFunction extends EditableSyntax
 {
   constructor(
+    attribute_spec,
     static_keyword,
     async_keyword,
     coroutine_keyword,
@@ -10222,6 +12614,7 @@ class AnonymousFunction extends EditableSyntax
     body)
   {
     super('anonymous_function', {
+      attribute_spec: attribute_spec,
       static_keyword: static_keyword,
       async_keyword: async_keyword,
       coroutine_keyword: coroutine_keyword,
@@ -10234,6 +12627,7 @@ class AnonymousFunction extends EditableSyntax
       use: use,
       body: body });
   }
+  get attribute_spec() { return this.children.attribute_spec; }
   get static_keyword() { return this.children.static_keyword; }
   get async_keyword() { return this.children.async_keyword; }
   get coroutine_keyword() { return this.children.coroutine_keyword; }
@@ -10245,8 +12639,24 @@ class AnonymousFunction extends EditableSyntax
   get type() { return this.children.type; }
   get use() { return this.children.use; }
   get body() { return this.children.body; }
+  with_attribute_spec(attribute_spec){
+    return new AnonymousFunction(
+      attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.colon,
+      this.type,
+      this.use,
+      this.body);
+  }
   with_static_keyword(static_keyword){
     return new AnonymousFunction(
+      this.attribute_spec,
       static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10261,6 +12671,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_async_keyword(async_keyword){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       async_keyword,
       this.coroutine_keyword,
@@ -10275,6 +12686,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_coroutine_keyword(coroutine_keyword){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       coroutine_keyword,
@@ -10289,6 +12701,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_function_keyword(function_keyword){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10303,6 +12716,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_left_paren(left_paren){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10317,6 +12731,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_parameters(parameters){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10331,6 +12746,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_right_paren(right_paren){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10345,6 +12761,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_colon(colon){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10359,6 +12776,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_type(type){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10373,6 +12791,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_use(use){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10387,6 +12806,7 @@ class AnonymousFunction extends EditableSyntax
   }
   with_body(body){
     return new AnonymousFunction(
+      this.attribute_spec,
       this.static_keyword,
       this.async_keyword,
       this.coroutine_keyword,
@@ -10405,6 +12825,7 @@ class AnonymousFunction extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
     var static_keyword = this.static_keyword.rewrite(rewriter, new_parents);
     var async_keyword = this.async_keyword.rewrite(rewriter, new_parents);
     var coroutine_keyword = this.coroutine_keyword.rewrite(rewriter, new_parents);
@@ -10417,6 +12838,7 @@ class AnonymousFunction extends EditableSyntax
     var use = this.use.rewrite(rewriter, new_parents);
     var body = this.body.rewrite(rewriter, new_parents);
     if (
+      attribute_spec === this.attribute_spec &&
       static_keyword === this.static_keyword &&
       async_keyword === this.async_keyword &&
       coroutine_keyword === this.coroutine_keyword &&
@@ -10434,6 +12856,7 @@ class AnonymousFunction extends EditableSyntax
     else
     {
       return rewriter(new AnonymousFunction(
+        attribute_spec,
         static_keyword,
         async_keyword,
         coroutine_keyword,
@@ -10449,6 +12872,9 @@ class AnonymousFunction extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let attribute_spec = EditableSyntax.from_json(
+      json.anonymous_attribute_spec, position, source);
+    position += attribute_spec.width;
     let static_keyword = EditableSyntax.from_json(
       json.anonymous_static_keyword, position, source);
     position += static_keyword.width;
@@ -10483,6 +12909,7 @@ class AnonymousFunction extends EditableSyntax
       json.anonymous_body, position, source);
     position += body.width;
     return new AnonymousFunction(
+        attribute_spec,
         static_keyword,
         async_keyword,
         coroutine_keyword,
@@ -10499,6 +12926,7 @@ class AnonymousFunction extends EditableSyntax
   {
     if (AnonymousFunction._children_keys == null)
       AnonymousFunction._children_keys = [
+        'attribute_spec',
         'static_keyword',
         'async_keyword',
         'coroutine_keyword',
@@ -10511,6 +12939,350 @@ class AnonymousFunction extends EditableSyntax
         'use',
         'body'];
     return AnonymousFunction._children_keys;
+  }
+}
+class Php7AnonymousFunction extends EditableSyntax
+{
+  constructor(
+    attribute_spec,
+    static_keyword,
+    async_keyword,
+    coroutine_keyword,
+    function_keyword,
+    left_paren,
+    parameters,
+    right_paren,
+    use,
+    colon,
+    type,
+    body)
+  {
+    super('php7_anonymous_function', {
+      attribute_spec: attribute_spec,
+      static_keyword: static_keyword,
+      async_keyword: async_keyword,
+      coroutine_keyword: coroutine_keyword,
+      function_keyword: function_keyword,
+      left_paren: left_paren,
+      parameters: parameters,
+      right_paren: right_paren,
+      use: use,
+      colon: colon,
+      type: type,
+      body: body });
+  }
+  get attribute_spec() { return this.children.attribute_spec; }
+  get static_keyword() { return this.children.static_keyword; }
+  get async_keyword() { return this.children.async_keyword; }
+  get coroutine_keyword() { return this.children.coroutine_keyword; }
+  get function_keyword() { return this.children.function_keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get parameters() { return this.children.parameters; }
+  get right_paren() { return this.children.right_paren; }
+  get use() { return this.children.use; }
+  get colon() { return this.children.colon; }
+  get type() { return this.children.type; }
+  get body() { return this.children.body; }
+  with_attribute_spec(attribute_spec){
+    return new Php7AnonymousFunction(
+      attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_static_keyword(static_keyword){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_async_keyword(async_keyword){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_coroutine_keyword(coroutine_keyword){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_function_keyword(function_keyword){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_left_paren(left_paren){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_parameters(parameters){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_right_paren(right_paren){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_use(use){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      use,
+      this.colon,
+      this.type,
+      this.body);
+  }
+  with_colon(colon){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      colon,
+      this.type,
+      this.body);
+  }
+  with_type(type){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      type,
+      this.body);
+  }
+  with_body(body){
+    return new Php7AnonymousFunction(
+      this.attribute_spec,
+      this.static_keyword,
+      this.async_keyword,
+      this.coroutine_keyword,
+      this.function_keyword,
+      this.left_paren,
+      this.parameters,
+      this.right_paren,
+      this.use,
+      this.colon,
+      this.type,
+      body);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
+    var static_keyword = this.static_keyword.rewrite(rewriter, new_parents);
+    var async_keyword = this.async_keyword.rewrite(rewriter, new_parents);
+    var coroutine_keyword = this.coroutine_keyword.rewrite(rewriter, new_parents);
+    var function_keyword = this.function_keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var parameters = this.parameters.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var use = this.use.rewrite(rewriter, new_parents);
+    var colon = this.colon.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    var body = this.body.rewrite(rewriter, new_parents);
+    if (
+      attribute_spec === this.attribute_spec &&
+      static_keyword === this.static_keyword &&
+      async_keyword === this.async_keyword &&
+      coroutine_keyword === this.coroutine_keyword &&
+      function_keyword === this.function_keyword &&
+      left_paren === this.left_paren &&
+      parameters === this.parameters &&
+      right_paren === this.right_paren &&
+      use === this.use &&
+      colon === this.colon &&
+      type === this.type &&
+      body === this.body)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new Php7AnonymousFunction(
+        attribute_spec,
+        static_keyword,
+        async_keyword,
+        coroutine_keyword,
+        function_keyword,
+        left_paren,
+        parameters,
+        right_paren,
+        use,
+        colon,
+        type,
+        body), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let attribute_spec = EditableSyntax.from_json(
+      json.php7_anonymous_attribute_spec, position, source);
+    position += attribute_spec.width;
+    let static_keyword = EditableSyntax.from_json(
+      json.php7_anonymous_static_keyword, position, source);
+    position += static_keyword.width;
+    let async_keyword = EditableSyntax.from_json(
+      json.php7_anonymous_async_keyword, position, source);
+    position += async_keyword.width;
+    let coroutine_keyword = EditableSyntax.from_json(
+      json.php7_anonymous_coroutine_keyword, position, source);
+    position += coroutine_keyword.width;
+    let function_keyword = EditableSyntax.from_json(
+      json.php7_anonymous_function_keyword, position, source);
+    position += function_keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.php7_anonymous_left_paren, position, source);
+    position += left_paren.width;
+    let parameters = EditableSyntax.from_json(
+      json.php7_anonymous_parameters, position, source);
+    position += parameters.width;
+    let right_paren = EditableSyntax.from_json(
+      json.php7_anonymous_right_paren, position, source);
+    position += right_paren.width;
+    let use = EditableSyntax.from_json(
+      json.php7_anonymous_use, position, source);
+    position += use.width;
+    let colon = EditableSyntax.from_json(
+      json.php7_anonymous_colon, position, source);
+    position += colon.width;
+    let type = EditableSyntax.from_json(
+      json.php7_anonymous_type, position, source);
+    position += type.width;
+    let body = EditableSyntax.from_json(
+      json.php7_anonymous_body, position, source);
+    position += body.width;
+    return new Php7AnonymousFunction(
+        attribute_spec,
+        static_keyword,
+        async_keyword,
+        coroutine_keyword,
+        function_keyword,
+        left_paren,
+        parameters,
+        right_paren,
+        use,
+        colon,
+        type,
+        body);
+  }
+  get children_keys()
+  {
+    if (Php7AnonymousFunction._children_keys == null)
+      Php7AnonymousFunction._children_keys = [
+        'attribute_spec',
+        'static_keyword',
+        'async_keyword',
+        'coroutine_keyword',
+        'function_keyword',
+        'left_paren',
+        'parameters',
+        'right_paren',
+        'use',
+        'colon',
+        'type',
+        'body'];
+    return Php7AnonymousFunction._children_keys;
   }
 }
 class AnonymousFunctionUseClause extends EditableSyntax
@@ -10620,6 +13392,7 @@ class AnonymousFunctionUseClause extends EditableSyntax
 class LambdaExpression extends EditableSyntax
 {
   constructor(
+    attribute_spec,
     async,
     coroutine,
     signature,
@@ -10627,19 +13400,31 @@ class LambdaExpression extends EditableSyntax
     body)
   {
     super('lambda_expression', {
+      attribute_spec: attribute_spec,
       async: async,
       coroutine: coroutine,
       signature: signature,
       arrow: arrow,
       body: body });
   }
+  get attribute_spec() { return this.children.attribute_spec; }
   get async() { return this.children.async; }
   get coroutine() { return this.children.coroutine; }
   get signature() { return this.children.signature; }
   get arrow() { return this.children.arrow; }
   get body() { return this.children.body; }
+  with_attribute_spec(attribute_spec){
+    return new LambdaExpression(
+      attribute_spec,
+      this.async,
+      this.coroutine,
+      this.signature,
+      this.arrow,
+      this.body);
+  }
   with_async(async){
     return new LambdaExpression(
+      this.attribute_spec,
       async,
       this.coroutine,
       this.signature,
@@ -10648,6 +13433,7 @@ class LambdaExpression extends EditableSyntax
   }
   with_coroutine(coroutine){
     return new LambdaExpression(
+      this.attribute_spec,
       this.async,
       coroutine,
       this.signature,
@@ -10656,6 +13442,7 @@ class LambdaExpression extends EditableSyntax
   }
   with_signature(signature){
     return new LambdaExpression(
+      this.attribute_spec,
       this.async,
       this.coroutine,
       signature,
@@ -10664,6 +13451,7 @@ class LambdaExpression extends EditableSyntax
   }
   with_arrow(arrow){
     return new LambdaExpression(
+      this.attribute_spec,
       this.async,
       this.coroutine,
       this.signature,
@@ -10672,6 +13460,7 @@ class LambdaExpression extends EditableSyntax
   }
   with_body(body){
     return new LambdaExpression(
+      this.attribute_spec,
       this.async,
       this.coroutine,
       this.signature,
@@ -10684,12 +13473,14 @@ class LambdaExpression extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
     var async = this.async.rewrite(rewriter, new_parents);
     var coroutine = this.coroutine.rewrite(rewriter, new_parents);
     var signature = this.signature.rewrite(rewriter, new_parents);
     var arrow = this.arrow.rewrite(rewriter, new_parents);
     var body = this.body.rewrite(rewriter, new_parents);
     if (
+      attribute_spec === this.attribute_spec &&
       async === this.async &&
       coroutine === this.coroutine &&
       signature === this.signature &&
@@ -10701,6 +13492,7 @@ class LambdaExpression extends EditableSyntax
     else
     {
       return rewriter(new LambdaExpression(
+        attribute_spec,
         async,
         coroutine,
         signature,
@@ -10710,6 +13502,9 @@ class LambdaExpression extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let attribute_spec = EditableSyntax.from_json(
+      json.lambda_attribute_spec, position, source);
+    position += attribute_spec.width;
     let async = EditableSyntax.from_json(
       json.lambda_async, position, source);
     position += async.width;
@@ -10726,6 +13521,7 @@ class LambdaExpression extends EditableSyntax
       json.lambda_body, position, source);
     position += body.width;
     return new LambdaExpression(
+        attribute_spec,
         async,
         coroutine,
         signature,
@@ -10736,6 +13532,7 @@ class LambdaExpression extends EditableSyntax
   {
     if (LambdaExpression._children_keys == null)
       LambdaExpression._children_keys = [
+        'attribute_spec',
         'async',
         'coroutine',
         'signature',
@@ -11748,6 +14545,255 @@ class InstanceofExpression extends EditableSyntax
     return InstanceofExpression._children_keys;
   }
 }
+class IsExpression extends EditableSyntax
+{
+  constructor(
+    left_operand,
+    operator,
+    right_operand)
+  {
+    super('is_expression', {
+      left_operand: left_operand,
+      operator: operator,
+      right_operand: right_operand });
+  }
+  get left_operand() { return this.children.left_operand; }
+  get operator() { return this.children.operator; }
+  get right_operand() { return this.children.right_operand; }
+  with_left_operand(left_operand){
+    return new IsExpression(
+      left_operand,
+      this.operator,
+      this.right_operand);
+  }
+  with_operator(operator){
+    return new IsExpression(
+      this.left_operand,
+      operator,
+      this.right_operand);
+  }
+  with_right_operand(right_operand){
+    return new IsExpression(
+      this.left_operand,
+      this.operator,
+      right_operand);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var left_operand = this.left_operand.rewrite(rewriter, new_parents);
+    var operator = this.operator.rewrite(rewriter, new_parents);
+    var right_operand = this.right_operand.rewrite(rewriter, new_parents);
+    if (
+      left_operand === this.left_operand &&
+      operator === this.operator &&
+      right_operand === this.right_operand)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new IsExpression(
+        left_operand,
+        operator,
+        right_operand), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let left_operand = EditableSyntax.from_json(
+      json.is_left_operand, position, source);
+    position += left_operand.width;
+    let operator = EditableSyntax.from_json(
+      json.is_operator, position, source);
+    position += operator.width;
+    let right_operand = EditableSyntax.from_json(
+      json.is_right_operand, position, source);
+    position += right_operand.width;
+    return new IsExpression(
+        left_operand,
+        operator,
+        right_operand);
+  }
+  get children_keys()
+  {
+    if (IsExpression._children_keys == null)
+      IsExpression._children_keys = [
+        'left_operand',
+        'operator',
+        'right_operand'];
+    return IsExpression._children_keys;
+  }
+}
+class AsExpression extends EditableSyntax
+{
+  constructor(
+    left_operand,
+    operator,
+    right_operand)
+  {
+    super('as_expression', {
+      left_operand: left_operand,
+      operator: operator,
+      right_operand: right_operand });
+  }
+  get left_operand() { return this.children.left_operand; }
+  get operator() { return this.children.operator; }
+  get right_operand() { return this.children.right_operand; }
+  with_left_operand(left_operand){
+    return new AsExpression(
+      left_operand,
+      this.operator,
+      this.right_operand);
+  }
+  with_operator(operator){
+    return new AsExpression(
+      this.left_operand,
+      operator,
+      this.right_operand);
+  }
+  with_right_operand(right_operand){
+    return new AsExpression(
+      this.left_operand,
+      this.operator,
+      right_operand);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var left_operand = this.left_operand.rewrite(rewriter, new_parents);
+    var operator = this.operator.rewrite(rewriter, new_parents);
+    var right_operand = this.right_operand.rewrite(rewriter, new_parents);
+    if (
+      left_operand === this.left_operand &&
+      operator === this.operator &&
+      right_operand === this.right_operand)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new AsExpression(
+        left_operand,
+        operator,
+        right_operand), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let left_operand = EditableSyntax.from_json(
+      json.as_left_operand, position, source);
+    position += left_operand.width;
+    let operator = EditableSyntax.from_json(
+      json.as_operator, position, source);
+    position += operator.width;
+    let right_operand = EditableSyntax.from_json(
+      json.as_right_operand, position, source);
+    position += right_operand.width;
+    return new AsExpression(
+        left_operand,
+        operator,
+        right_operand);
+  }
+  get children_keys()
+  {
+    if (AsExpression._children_keys == null)
+      AsExpression._children_keys = [
+        'left_operand',
+        'operator',
+        'right_operand'];
+    return AsExpression._children_keys;
+  }
+}
+class NullableAsExpression extends EditableSyntax
+{
+  constructor(
+    left_operand,
+    operator,
+    right_operand)
+  {
+    super('nullable_as_expression', {
+      left_operand: left_operand,
+      operator: operator,
+      right_operand: right_operand });
+  }
+  get left_operand() { return this.children.left_operand; }
+  get operator() { return this.children.operator; }
+  get right_operand() { return this.children.right_operand; }
+  with_left_operand(left_operand){
+    return new NullableAsExpression(
+      left_operand,
+      this.operator,
+      this.right_operand);
+  }
+  with_operator(operator){
+    return new NullableAsExpression(
+      this.left_operand,
+      operator,
+      this.right_operand);
+  }
+  with_right_operand(right_operand){
+    return new NullableAsExpression(
+      this.left_operand,
+      this.operator,
+      right_operand);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var left_operand = this.left_operand.rewrite(rewriter, new_parents);
+    var operator = this.operator.rewrite(rewriter, new_parents);
+    var right_operand = this.right_operand.rewrite(rewriter, new_parents);
+    if (
+      left_operand === this.left_operand &&
+      operator === this.operator &&
+      right_operand === this.right_operand)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new NullableAsExpression(
+        left_operand,
+        operator,
+        right_operand), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let left_operand = EditableSyntax.from_json(
+      json.nullable_as_left_operand, position, source);
+    position += left_operand.width;
+    let operator = EditableSyntax.from_json(
+      json.nullable_as_operator, position, source);
+    position += operator.width;
+    let right_operand = EditableSyntax.from_json(
+      json.nullable_as_right_operand, position, source);
+    position += right_operand.width;
+    return new NullableAsExpression(
+        left_operand,
+        operator,
+        right_operand);
+  }
+  get children_keys()
+  {
+    if (NullableAsExpression._children_keys == null)
+      NullableAsExpression._children_keys = [
+        'left_operand',
+        'operator',
+        'right_operand'];
+    return NullableAsExpression._children_keys;
+  }
+}
 class ConditionalExpression extends EditableSyntax
 {
   constructor(
@@ -12187,6 +15233,110 @@ class DefineExpression extends EditableSyntax
     return DefineExpression._children_keys;
   }
 }
+class HaltCompilerExpression extends EditableSyntax
+{
+  constructor(
+    keyword,
+    left_paren,
+    argument_list,
+    right_paren)
+  {
+    super('halt_compiler_expression', {
+      keyword: keyword,
+      left_paren: left_paren,
+      argument_list: argument_list,
+      right_paren: right_paren });
+  }
+  get keyword() { return this.children.keyword; }
+  get left_paren() { return this.children.left_paren; }
+  get argument_list() { return this.children.argument_list; }
+  get right_paren() { return this.children.right_paren; }
+  with_keyword(keyword){
+    return new HaltCompilerExpression(
+      keyword,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren);
+  }
+  with_left_paren(left_paren){
+    return new HaltCompilerExpression(
+      this.keyword,
+      left_paren,
+      this.argument_list,
+      this.right_paren);
+  }
+  with_argument_list(argument_list){
+    return new HaltCompilerExpression(
+      this.keyword,
+      this.left_paren,
+      argument_list,
+      this.right_paren);
+  }
+  with_right_paren(right_paren){
+    return new HaltCompilerExpression(
+      this.keyword,
+      this.left_paren,
+      this.argument_list,
+      right_paren);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var argument_list = this.argument_list.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      left_paren === this.left_paren &&
+      argument_list === this.argument_list &&
+      right_paren === this.right_paren)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new HaltCompilerExpression(
+        keyword,
+        left_paren,
+        argument_list,
+        right_paren), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.halt_compiler_keyword, position, source);
+    position += keyword.width;
+    let left_paren = EditableSyntax.from_json(
+      json.halt_compiler_left_paren, position, source);
+    position += left_paren.width;
+    let argument_list = EditableSyntax.from_json(
+      json.halt_compiler_argument_list, position, source);
+    position += argument_list.width;
+    let right_paren = EditableSyntax.from_json(
+      json.halt_compiler_right_paren, position, source);
+    position += right_paren.width;
+    return new HaltCompilerExpression(
+        keyword,
+        left_paren,
+        argument_list,
+        right_paren);
+  }
+  get children_keys()
+  {
+    if (HaltCompilerExpression._children_keys == null)
+      HaltCompilerExpression._children_keys = [
+        'keyword',
+        'left_paren',
+        'argument_list',
+        'right_paren'];
+    return HaltCompilerExpression._children_keys;
+  }
+}
 class IssetExpression extends EditableSyntax
 {
   constructor(
@@ -12295,23 +15445,35 @@ class FunctionCallExpression extends EditableSyntax
 {
   constructor(
     receiver,
+    type_args,
     left_paren,
     argument_list,
     right_paren)
   {
     super('function_call_expression', {
       receiver: receiver,
+      type_args: type_args,
       left_paren: left_paren,
       argument_list: argument_list,
       right_paren: right_paren });
   }
   get receiver() { return this.children.receiver; }
+  get type_args() { return this.children.type_args; }
   get left_paren() { return this.children.left_paren; }
   get argument_list() { return this.children.argument_list; }
   get right_paren() { return this.children.right_paren; }
   with_receiver(receiver){
     return new FunctionCallExpression(
       receiver,
+      this.type_args,
+      this.left_paren,
+      this.argument_list,
+      this.right_paren);
+  }
+  with_type_args(type_args){
+    return new FunctionCallExpression(
+      this.receiver,
+      type_args,
       this.left_paren,
       this.argument_list,
       this.right_paren);
@@ -12319,6 +15481,7 @@ class FunctionCallExpression extends EditableSyntax
   with_left_paren(left_paren){
     return new FunctionCallExpression(
       this.receiver,
+      this.type_args,
       left_paren,
       this.argument_list,
       this.right_paren);
@@ -12326,6 +15489,7 @@ class FunctionCallExpression extends EditableSyntax
   with_argument_list(argument_list){
     return new FunctionCallExpression(
       this.receiver,
+      this.type_args,
       this.left_paren,
       argument_list,
       this.right_paren);
@@ -12333,6 +15497,7 @@ class FunctionCallExpression extends EditableSyntax
   with_right_paren(right_paren){
     return new FunctionCallExpression(
       this.receiver,
+      this.type_args,
       this.left_paren,
       this.argument_list,
       right_paren);
@@ -12344,11 +15509,13 @@ class FunctionCallExpression extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var receiver = this.receiver.rewrite(rewriter, new_parents);
+    var type_args = this.type_args.rewrite(rewriter, new_parents);
     var left_paren = this.left_paren.rewrite(rewriter, new_parents);
     var argument_list = this.argument_list.rewrite(rewriter, new_parents);
     var right_paren = this.right_paren.rewrite(rewriter, new_parents);
     if (
       receiver === this.receiver &&
+      type_args === this.type_args &&
       left_paren === this.left_paren &&
       argument_list === this.argument_list &&
       right_paren === this.right_paren)
@@ -12359,6 +15526,7 @@ class FunctionCallExpression extends EditableSyntax
     {
       return rewriter(new FunctionCallExpression(
         receiver,
+        type_args,
         left_paren,
         argument_list,
         right_paren), parents);
@@ -12369,6 +15537,9 @@ class FunctionCallExpression extends EditableSyntax
     let receiver = EditableSyntax.from_json(
       json.function_call_receiver, position, source);
     position += receiver.width;
+    let type_args = EditableSyntax.from_json(
+      json.function_call_type_args, position, source);
+    position += type_args.width;
     let left_paren = EditableSyntax.from_json(
       json.function_call_left_paren, position, source);
     position += left_paren.width;
@@ -12380,6 +15551,7 @@ class FunctionCallExpression extends EditableSyntax
     position += right_paren.width;
     return new FunctionCallExpression(
         receiver,
+        type_args,
         left_paren,
         argument_list,
         right_paren);
@@ -12389,6 +15561,7 @@ class FunctionCallExpression extends EditableSyntax
     if (FunctionCallExpression._children_keys == null)
       FunctionCallExpression._children_keys = [
         'receiver',
+        'type_args',
         'left_paren',
         'argument_list',
         'right_paren'];
@@ -12856,58 +16029,107 @@ class ObjectCreationExpression extends EditableSyntax
 {
   constructor(
     new_keyword,
+    object)
+  {
+    super('object_creation_expression', {
+      new_keyword: new_keyword,
+      object: object });
+  }
+  get new_keyword() { return this.children.new_keyword; }
+  get object() { return this.children.object; }
+  with_new_keyword(new_keyword){
+    return new ObjectCreationExpression(
+      new_keyword,
+      this.object);
+  }
+  with_object(object){
+    return new ObjectCreationExpression(
+      this.new_keyword,
+      object);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var new_keyword = this.new_keyword.rewrite(rewriter, new_parents);
+    var object = this.object.rewrite(rewriter, new_parents);
+    if (
+      new_keyword === this.new_keyword &&
+      object === this.object)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new ObjectCreationExpression(
+        new_keyword,
+        object), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let new_keyword = EditableSyntax.from_json(
+      json.object_creation_new_keyword, position, source);
+    position += new_keyword.width;
+    let object = EditableSyntax.from_json(
+      json.object_creation_object, position, source);
+    position += object.width;
+    return new ObjectCreationExpression(
+        new_keyword,
+        object);
+  }
+  get children_keys()
+  {
+    if (ObjectCreationExpression._children_keys == null)
+      ObjectCreationExpression._children_keys = [
+        'new_keyword',
+        'object'];
+    return ObjectCreationExpression._children_keys;
+  }
+}
+class ConstructorCall extends EditableSyntax
+{
+  constructor(
     type,
     left_paren,
     argument_list,
     right_paren)
   {
-    super('object_creation_expression', {
-      new_keyword: new_keyword,
+    super('constructor_call', {
       type: type,
       left_paren: left_paren,
       argument_list: argument_list,
       right_paren: right_paren });
   }
-  get new_keyword() { return this.children.new_keyword; }
   get type() { return this.children.type; }
   get left_paren() { return this.children.left_paren; }
   get argument_list() { return this.children.argument_list; }
   get right_paren() { return this.children.right_paren; }
-  with_new_keyword(new_keyword){
-    return new ObjectCreationExpression(
-      new_keyword,
-      this.type,
-      this.left_paren,
-      this.argument_list,
-      this.right_paren);
-  }
   with_type(type){
-    return new ObjectCreationExpression(
-      this.new_keyword,
+    return new ConstructorCall(
       type,
       this.left_paren,
       this.argument_list,
       this.right_paren);
   }
   with_left_paren(left_paren){
-    return new ObjectCreationExpression(
-      this.new_keyword,
+    return new ConstructorCall(
       this.type,
       left_paren,
       this.argument_list,
       this.right_paren);
   }
   with_argument_list(argument_list){
-    return new ObjectCreationExpression(
-      this.new_keyword,
+    return new ConstructorCall(
       this.type,
       this.left_paren,
       argument_list,
       this.right_paren);
   }
   with_right_paren(right_paren){
-    return new ObjectCreationExpression(
-      this.new_keyword,
+    return new ConstructorCall(
       this.type,
       this.left_paren,
       this.argument_list,
@@ -12919,13 +16141,11 @@ class ObjectCreationExpression extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
-    var new_keyword = this.new_keyword.rewrite(rewriter, new_parents);
     var type = this.type.rewrite(rewriter, new_parents);
     var left_paren = this.left_paren.rewrite(rewriter, new_parents);
     var argument_list = this.argument_list.rewrite(rewriter, new_parents);
     var right_paren = this.right_paren.rewrite(rewriter, new_parents);
     if (
-      new_keyword === this.new_keyword &&
       type === this.type &&
       left_paren === this.left_paren &&
       argument_list === this.argument_list &&
@@ -12935,8 +16155,7 @@ class ObjectCreationExpression extends EditableSyntax
     }
     else
     {
-      return rewriter(new ObjectCreationExpression(
-        new_keyword,
+      return rewriter(new ConstructorCall(
         type,
         left_paren,
         argument_list,
@@ -12945,23 +16164,19 @@ class ObjectCreationExpression extends EditableSyntax
   }
   static from_json(json, position, source)
   {
-    let new_keyword = EditableSyntax.from_json(
-      json.object_creation_new_keyword, position, source);
-    position += new_keyword.width;
     let type = EditableSyntax.from_json(
-      json.object_creation_type, position, source);
+      json.constructor_call_type, position, source);
     position += type.width;
     let left_paren = EditableSyntax.from_json(
-      json.object_creation_left_paren, position, source);
+      json.constructor_call_left_paren, position, source);
     position += left_paren.width;
     let argument_list = EditableSyntax.from_json(
-      json.object_creation_argument_list, position, source);
+      json.constructor_call_argument_list, position, source);
     position += argument_list.width;
     let right_paren = EditableSyntax.from_json(
-      json.object_creation_right_paren, position, source);
+      json.constructor_call_right_paren, position, source);
     position += right_paren.width;
-    return new ObjectCreationExpression(
-        new_keyword,
+    return new ConstructorCall(
         type,
         left_paren,
         argument_list,
@@ -12969,14 +16184,117 @@ class ObjectCreationExpression extends EditableSyntax
   }
   get children_keys()
   {
-    if (ObjectCreationExpression._children_keys == null)
-      ObjectCreationExpression._children_keys = [
-        'new_keyword',
+    if (ConstructorCall._children_keys == null)
+      ConstructorCall._children_keys = [
         'type',
         'left_paren',
         'argument_list',
         'right_paren'];
-    return ObjectCreationExpression._children_keys;
+    return ConstructorCall._children_keys;
+  }
+}
+class RecordCreationExpression extends EditableSyntax
+{
+  constructor(
+    type,
+    left_bracket,
+    members,
+    right_bracket)
+  {
+    super('record_creation_expression', {
+      type: type,
+      left_bracket: left_bracket,
+      members: members,
+      right_bracket: right_bracket });
+  }
+  get type() { return this.children.type; }
+  get left_bracket() { return this.children.left_bracket; }
+  get members() { return this.children.members; }
+  get right_bracket() { return this.children.right_bracket; }
+  with_type(type){
+    return new RecordCreationExpression(
+      type,
+      this.left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_left_bracket(left_bracket){
+    return new RecordCreationExpression(
+      this.type,
+      left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_members(members){
+    return new RecordCreationExpression(
+      this.type,
+      this.left_bracket,
+      members,
+      this.right_bracket);
+  }
+  with_right_bracket(right_bracket){
+    return new RecordCreationExpression(
+      this.type,
+      this.left_bracket,
+      this.members,
+      right_bracket);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var type = this.type.rewrite(rewriter, new_parents);
+    var left_bracket = this.left_bracket.rewrite(rewriter, new_parents);
+    var members = this.members.rewrite(rewriter, new_parents);
+    var right_bracket = this.right_bracket.rewrite(rewriter, new_parents);
+    if (
+      type === this.type &&
+      left_bracket === this.left_bracket &&
+      members === this.members &&
+      right_bracket === this.right_bracket)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new RecordCreationExpression(
+        type,
+        left_bracket,
+        members,
+        right_bracket), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let type = EditableSyntax.from_json(
+      json.record_creation_type, position, source);
+    position += type.width;
+    let left_bracket = EditableSyntax.from_json(
+      json.record_creation_left_bracket, position, source);
+    position += left_bracket.width;
+    let members = EditableSyntax.from_json(
+      json.record_creation_members, position, source);
+    position += members.width;
+    let right_bracket = EditableSyntax.from_json(
+      json.record_creation_right_bracket, position, source);
+    position += right_bracket.width;
+    return new RecordCreationExpression(
+        type,
+        left_bracket,
+        members,
+        right_bracket);
+  }
+  get children_keys()
+  {
+    if (RecordCreationExpression._children_keys == null)
+      RecordCreationExpression._children_keys = [
+        'type',
+        'left_bracket',
+        'members',
+        'right_bracket'];
+    return RecordCreationExpression._children_keys;
   }
 }
 class ArrayCreationExpression extends EditableSyntax
@@ -13170,23 +16488,35 @@ class DarrayIntrinsicExpression extends EditableSyntax
 {
   constructor(
     keyword,
+    explicit_type,
     left_bracket,
     members,
     right_bracket)
   {
     super('darray_intrinsic_expression', {
       keyword: keyword,
+      explicit_type: explicit_type,
       left_bracket: left_bracket,
       members: members,
       right_bracket: right_bracket });
   }
   get keyword() { return this.children.keyword; }
+  get explicit_type() { return this.children.explicit_type; }
   get left_bracket() { return this.children.left_bracket; }
   get members() { return this.children.members; }
   get right_bracket() { return this.children.right_bracket; }
   with_keyword(keyword){
     return new DarrayIntrinsicExpression(
       keyword,
+      this.explicit_type,
+      this.left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_explicit_type(explicit_type){
+    return new DarrayIntrinsicExpression(
+      this.keyword,
+      explicit_type,
       this.left_bracket,
       this.members,
       this.right_bracket);
@@ -13194,6 +16524,7 @@ class DarrayIntrinsicExpression extends EditableSyntax
   with_left_bracket(left_bracket){
     return new DarrayIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       left_bracket,
       this.members,
       this.right_bracket);
@@ -13201,6 +16532,7 @@ class DarrayIntrinsicExpression extends EditableSyntax
   with_members(members){
     return new DarrayIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       members,
       this.right_bracket);
@@ -13208,6 +16540,7 @@ class DarrayIntrinsicExpression extends EditableSyntax
   with_right_bracket(right_bracket){
     return new DarrayIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       this.members,
       right_bracket);
@@ -13219,11 +16552,13 @@ class DarrayIntrinsicExpression extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var explicit_type = this.explicit_type.rewrite(rewriter, new_parents);
     var left_bracket = this.left_bracket.rewrite(rewriter, new_parents);
     var members = this.members.rewrite(rewriter, new_parents);
     var right_bracket = this.right_bracket.rewrite(rewriter, new_parents);
     if (
       keyword === this.keyword &&
+      explicit_type === this.explicit_type &&
       left_bracket === this.left_bracket &&
       members === this.members &&
       right_bracket === this.right_bracket)
@@ -13234,6 +16569,7 @@ class DarrayIntrinsicExpression extends EditableSyntax
     {
       return rewriter(new DarrayIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket), parents);
@@ -13244,6 +16580,9 @@ class DarrayIntrinsicExpression extends EditableSyntax
     let keyword = EditableSyntax.from_json(
       json.darray_intrinsic_keyword, position, source);
     position += keyword.width;
+    let explicit_type = EditableSyntax.from_json(
+      json.darray_intrinsic_explicit_type, position, source);
+    position += explicit_type.width;
     let left_bracket = EditableSyntax.from_json(
       json.darray_intrinsic_left_bracket, position, source);
     position += left_bracket.width;
@@ -13255,6 +16594,7 @@ class DarrayIntrinsicExpression extends EditableSyntax
     position += right_bracket.width;
     return new DarrayIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket);
@@ -13264,6 +16604,7 @@ class DarrayIntrinsicExpression extends EditableSyntax
     if (DarrayIntrinsicExpression._children_keys == null)
       DarrayIntrinsicExpression._children_keys = [
         'keyword',
+        'explicit_type',
         'left_bracket',
         'members',
         'right_bracket'];
@@ -13274,23 +16615,35 @@ class DictionaryIntrinsicExpression extends EditableSyntax
 {
   constructor(
     keyword,
+    explicit_type,
     left_bracket,
     members,
     right_bracket)
   {
     super('dictionary_intrinsic_expression', {
       keyword: keyword,
+      explicit_type: explicit_type,
       left_bracket: left_bracket,
       members: members,
       right_bracket: right_bracket });
   }
   get keyword() { return this.children.keyword; }
+  get explicit_type() { return this.children.explicit_type; }
   get left_bracket() { return this.children.left_bracket; }
   get members() { return this.children.members; }
   get right_bracket() { return this.children.right_bracket; }
   with_keyword(keyword){
     return new DictionaryIntrinsicExpression(
       keyword,
+      this.explicit_type,
+      this.left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_explicit_type(explicit_type){
+    return new DictionaryIntrinsicExpression(
+      this.keyword,
+      explicit_type,
       this.left_bracket,
       this.members,
       this.right_bracket);
@@ -13298,6 +16651,7 @@ class DictionaryIntrinsicExpression extends EditableSyntax
   with_left_bracket(left_bracket){
     return new DictionaryIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       left_bracket,
       this.members,
       this.right_bracket);
@@ -13305,6 +16659,7 @@ class DictionaryIntrinsicExpression extends EditableSyntax
   with_members(members){
     return new DictionaryIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       members,
       this.right_bracket);
@@ -13312,6 +16667,7 @@ class DictionaryIntrinsicExpression extends EditableSyntax
   with_right_bracket(right_bracket){
     return new DictionaryIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       this.members,
       right_bracket);
@@ -13323,11 +16679,13 @@ class DictionaryIntrinsicExpression extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var explicit_type = this.explicit_type.rewrite(rewriter, new_parents);
     var left_bracket = this.left_bracket.rewrite(rewriter, new_parents);
     var members = this.members.rewrite(rewriter, new_parents);
     var right_bracket = this.right_bracket.rewrite(rewriter, new_parents);
     if (
       keyword === this.keyword &&
+      explicit_type === this.explicit_type &&
       left_bracket === this.left_bracket &&
       members === this.members &&
       right_bracket === this.right_bracket)
@@ -13338,6 +16696,7 @@ class DictionaryIntrinsicExpression extends EditableSyntax
     {
       return rewriter(new DictionaryIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket), parents);
@@ -13348,6 +16707,9 @@ class DictionaryIntrinsicExpression extends EditableSyntax
     let keyword = EditableSyntax.from_json(
       json.dictionary_intrinsic_keyword, position, source);
     position += keyword.width;
+    let explicit_type = EditableSyntax.from_json(
+      json.dictionary_intrinsic_explicit_type, position, source);
+    position += explicit_type.width;
     let left_bracket = EditableSyntax.from_json(
       json.dictionary_intrinsic_left_bracket, position, source);
     position += left_bracket.width;
@@ -13359,6 +16721,7 @@ class DictionaryIntrinsicExpression extends EditableSyntax
     position += right_bracket.width;
     return new DictionaryIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket);
@@ -13368,6 +16731,7 @@ class DictionaryIntrinsicExpression extends EditableSyntax
     if (DictionaryIntrinsicExpression._children_keys == null)
       DictionaryIntrinsicExpression._children_keys = [
         'keyword',
+        'explicit_type',
         'left_bracket',
         'members',
         'right_bracket'];
@@ -13378,23 +16742,35 @@ class KeysetIntrinsicExpression extends EditableSyntax
 {
   constructor(
     keyword,
+    explicit_type,
     left_bracket,
     members,
     right_bracket)
   {
     super('keyset_intrinsic_expression', {
       keyword: keyword,
+      explicit_type: explicit_type,
       left_bracket: left_bracket,
       members: members,
       right_bracket: right_bracket });
   }
   get keyword() { return this.children.keyword; }
+  get explicit_type() { return this.children.explicit_type; }
   get left_bracket() { return this.children.left_bracket; }
   get members() { return this.children.members; }
   get right_bracket() { return this.children.right_bracket; }
   with_keyword(keyword){
     return new KeysetIntrinsicExpression(
       keyword,
+      this.explicit_type,
+      this.left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_explicit_type(explicit_type){
+    return new KeysetIntrinsicExpression(
+      this.keyword,
+      explicit_type,
       this.left_bracket,
       this.members,
       this.right_bracket);
@@ -13402,6 +16778,7 @@ class KeysetIntrinsicExpression extends EditableSyntax
   with_left_bracket(left_bracket){
     return new KeysetIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       left_bracket,
       this.members,
       this.right_bracket);
@@ -13409,6 +16786,7 @@ class KeysetIntrinsicExpression extends EditableSyntax
   with_members(members){
     return new KeysetIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       members,
       this.right_bracket);
@@ -13416,6 +16794,7 @@ class KeysetIntrinsicExpression extends EditableSyntax
   with_right_bracket(right_bracket){
     return new KeysetIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       this.members,
       right_bracket);
@@ -13427,11 +16806,13 @@ class KeysetIntrinsicExpression extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var explicit_type = this.explicit_type.rewrite(rewriter, new_parents);
     var left_bracket = this.left_bracket.rewrite(rewriter, new_parents);
     var members = this.members.rewrite(rewriter, new_parents);
     var right_bracket = this.right_bracket.rewrite(rewriter, new_parents);
     if (
       keyword === this.keyword &&
+      explicit_type === this.explicit_type &&
       left_bracket === this.left_bracket &&
       members === this.members &&
       right_bracket === this.right_bracket)
@@ -13442,6 +16823,7 @@ class KeysetIntrinsicExpression extends EditableSyntax
     {
       return rewriter(new KeysetIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket), parents);
@@ -13452,6 +16834,9 @@ class KeysetIntrinsicExpression extends EditableSyntax
     let keyword = EditableSyntax.from_json(
       json.keyset_intrinsic_keyword, position, source);
     position += keyword.width;
+    let explicit_type = EditableSyntax.from_json(
+      json.keyset_intrinsic_explicit_type, position, source);
+    position += explicit_type.width;
     let left_bracket = EditableSyntax.from_json(
       json.keyset_intrinsic_left_bracket, position, source);
     position += left_bracket.width;
@@ -13463,6 +16848,7 @@ class KeysetIntrinsicExpression extends EditableSyntax
     position += right_bracket.width;
     return new KeysetIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket);
@@ -13472,6 +16858,7 @@ class KeysetIntrinsicExpression extends EditableSyntax
     if (KeysetIntrinsicExpression._children_keys == null)
       KeysetIntrinsicExpression._children_keys = [
         'keyword',
+        'explicit_type',
         'left_bracket',
         'members',
         'right_bracket'];
@@ -13482,23 +16869,35 @@ class VarrayIntrinsicExpression extends EditableSyntax
 {
   constructor(
     keyword,
+    explicit_type,
     left_bracket,
     members,
     right_bracket)
   {
     super('varray_intrinsic_expression', {
       keyword: keyword,
+      explicit_type: explicit_type,
       left_bracket: left_bracket,
       members: members,
       right_bracket: right_bracket });
   }
   get keyword() { return this.children.keyword; }
+  get explicit_type() { return this.children.explicit_type; }
   get left_bracket() { return this.children.left_bracket; }
   get members() { return this.children.members; }
   get right_bracket() { return this.children.right_bracket; }
   with_keyword(keyword){
     return new VarrayIntrinsicExpression(
       keyword,
+      this.explicit_type,
+      this.left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_explicit_type(explicit_type){
+    return new VarrayIntrinsicExpression(
+      this.keyword,
+      explicit_type,
       this.left_bracket,
       this.members,
       this.right_bracket);
@@ -13506,6 +16905,7 @@ class VarrayIntrinsicExpression extends EditableSyntax
   with_left_bracket(left_bracket){
     return new VarrayIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       left_bracket,
       this.members,
       this.right_bracket);
@@ -13513,6 +16913,7 @@ class VarrayIntrinsicExpression extends EditableSyntax
   with_members(members){
     return new VarrayIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       members,
       this.right_bracket);
@@ -13520,6 +16921,7 @@ class VarrayIntrinsicExpression extends EditableSyntax
   with_right_bracket(right_bracket){
     return new VarrayIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       this.members,
       right_bracket);
@@ -13531,11 +16933,13 @@ class VarrayIntrinsicExpression extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var explicit_type = this.explicit_type.rewrite(rewriter, new_parents);
     var left_bracket = this.left_bracket.rewrite(rewriter, new_parents);
     var members = this.members.rewrite(rewriter, new_parents);
     var right_bracket = this.right_bracket.rewrite(rewriter, new_parents);
     if (
       keyword === this.keyword &&
+      explicit_type === this.explicit_type &&
       left_bracket === this.left_bracket &&
       members === this.members &&
       right_bracket === this.right_bracket)
@@ -13546,6 +16950,7 @@ class VarrayIntrinsicExpression extends EditableSyntax
     {
       return rewriter(new VarrayIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket), parents);
@@ -13556,6 +16961,9 @@ class VarrayIntrinsicExpression extends EditableSyntax
     let keyword = EditableSyntax.from_json(
       json.varray_intrinsic_keyword, position, source);
     position += keyword.width;
+    let explicit_type = EditableSyntax.from_json(
+      json.varray_intrinsic_explicit_type, position, source);
+    position += explicit_type.width;
     let left_bracket = EditableSyntax.from_json(
       json.varray_intrinsic_left_bracket, position, source);
     position += left_bracket.width;
@@ -13567,6 +16975,7 @@ class VarrayIntrinsicExpression extends EditableSyntax
     position += right_bracket.width;
     return new VarrayIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket);
@@ -13576,6 +16985,7 @@ class VarrayIntrinsicExpression extends EditableSyntax
     if (VarrayIntrinsicExpression._children_keys == null)
       VarrayIntrinsicExpression._children_keys = [
         'keyword',
+        'explicit_type',
         'left_bracket',
         'members',
         'right_bracket'];
@@ -13586,23 +16996,35 @@ class VectorIntrinsicExpression extends EditableSyntax
 {
   constructor(
     keyword,
+    explicit_type,
     left_bracket,
     members,
     right_bracket)
   {
     super('vector_intrinsic_expression', {
       keyword: keyword,
+      explicit_type: explicit_type,
       left_bracket: left_bracket,
       members: members,
       right_bracket: right_bracket });
   }
   get keyword() { return this.children.keyword; }
+  get explicit_type() { return this.children.explicit_type; }
   get left_bracket() { return this.children.left_bracket; }
   get members() { return this.children.members; }
   get right_bracket() { return this.children.right_bracket; }
   with_keyword(keyword){
     return new VectorIntrinsicExpression(
       keyword,
+      this.explicit_type,
+      this.left_bracket,
+      this.members,
+      this.right_bracket);
+  }
+  with_explicit_type(explicit_type){
+    return new VectorIntrinsicExpression(
+      this.keyword,
+      explicit_type,
       this.left_bracket,
       this.members,
       this.right_bracket);
@@ -13610,6 +17032,7 @@ class VectorIntrinsicExpression extends EditableSyntax
   with_left_bracket(left_bracket){
     return new VectorIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       left_bracket,
       this.members,
       this.right_bracket);
@@ -13617,6 +17040,7 @@ class VectorIntrinsicExpression extends EditableSyntax
   with_members(members){
     return new VectorIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       members,
       this.right_bracket);
@@ -13624,6 +17048,7 @@ class VectorIntrinsicExpression extends EditableSyntax
   with_right_bracket(right_bracket){
     return new VectorIntrinsicExpression(
       this.keyword,
+      this.explicit_type,
       this.left_bracket,
       this.members,
       right_bracket);
@@ -13635,11 +17060,13 @@ class VectorIntrinsicExpression extends EditableSyntax
     let new_parents = parents.slice();
     new_parents.push(this);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var explicit_type = this.explicit_type.rewrite(rewriter, new_parents);
     var left_bracket = this.left_bracket.rewrite(rewriter, new_parents);
     var members = this.members.rewrite(rewriter, new_parents);
     var right_bracket = this.right_bracket.rewrite(rewriter, new_parents);
     if (
       keyword === this.keyword &&
+      explicit_type === this.explicit_type &&
       left_bracket === this.left_bracket &&
       members === this.members &&
       right_bracket === this.right_bracket)
@@ -13650,6 +17077,7 @@ class VectorIntrinsicExpression extends EditableSyntax
     {
       return rewriter(new VectorIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket), parents);
@@ -13660,6 +17088,9 @@ class VectorIntrinsicExpression extends EditableSyntax
     let keyword = EditableSyntax.from_json(
       json.vector_intrinsic_keyword, position, source);
     position += keyword.width;
+    let explicit_type = EditableSyntax.from_json(
+      json.vector_intrinsic_explicit_type, position, source);
+    position += explicit_type.width;
     let left_bracket = EditableSyntax.from_json(
       json.vector_intrinsic_left_bracket, position, source);
     position += left_bracket.width;
@@ -13671,6 +17102,7 @@ class VectorIntrinsicExpression extends EditableSyntax
     position += right_bracket.width;
     return new VectorIntrinsicExpression(
         keyword,
+        explicit_type,
         left_bracket,
         members,
         right_bracket);
@@ -13680,6 +17112,7 @@ class VectorIntrinsicExpression extends EditableSyntax
     if (VectorIntrinsicExpression._children_keys == null)
       VectorIntrinsicExpression._children_keys = [
         'keyword',
+        'explicit_type',
         'left_bracket',
         'members',
         'right_bracket'];
@@ -13980,32 +17413,45 @@ class EmbeddedSubscriptExpression extends EditableSyntax
 class AwaitableCreationExpression extends EditableSyntax
 {
   constructor(
+    attribute_spec,
     async,
     coroutine,
     compound_statement)
   {
     super('awaitable_creation_expression', {
+      attribute_spec: attribute_spec,
       async: async,
       coroutine: coroutine,
       compound_statement: compound_statement });
   }
+  get attribute_spec() { return this.children.attribute_spec; }
   get async() { return this.children.async; }
   get coroutine() { return this.children.coroutine; }
   get compound_statement() { return this.children.compound_statement; }
+  with_attribute_spec(attribute_spec){
+    return new AwaitableCreationExpression(
+      attribute_spec,
+      this.async,
+      this.coroutine,
+      this.compound_statement);
+  }
   with_async(async){
     return new AwaitableCreationExpression(
+      this.attribute_spec,
       async,
       this.coroutine,
       this.compound_statement);
   }
   with_coroutine(coroutine){
     return new AwaitableCreationExpression(
+      this.attribute_spec,
       this.async,
       coroutine,
       this.compound_statement);
   }
   with_compound_statement(compound_statement){
     return new AwaitableCreationExpression(
+      this.attribute_spec,
       this.async,
       this.coroutine,
       compound_statement);
@@ -14016,10 +17462,12 @@ class AwaitableCreationExpression extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
     var async = this.async.rewrite(rewriter, new_parents);
     var coroutine = this.coroutine.rewrite(rewriter, new_parents);
     var compound_statement = this.compound_statement.rewrite(rewriter, new_parents);
     if (
+      attribute_spec === this.attribute_spec &&
       async === this.async &&
       coroutine === this.coroutine &&
       compound_statement === this.compound_statement)
@@ -14029,6 +17477,7 @@ class AwaitableCreationExpression extends EditableSyntax
     else
     {
       return rewriter(new AwaitableCreationExpression(
+        attribute_spec,
         async,
         coroutine,
         compound_statement), parents);
@@ -14036,6 +17485,9 @@ class AwaitableCreationExpression extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let attribute_spec = EditableSyntax.from_json(
+      json.awaitable_attribute_spec, position, source);
+    position += attribute_spec.width;
     let async = EditableSyntax.from_json(
       json.awaitable_async, position, source);
     position += async.width;
@@ -14046,6 +17498,7 @@ class AwaitableCreationExpression extends EditableSyntax
       json.awaitable_compound_statement, position, source);
     position += compound_statement.width;
     return new AwaitableCreationExpression(
+        attribute_spec,
         async,
         coroutine,
         compound_statement);
@@ -14054,6 +17507,7 @@ class AwaitableCreationExpression extends EditableSyntax
   {
     if (AwaitableCreationExpression._children_keys == null)
       AwaitableCreationExpression._children_keys = [
+        'attribute_spec',
         'async',
         'coroutine',
         'compound_statement'];
@@ -14312,23 +17766,35 @@ class XHPCategoryDeclaration extends EditableSyntax
 class XHPEnumType extends EditableSyntax
 {
   constructor(
+    optional,
     keyword,
     left_brace,
     values,
     right_brace)
   {
     super('xhp_enum_type', {
+      optional: optional,
       keyword: keyword,
       left_brace: left_brace,
       values: values,
       right_brace: right_brace });
   }
+  get optional() { return this.children.optional; }
   get keyword() { return this.children.keyword; }
   get left_brace() { return this.children.left_brace; }
   get values() { return this.children.values; }
   get right_brace() { return this.children.right_brace; }
+  with_optional(optional){
+    return new XHPEnumType(
+      optional,
+      this.keyword,
+      this.left_brace,
+      this.values,
+      this.right_brace);
+  }
   with_keyword(keyword){
     return new XHPEnumType(
+      this.optional,
       keyword,
       this.left_brace,
       this.values,
@@ -14336,6 +17802,7 @@ class XHPEnumType extends EditableSyntax
   }
   with_left_brace(left_brace){
     return new XHPEnumType(
+      this.optional,
       this.keyword,
       left_brace,
       this.values,
@@ -14343,6 +17810,7 @@ class XHPEnumType extends EditableSyntax
   }
   with_values(values){
     return new XHPEnumType(
+      this.optional,
       this.keyword,
       this.left_brace,
       values,
@@ -14350,6 +17818,7 @@ class XHPEnumType extends EditableSyntax
   }
   with_right_brace(right_brace){
     return new XHPEnumType(
+      this.optional,
       this.keyword,
       this.left_brace,
       this.values,
@@ -14361,11 +17830,13 @@ class XHPEnumType extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var optional = this.optional.rewrite(rewriter, new_parents);
     var keyword = this.keyword.rewrite(rewriter, new_parents);
     var left_brace = this.left_brace.rewrite(rewriter, new_parents);
     var values = this.values.rewrite(rewriter, new_parents);
     var right_brace = this.right_brace.rewrite(rewriter, new_parents);
     if (
+      optional === this.optional &&
       keyword === this.keyword &&
       left_brace === this.left_brace &&
       values === this.values &&
@@ -14376,6 +17847,7 @@ class XHPEnumType extends EditableSyntax
     else
     {
       return rewriter(new XHPEnumType(
+        optional,
         keyword,
         left_brace,
         values,
@@ -14384,6 +17856,9 @@ class XHPEnumType extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let optional = EditableSyntax.from_json(
+      json.xhp_enum_optional, position, source);
+    position += optional.width;
     let keyword = EditableSyntax.from_json(
       json.xhp_enum_keyword, position, source);
     position += keyword.width;
@@ -14397,6 +17872,7 @@ class XHPEnumType extends EditableSyntax
       json.xhp_enum_right_brace, position, source);
     position += right_brace.width;
     return new XHPEnumType(
+        optional,
         keyword,
         left_brace,
         values,
@@ -14406,6 +17882,7 @@ class XHPEnumType extends EditableSyntax
   {
     if (XHPEnumType._children_keys == null)
       XHPEnumType._children_keys = [
+        'optional',
         'keyword',
         'left_brace',
         'values',
@@ -14711,14 +18188,14 @@ class XHPSimpleClassAttribute extends EditableSyntax
     return XHPSimpleClassAttribute._children_keys;
   }
 }
-class XHPAttribute extends EditableSyntax
+class XHPSimpleAttribute extends EditableSyntax
 {
   constructor(
     name,
     equal,
     expression)
   {
-    super('xhp_attribute', {
+    super('xhp_simple_attribute', {
       name: name,
       equal: equal,
       expression: expression });
@@ -14727,19 +18204,19 @@ class XHPAttribute extends EditableSyntax
   get equal() { return this.children.equal; }
   get expression() { return this.children.expression; }
   with_name(name){
-    return new XHPAttribute(
+    return new XHPSimpleAttribute(
       name,
       this.equal,
       this.expression);
   }
   with_equal(equal){
-    return new XHPAttribute(
+    return new XHPSimpleAttribute(
       this.name,
       equal,
       this.expression);
   }
   with_expression(expression){
-    return new XHPAttribute(
+    return new XHPSimpleAttribute(
       this.name,
       this.equal,
       expression);
@@ -14762,7 +18239,7 @@ class XHPAttribute extends EditableSyntax
     }
     else
     {
-      return rewriter(new XHPAttribute(
+      return rewriter(new XHPSimpleAttribute(
         name,
         equal,
         expression), parents);
@@ -14771,27 +18248,131 @@ class XHPAttribute extends EditableSyntax
   static from_json(json, position, source)
   {
     let name = EditableSyntax.from_json(
-      json.xhp_attribute_name, position, source);
+      json.xhp_simple_attribute_name, position, source);
     position += name.width;
     let equal = EditableSyntax.from_json(
-      json.xhp_attribute_equal, position, source);
+      json.xhp_simple_attribute_equal, position, source);
     position += equal.width;
     let expression = EditableSyntax.from_json(
-      json.xhp_attribute_expression, position, source);
+      json.xhp_simple_attribute_expression, position, source);
     position += expression.width;
-    return new XHPAttribute(
+    return new XHPSimpleAttribute(
         name,
         equal,
         expression);
   }
   get children_keys()
   {
-    if (XHPAttribute._children_keys == null)
-      XHPAttribute._children_keys = [
+    if (XHPSimpleAttribute._children_keys == null)
+      XHPSimpleAttribute._children_keys = [
         'name',
         'equal',
         'expression'];
-    return XHPAttribute._children_keys;
+    return XHPSimpleAttribute._children_keys;
+  }
+}
+class XHPSpreadAttribute extends EditableSyntax
+{
+  constructor(
+    left_brace,
+    spread_operator,
+    expression,
+    right_brace)
+  {
+    super('xhp_spread_attribute', {
+      left_brace: left_brace,
+      spread_operator: spread_operator,
+      expression: expression,
+      right_brace: right_brace });
+  }
+  get left_brace() { return this.children.left_brace; }
+  get spread_operator() { return this.children.spread_operator; }
+  get expression() { return this.children.expression; }
+  get right_brace() { return this.children.right_brace; }
+  with_left_brace(left_brace){
+    return new XHPSpreadAttribute(
+      left_brace,
+      this.spread_operator,
+      this.expression,
+      this.right_brace);
+  }
+  with_spread_operator(spread_operator){
+    return new XHPSpreadAttribute(
+      this.left_brace,
+      spread_operator,
+      this.expression,
+      this.right_brace);
+  }
+  with_expression(expression){
+    return new XHPSpreadAttribute(
+      this.left_brace,
+      this.spread_operator,
+      expression,
+      this.right_brace);
+  }
+  with_right_brace(right_brace){
+    return new XHPSpreadAttribute(
+      this.left_brace,
+      this.spread_operator,
+      this.expression,
+      right_brace);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var left_brace = this.left_brace.rewrite(rewriter, new_parents);
+    var spread_operator = this.spread_operator.rewrite(rewriter, new_parents);
+    var expression = this.expression.rewrite(rewriter, new_parents);
+    var right_brace = this.right_brace.rewrite(rewriter, new_parents);
+    if (
+      left_brace === this.left_brace &&
+      spread_operator === this.spread_operator &&
+      expression === this.expression &&
+      right_brace === this.right_brace)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new XHPSpreadAttribute(
+        left_brace,
+        spread_operator,
+        expression,
+        right_brace), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let left_brace = EditableSyntax.from_json(
+      json.xhp_spread_attribute_left_brace, position, source);
+    position += left_brace.width;
+    let spread_operator = EditableSyntax.from_json(
+      json.xhp_spread_attribute_spread_operator, position, source);
+    position += spread_operator.width;
+    let expression = EditableSyntax.from_json(
+      json.xhp_spread_attribute_expression, position, source);
+    position += expression.width;
+    let right_brace = EditableSyntax.from_json(
+      json.xhp_spread_attribute_right_brace, position, source);
+    position += right_brace.width;
+    return new XHPSpreadAttribute(
+        left_brace,
+        spread_operator,
+        expression,
+        right_brace);
+  }
+  get children_keys()
+  {
+    if (XHPSpreadAttribute._children_keys == null)
+      XHPSpreadAttribute._children_keys = [
+        'left_brace',
+        'spread_operator',
+        'expression',
+        'right_brace'];
+    return XHPSpreadAttribute._children_keys;
   }
 }
 class XHPOpen extends EditableSyntax
@@ -15739,32 +19320,60 @@ class VectorArrayTypeSpecifier extends EditableSyntax
 class TypeParameter extends EditableSyntax
 {
   constructor(
+    attribute_spec,
+    reified,
     variance,
     name,
     constraints)
   {
     super('type_parameter', {
+      attribute_spec: attribute_spec,
+      reified: reified,
       variance: variance,
       name: name,
       constraints: constraints });
   }
+  get attribute_spec() { return this.children.attribute_spec; }
+  get reified() { return this.children.reified; }
   get variance() { return this.children.variance; }
   get name() { return this.children.name; }
   get constraints() { return this.children.constraints; }
+  with_attribute_spec(attribute_spec){
+    return new TypeParameter(
+      attribute_spec,
+      this.reified,
+      this.variance,
+      this.name,
+      this.constraints);
+  }
+  with_reified(reified){
+    return new TypeParameter(
+      this.attribute_spec,
+      reified,
+      this.variance,
+      this.name,
+      this.constraints);
+  }
   with_variance(variance){
     return new TypeParameter(
+      this.attribute_spec,
+      this.reified,
       variance,
       this.name,
       this.constraints);
   }
   with_name(name){
     return new TypeParameter(
+      this.attribute_spec,
+      this.reified,
       this.variance,
       name,
       this.constraints);
   }
   with_constraints(constraints){
     return new TypeParameter(
+      this.attribute_spec,
+      this.reified,
       this.variance,
       this.name,
       constraints);
@@ -15775,10 +19384,14 @@ class TypeParameter extends EditableSyntax
       parents = [];
     let new_parents = parents.slice();
     new_parents.push(this);
+    var attribute_spec = this.attribute_spec.rewrite(rewriter, new_parents);
+    var reified = this.reified.rewrite(rewriter, new_parents);
     var variance = this.variance.rewrite(rewriter, new_parents);
     var name = this.name.rewrite(rewriter, new_parents);
     var constraints = this.constraints.rewrite(rewriter, new_parents);
     if (
+      attribute_spec === this.attribute_spec &&
+      reified === this.reified &&
       variance === this.variance &&
       name === this.name &&
       constraints === this.constraints)
@@ -15788,6 +19401,8 @@ class TypeParameter extends EditableSyntax
     else
     {
       return rewriter(new TypeParameter(
+        attribute_spec,
+        reified,
         variance,
         name,
         constraints), parents);
@@ -15795,6 +19410,12 @@ class TypeParameter extends EditableSyntax
   }
   static from_json(json, position, source)
   {
+    let attribute_spec = EditableSyntax.from_json(
+      json.type_attribute_spec, position, source);
+    position += attribute_spec.width;
+    let reified = EditableSyntax.from_json(
+      json.type_reified, position, source);
+    position += reified.width;
     let variance = EditableSyntax.from_json(
       json.type_variance, position, source);
     position += variance.width;
@@ -15805,6 +19426,8 @@ class TypeParameter extends EditableSyntax
       json.type_constraints, position, source);
     position += constraints.width;
     return new TypeParameter(
+        attribute_spec,
+        reified,
         variance,
         name,
         constraints);
@@ -15813,6 +19436,8 @@ class TypeParameter extends EditableSyntax
   {
     if (TypeParameter._children_keys == null)
       TypeParameter._children_keys = [
+        'attribute_spec',
+        'reified',
         'variance',
         'name',
         'constraints'];
@@ -16325,7 +19950,7 @@ class ClosureTypeSpecifier extends EditableSyntax
     coroutine,
     function_keyword,
     inner_left_paren,
-    parameter_types,
+    parameter_list,
     inner_right_paren,
     colon,
     return_type,
@@ -16336,7 +19961,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       coroutine: coroutine,
       function_keyword: function_keyword,
       inner_left_paren: inner_left_paren,
-      parameter_types: parameter_types,
+      parameter_list: parameter_list,
       inner_right_paren: inner_right_paren,
       colon: colon,
       return_type: return_type,
@@ -16346,7 +19971,7 @@ class ClosureTypeSpecifier extends EditableSyntax
   get coroutine() { return this.children.coroutine; }
   get function_keyword() { return this.children.function_keyword; }
   get inner_left_paren() { return this.children.inner_left_paren; }
-  get parameter_types() { return this.children.parameter_types; }
+  get parameter_list() { return this.children.parameter_list; }
   get inner_right_paren() { return this.children.inner_right_paren; }
   get colon() { return this.children.colon; }
   get return_type() { return this.children.return_type; }
@@ -16357,7 +19982,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       this.colon,
       this.return_type,
@@ -16369,7 +19994,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       this.colon,
       this.return_type,
@@ -16381,7 +20006,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       this.colon,
       this.return_type,
@@ -16393,19 +20018,19 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       this.function_keyword,
       inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       this.colon,
       this.return_type,
       this.outer_right_paren);
   }
-  with_parameter_types(parameter_types){
+  with_parameter_list(parameter_list){
     return new ClosureTypeSpecifier(
       this.outer_left_paren,
       this.coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      parameter_types,
+      parameter_list,
       this.inner_right_paren,
       this.colon,
       this.return_type,
@@ -16417,7 +20042,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       inner_right_paren,
       this.colon,
       this.return_type,
@@ -16429,7 +20054,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       colon,
       this.return_type,
@@ -16441,7 +20066,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       this.colon,
       return_type,
@@ -16453,7 +20078,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       this.coroutine,
       this.function_keyword,
       this.inner_left_paren,
-      this.parameter_types,
+      this.parameter_list,
       this.inner_right_paren,
       this.colon,
       this.return_type,
@@ -16469,7 +20094,7 @@ class ClosureTypeSpecifier extends EditableSyntax
     var coroutine = this.coroutine.rewrite(rewriter, new_parents);
     var function_keyword = this.function_keyword.rewrite(rewriter, new_parents);
     var inner_left_paren = this.inner_left_paren.rewrite(rewriter, new_parents);
-    var parameter_types = this.parameter_types.rewrite(rewriter, new_parents);
+    var parameter_list = this.parameter_list.rewrite(rewriter, new_parents);
     var inner_right_paren = this.inner_right_paren.rewrite(rewriter, new_parents);
     var colon = this.colon.rewrite(rewriter, new_parents);
     var return_type = this.return_type.rewrite(rewriter, new_parents);
@@ -16479,7 +20104,7 @@ class ClosureTypeSpecifier extends EditableSyntax
       coroutine === this.coroutine &&
       function_keyword === this.function_keyword &&
       inner_left_paren === this.inner_left_paren &&
-      parameter_types === this.parameter_types &&
+      parameter_list === this.parameter_list &&
       inner_right_paren === this.inner_right_paren &&
       colon === this.colon &&
       return_type === this.return_type &&
@@ -16494,7 +20119,7 @@ class ClosureTypeSpecifier extends EditableSyntax
         coroutine,
         function_keyword,
         inner_left_paren,
-        parameter_types,
+        parameter_list,
         inner_right_paren,
         colon,
         return_type,
@@ -16515,9 +20140,9 @@ class ClosureTypeSpecifier extends EditableSyntax
     let inner_left_paren = EditableSyntax.from_json(
       json.closure_inner_left_paren, position, source);
     position += inner_left_paren.width;
-    let parameter_types = EditableSyntax.from_json(
-      json.closure_parameter_types, position, source);
-    position += parameter_types.width;
+    let parameter_list = EditableSyntax.from_json(
+      json.closure_parameter_list, position, source);
+    position += parameter_list.width;
     let inner_right_paren = EditableSyntax.from_json(
       json.closure_inner_right_paren, position, source);
     position += inner_right_paren.width;
@@ -16535,7 +20160,7 @@ class ClosureTypeSpecifier extends EditableSyntax
         coroutine,
         function_keyword,
         inner_left_paren,
-        parameter_types,
+        parameter_list,
         inner_right_paren,
         colon,
         return_type,
@@ -16549,12 +20174,76 @@ class ClosureTypeSpecifier extends EditableSyntax
         'coroutine',
         'function_keyword',
         'inner_left_paren',
-        'parameter_types',
+        'parameter_list',
         'inner_right_paren',
         'colon',
         'return_type',
         'outer_right_paren'];
     return ClosureTypeSpecifier._children_keys;
+  }
+}
+class ClosureParameterTypeSpecifier extends EditableSyntax
+{
+  constructor(
+    call_convention,
+    type)
+  {
+    super('closure_parameter_type_specifier', {
+      call_convention: call_convention,
+      type: type });
+  }
+  get call_convention() { return this.children.call_convention; }
+  get type() { return this.children.type; }
+  with_call_convention(call_convention){
+    return new ClosureParameterTypeSpecifier(
+      call_convention,
+      this.type);
+  }
+  with_type(type){
+    return new ClosureParameterTypeSpecifier(
+      this.call_convention,
+      type);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var call_convention = this.call_convention.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    if (
+      call_convention === this.call_convention &&
+      type === this.type)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new ClosureParameterTypeSpecifier(
+        call_convention,
+        type), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let call_convention = EditableSyntax.from_json(
+      json.closure_parameter_call_convention, position, source);
+    position += call_convention.width;
+    let type = EditableSyntax.from_json(
+      json.closure_parameter_type, position, source);
+    position += type.width;
+    return new ClosureParameterTypeSpecifier(
+        call_convention,
+        type);
+  }
+  get children_keys()
+  {
+    if (ClosureParameterTypeSpecifier._children_keys == null)
+      ClosureParameterTypeSpecifier._children_keys = [
+        'call_convention',
+        'type'];
+    return ClosureParameterTypeSpecifier._children_keys;
   }
 }
 class ClassnameTypeSpecifier extends EditableSyntax
@@ -17334,6 +21023,70 @@ class NullableTypeSpecifier extends EditableSyntax
     return NullableTypeSpecifier._children_keys;
   }
 }
+class LikeTypeSpecifier extends EditableSyntax
+{
+  constructor(
+    tilde,
+    type)
+  {
+    super('like_type_specifier', {
+      tilde: tilde,
+      type: type });
+  }
+  get tilde() { return this.children.tilde; }
+  get type() { return this.children.type; }
+  with_tilde(tilde){
+    return new LikeTypeSpecifier(
+      tilde,
+      this.type);
+  }
+  with_type(type){
+    return new LikeTypeSpecifier(
+      this.tilde,
+      type);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var tilde = this.tilde.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    if (
+      tilde === this.tilde &&
+      type === this.type)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new LikeTypeSpecifier(
+        tilde,
+        type), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let tilde = EditableSyntax.from_json(
+      json.like_tilde, position, source);
+    position += tilde.width;
+    let type = EditableSyntax.from_json(
+      json.like_type, position, source);
+    position += type.width;
+    return new LikeTypeSpecifier(
+        tilde,
+        type);
+  }
+  get children_keys()
+  {
+    if (LikeTypeSpecifier._children_keys == null)
+      LikeTypeSpecifier._children_keys = [
+        'tilde',
+        'type'];
+    return LikeTypeSpecifier._children_keys;
+  }
+}
 class SoftTypeSpecifier extends EditableSyntax
 {
   constructor(
@@ -17396,6 +21149,70 @@ class SoftTypeSpecifier extends EditableSyntax
         'at',
         'type'];
     return SoftTypeSpecifier._children_keys;
+  }
+}
+class ReifiedTypeArgument extends EditableSyntax
+{
+  constructor(
+    reified,
+    type)
+  {
+    super('reified_type_argument', {
+      reified: reified,
+      type: type });
+  }
+  get reified() { return this.children.reified; }
+  get type() { return this.children.type; }
+  with_reified(reified){
+    return new ReifiedTypeArgument(
+      reified,
+      this.type);
+  }
+  with_type(type){
+    return new ReifiedTypeArgument(
+      this.reified,
+      type);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var reified = this.reified.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    if (
+      reified === this.reified &&
+      type === this.type)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new ReifiedTypeArgument(
+        reified,
+        type), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let reified = EditableSyntax.from_json(
+      json.reified_type_argument_reified, position, source);
+    position += reified.width;
+    let type = EditableSyntax.from_json(
+      json.reified_type_argument_type, position, source);
+    position += type.width;
+    return new ReifiedTypeArgument(
+        reified,
+        type);
+  }
+  get children_keys()
+  {
+    if (ReifiedTypeArgument._children_keys == null)
+      ReifiedTypeArgument._children_keys = [
+        'reified',
+        'type'];
+    return ReifiedTypeArgument._children_keys;
   }
 }
 class TypeArguments extends EditableSyntax
@@ -17758,6 +21575,877 @@ class ListItem extends EditableSyntax
     return ListItem._children_keys;
   }
 }
+class PocketAtomExpression extends EditableSyntax
+{
+  constructor(
+    glyph,
+    expression)
+  {
+    super('pocket_atom', {
+      glyph: glyph,
+      expression: expression });
+  }
+  get glyph() { return this.children.glyph; }
+  get expression() { return this.children.expression; }
+  with_glyph(glyph){
+    return new PocketAtomExpression(
+      glyph,
+      this.expression);
+  }
+  with_expression(expression){
+    return new PocketAtomExpression(
+      this.glyph,
+      expression);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var glyph = this.glyph.rewrite(rewriter, new_parents);
+    var expression = this.expression.rewrite(rewriter, new_parents);
+    if (
+      glyph === this.glyph &&
+      expression === this.expression)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketAtomExpression(
+        glyph,
+        expression), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let glyph = EditableSyntax.from_json(
+      json.pocket_atom_glyph, position, source);
+    position += glyph.width;
+    let expression = EditableSyntax.from_json(
+      json.pocket_atom_expression, position, source);
+    position += expression.width;
+    return new PocketAtomExpression(
+        glyph,
+        expression);
+  }
+  get children_keys()
+  {
+    if (PocketAtomExpression._children_keys == null)
+      PocketAtomExpression._children_keys = [
+        'glyph',
+        'expression'];
+    return PocketAtomExpression._children_keys;
+  }
+}
+class PocketIdentifierExpression extends EditableSyntax
+{
+  constructor(
+    qualifier,
+    pu_operator,
+    field,
+    operator,
+    name)
+  {
+    super('pocket_identifier', {
+      qualifier: qualifier,
+      pu_operator: pu_operator,
+      field: field,
+      operator: operator,
+      name: name });
+  }
+  get qualifier() { return this.children.qualifier; }
+  get pu_operator() { return this.children.pu_operator; }
+  get field() { return this.children.field; }
+  get operator() { return this.children.operator; }
+  get name() { return this.children.name; }
+  with_qualifier(qualifier){
+    return new PocketIdentifierExpression(
+      qualifier,
+      this.pu_operator,
+      this.field,
+      this.operator,
+      this.name);
+  }
+  with_pu_operator(pu_operator){
+    return new PocketIdentifierExpression(
+      this.qualifier,
+      pu_operator,
+      this.field,
+      this.operator,
+      this.name);
+  }
+  with_field(field){
+    return new PocketIdentifierExpression(
+      this.qualifier,
+      this.pu_operator,
+      field,
+      this.operator,
+      this.name);
+  }
+  with_operator(operator){
+    return new PocketIdentifierExpression(
+      this.qualifier,
+      this.pu_operator,
+      this.field,
+      operator,
+      this.name);
+  }
+  with_name(name){
+    return new PocketIdentifierExpression(
+      this.qualifier,
+      this.pu_operator,
+      this.field,
+      this.operator,
+      name);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var qualifier = this.qualifier.rewrite(rewriter, new_parents);
+    var pu_operator = this.pu_operator.rewrite(rewriter, new_parents);
+    var field = this.field.rewrite(rewriter, new_parents);
+    var operator = this.operator.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    if (
+      qualifier === this.qualifier &&
+      pu_operator === this.pu_operator &&
+      field === this.field &&
+      operator === this.operator &&
+      name === this.name)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketIdentifierExpression(
+        qualifier,
+        pu_operator,
+        field,
+        operator,
+        name), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let qualifier = EditableSyntax.from_json(
+      json.pocket_identifier_qualifier, position, source);
+    position += qualifier.width;
+    let pu_operator = EditableSyntax.from_json(
+      json.pocket_identifier_pu_operator, position, source);
+    position += pu_operator.width;
+    let field = EditableSyntax.from_json(
+      json.pocket_identifier_field, position, source);
+    position += field.width;
+    let operator = EditableSyntax.from_json(
+      json.pocket_identifier_operator, position, source);
+    position += operator.width;
+    let name = EditableSyntax.from_json(
+      json.pocket_identifier_name, position, source);
+    position += name.width;
+    return new PocketIdentifierExpression(
+        qualifier,
+        pu_operator,
+        field,
+        operator,
+        name);
+  }
+  get children_keys()
+  {
+    if (PocketIdentifierExpression._children_keys == null)
+      PocketIdentifierExpression._children_keys = [
+        'qualifier',
+        'pu_operator',
+        'field',
+        'operator',
+        'name'];
+    return PocketIdentifierExpression._children_keys;
+  }
+}
+class PocketAtomMappingDeclaration extends EditableSyntax
+{
+  constructor(
+    glyph,
+    name,
+    left_paren,
+    mappings,
+    right_paren,
+    semicolon)
+  {
+    super('pocket_atom_mapping', {
+      glyph: glyph,
+      name: name,
+      left_paren: left_paren,
+      mappings: mappings,
+      right_paren: right_paren,
+      semicolon: semicolon });
+  }
+  get glyph() { return this.children.glyph; }
+  get name() { return this.children.name; }
+  get left_paren() { return this.children.left_paren; }
+  get mappings() { return this.children.mappings; }
+  get right_paren() { return this.children.right_paren; }
+  get semicolon() { return this.children.semicolon; }
+  with_glyph(glyph){
+    return new PocketAtomMappingDeclaration(
+      glyph,
+      this.name,
+      this.left_paren,
+      this.mappings,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_name(name){
+    return new PocketAtomMappingDeclaration(
+      this.glyph,
+      name,
+      this.left_paren,
+      this.mappings,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_left_paren(left_paren){
+    return new PocketAtomMappingDeclaration(
+      this.glyph,
+      this.name,
+      left_paren,
+      this.mappings,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_mappings(mappings){
+    return new PocketAtomMappingDeclaration(
+      this.glyph,
+      this.name,
+      this.left_paren,
+      mappings,
+      this.right_paren,
+      this.semicolon);
+  }
+  with_right_paren(right_paren){
+    return new PocketAtomMappingDeclaration(
+      this.glyph,
+      this.name,
+      this.left_paren,
+      this.mappings,
+      right_paren,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new PocketAtomMappingDeclaration(
+      this.glyph,
+      this.name,
+      this.left_paren,
+      this.mappings,
+      this.right_paren,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var glyph = this.glyph.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var left_paren = this.left_paren.rewrite(rewriter, new_parents);
+    var mappings = this.mappings.rewrite(rewriter, new_parents);
+    var right_paren = this.right_paren.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      glyph === this.glyph &&
+      name === this.name &&
+      left_paren === this.left_paren &&
+      mappings === this.mappings &&
+      right_paren === this.right_paren &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketAtomMappingDeclaration(
+        glyph,
+        name,
+        left_paren,
+        mappings,
+        right_paren,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let glyph = EditableSyntax.from_json(
+      json.pocket_atom_mapping_glyph, position, source);
+    position += glyph.width;
+    let name = EditableSyntax.from_json(
+      json.pocket_atom_mapping_name, position, source);
+    position += name.width;
+    let left_paren = EditableSyntax.from_json(
+      json.pocket_atom_mapping_left_paren, position, source);
+    position += left_paren.width;
+    let mappings = EditableSyntax.from_json(
+      json.pocket_atom_mapping_mappings, position, source);
+    position += mappings.width;
+    let right_paren = EditableSyntax.from_json(
+      json.pocket_atom_mapping_right_paren, position, source);
+    position += right_paren.width;
+    let semicolon = EditableSyntax.from_json(
+      json.pocket_atom_mapping_semicolon, position, source);
+    position += semicolon.width;
+    return new PocketAtomMappingDeclaration(
+        glyph,
+        name,
+        left_paren,
+        mappings,
+        right_paren,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (PocketAtomMappingDeclaration._children_keys == null)
+      PocketAtomMappingDeclaration._children_keys = [
+        'glyph',
+        'name',
+        'left_paren',
+        'mappings',
+        'right_paren',
+        'semicolon'];
+    return PocketAtomMappingDeclaration._children_keys;
+  }
+}
+class PocketEnumDeclaration extends EditableSyntax
+{
+  constructor(
+    modifiers,
+    enum,
+    name,
+    left_brace,
+    fields,
+    right_brace)
+  {
+    super('pocket_enum_declaration', {
+      modifiers: modifiers,
+      enum: enum,
+      name: name,
+      left_brace: left_brace,
+      fields: fields,
+      right_brace: right_brace });
+  }
+  get modifiers() { return this.children.modifiers; }
+  get enum() { return this.children.enum; }
+  get name() { return this.children.name; }
+  get left_brace() { return this.children.left_brace; }
+  get fields() { return this.children.fields; }
+  get right_brace() { return this.children.right_brace; }
+  with_modifiers(modifiers){
+    return new PocketEnumDeclaration(
+      modifiers,
+      this.enum,
+      this.name,
+      this.left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_enum(enum){
+    return new PocketEnumDeclaration(
+      this.modifiers,
+      enum,
+      this.name,
+      this.left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_name(name){
+    return new PocketEnumDeclaration(
+      this.modifiers,
+      this.enum,
+      name,
+      this.left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_left_brace(left_brace){
+    return new PocketEnumDeclaration(
+      this.modifiers,
+      this.enum,
+      this.name,
+      left_brace,
+      this.fields,
+      this.right_brace);
+  }
+  with_fields(fields){
+    return new PocketEnumDeclaration(
+      this.modifiers,
+      this.enum,
+      this.name,
+      this.left_brace,
+      fields,
+      this.right_brace);
+  }
+  with_right_brace(right_brace){
+    return new PocketEnumDeclaration(
+      this.modifiers,
+      this.enum,
+      this.name,
+      this.left_brace,
+      this.fields,
+      right_brace);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var modifiers = this.modifiers.rewrite(rewriter, new_parents);
+    var enum = this.enum.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var left_brace = this.left_brace.rewrite(rewriter, new_parents);
+    var fields = this.fields.rewrite(rewriter, new_parents);
+    var right_brace = this.right_brace.rewrite(rewriter, new_parents);
+    if (
+      modifiers === this.modifiers &&
+      enum === this.enum &&
+      name === this.name &&
+      left_brace === this.left_brace &&
+      fields === this.fields &&
+      right_brace === this.right_brace)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketEnumDeclaration(
+        modifiers,
+        enum,
+        name,
+        left_brace,
+        fields,
+        right_brace), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let modifiers = EditableSyntax.from_json(
+      json.pocket_enum_modifiers, position, source);
+    position += modifiers.width;
+    let enum = EditableSyntax.from_json(
+      json.pocket_enum_enum, position, source);
+    position += enum.width;
+    let name = EditableSyntax.from_json(
+      json.pocket_enum_name, position, source);
+    position += name.width;
+    let left_brace = EditableSyntax.from_json(
+      json.pocket_enum_left_brace, position, source);
+    position += left_brace.width;
+    let fields = EditableSyntax.from_json(
+      json.pocket_enum_fields, position, source);
+    position += fields.width;
+    let right_brace = EditableSyntax.from_json(
+      json.pocket_enum_right_brace, position, source);
+    position += right_brace.width;
+    return new PocketEnumDeclaration(
+        modifiers,
+        enum,
+        name,
+        left_brace,
+        fields,
+        right_brace);
+  }
+  get children_keys()
+  {
+    if (PocketEnumDeclaration._children_keys == null)
+      PocketEnumDeclaration._children_keys = [
+        'modifiers',
+        'enum',
+        'name',
+        'left_brace',
+        'fields',
+        'right_brace'];
+    return PocketEnumDeclaration._children_keys;
+  }
+}
+class PocketFieldTypeExprDeclaration extends EditableSyntax
+{
+  constructor(
+    case,
+    type,
+    name,
+    semicolon)
+  {
+    super('pocket_field_type_expr_declaration', {
+      case: case,
+      type: type,
+      name: name,
+      semicolon: semicolon });
+  }
+  get case() { return this.children.case; }
+  get type() { return this.children.type; }
+  get name() { return this.children.name; }
+  get semicolon() { return this.children.semicolon; }
+  with_case(case){
+    return new PocketFieldTypeExprDeclaration(
+      case,
+      this.type,
+      this.name,
+      this.semicolon);
+  }
+  with_type(type){
+    return new PocketFieldTypeExprDeclaration(
+      this.case,
+      type,
+      this.name,
+      this.semicolon);
+  }
+  with_name(name){
+    return new PocketFieldTypeExprDeclaration(
+      this.case,
+      this.type,
+      name,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new PocketFieldTypeExprDeclaration(
+      this.case,
+      this.type,
+      this.name,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var case = this.case.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      case === this.case &&
+      type === this.type &&
+      name === this.name &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketFieldTypeExprDeclaration(
+        case,
+        type,
+        name,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let case = EditableSyntax.from_json(
+      json.pocket_field_type_expr_case, position, source);
+    position += case.width;
+    let type = EditableSyntax.from_json(
+      json.pocket_field_type_expr_type, position, source);
+    position += type.width;
+    let name = EditableSyntax.from_json(
+      json.pocket_field_type_expr_name, position, source);
+    position += name.width;
+    let semicolon = EditableSyntax.from_json(
+      json.pocket_field_type_expr_semicolon, position, source);
+    position += semicolon.width;
+    return new PocketFieldTypeExprDeclaration(
+        case,
+        type,
+        name,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (PocketFieldTypeExprDeclaration._children_keys == null)
+      PocketFieldTypeExprDeclaration._children_keys = [
+        'case',
+        'type',
+        'name',
+        'semicolon'];
+    return PocketFieldTypeExprDeclaration._children_keys;
+  }
+}
+class PocketFieldTypeDeclaration extends EditableSyntax
+{
+  constructor(
+    case,
+    type,
+    name,
+    semicolon)
+  {
+    super('pocket_field_type_declaration', {
+      case: case,
+      type: type,
+      name: name,
+      semicolon: semicolon });
+  }
+  get case() { return this.children.case; }
+  get type() { return this.children.type; }
+  get name() { return this.children.name; }
+  get semicolon() { return this.children.semicolon; }
+  with_case(case){
+    return new PocketFieldTypeDeclaration(
+      case,
+      this.type,
+      this.name,
+      this.semicolon);
+  }
+  with_type(type){
+    return new PocketFieldTypeDeclaration(
+      this.case,
+      type,
+      this.name,
+      this.semicolon);
+  }
+  with_name(name){
+    return new PocketFieldTypeDeclaration(
+      this.case,
+      this.type,
+      name,
+      this.semicolon);
+  }
+  with_semicolon(semicolon){
+    return new PocketFieldTypeDeclaration(
+      this.case,
+      this.type,
+      this.name,
+      semicolon);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var case = this.case.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var semicolon = this.semicolon.rewrite(rewriter, new_parents);
+    if (
+      case === this.case &&
+      type === this.type &&
+      name === this.name &&
+      semicolon === this.semicolon)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketFieldTypeDeclaration(
+        case,
+        type,
+        name,
+        semicolon), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let case = EditableSyntax.from_json(
+      json.pocket_field_type_case, position, source);
+    position += case.width;
+    let type = EditableSyntax.from_json(
+      json.pocket_field_type_type, position, source);
+    position += type.width;
+    let name = EditableSyntax.from_json(
+      json.pocket_field_type_name, position, source);
+    position += name.width;
+    let semicolon = EditableSyntax.from_json(
+      json.pocket_field_type_semicolon, position, source);
+    position += semicolon.width;
+    return new PocketFieldTypeDeclaration(
+        case,
+        type,
+        name,
+        semicolon);
+  }
+  get children_keys()
+  {
+    if (PocketFieldTypeDeclaration._children_keys == null)
+      PocketFieldTypeDeclaration._children_keys = [
+        'case',
+        'type',
+        'name',
+        'semicolon'];
+    return PocketFieldTypeDeclaration._children_keys;
+  }
+}
+class PocketMappingIdDeclaration extends EditableSyntax
+{
+  constructor(
+    name,
+    initializer)
+  {
+    super('pocket_mapping_id_declaration', {
+      name: name,
+      initializer: initializer });
+  }
+  get name() { return this.children.name; }
+  get initializer() { return this.children.initializer; }
+  with_name(name){
+    return new PocketMappingIdDeclaration(
+      name,
+      this.initializer);
+  }
+  with_initializer(initializer){
+    return new PocketMappingIdDeclaration(
+      this.name,
+      initializer);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var initializer = this.initializer.rewrite(rewriter, new_parents);
+    if (
+      name === this.name &&
+      initializer === this.initializer)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketMappingIdDeclaration(
+        name,
+        initializer), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let name = EditableSyntax.from_json(
+      json.pocket_mapping_id_name, position, source);
+    position += name.width;
+    let initializer = EditableSyntax.from_json(
+      json.pocket_mapping_id_initializer, position, source);
+    position += initializer.width;
+    return new PocketMappingIdDeclaration(
+        name,
+        initializer);
+  }
+  get children_keys()
+  {
+    if (PocketMappingIdDeclaration._children_keys == null)
+      PocketMappingIdDeclaration._children_keys = [
+        'name',
+        'initializer'];
+    return PocketMappingIdDeclaration._children_keys;
+  }
+}
+class PocketMappingTypeDeclaration extends EditableSyntax
+{
+  constructor(
+    keyword,
+    name,
+    equal,
+    type)
+  {
+    super('pocket_mapping_type_declaration', {
+      keyword: keyword,
+      name: name,
+      equal: equal,
+      type: type });
+  }
+  get keyword() { return this.children.keyword; }
+  get name() { return this.children.name; }
+  get equal() { return this.children.equal; }
+  get type() { return this.children.type; }
+  with_keyword(keyword){
+    return new PocketMappingTypeDeclaration(
+      keyword,
+      this.name,
+      this.equal,
+      this.type);
+  }
+  with_name(name){
+    return new PocketMappingTypeDeclaration(
+      this.keyword,
+      name,
+      this.equal,
+      this.type);
+  }
+  with_equal(equal){
+    return new PocketMappingTypeDeclaration(
+      this.keyword,
+      this.name,
+      equal,
+      this.type);
+  }
+  with_type(type){
+    return new PocketMappingTypeDeclaration(
+      this.keyword,
+      this.name,
+      this.equal,
+      type);
+  }
+  rewrite(rewriter, parents)
+  {
+    if (parents == undefined)
+      parents = [];
+    let new_parents = parents.slice();
+    new_parents.push(this);
+    var keyword = this.keyword.rewrite(rewriter, new_parents);
+    var name = this.name.rewrite(rewriter, new_parents);
+    var equal = this.equal.rewrite(rewriter, new_parents);
+    var type = this.type.rewrite(rewriter, new_parents);
+    if (
+      keyword === this.keyword &&
+      name === this.name &&
+      equal === this.equal &&
+      type === this.type)
+    {
+      return rewriter(this, parents);
+    }
+    else
+    {
+      return rewriter(new PocketMappingTypeDeclaration(
+        keyword,
+        name,
+        equal,
+        type), parents);
+    }
+  }
+  static from_json(json, position, source)
+  {
+    let keyword = EditableSyntax.from_json(
+      json.pocket_mapping_type_keyword, position, source);
+    position += keyword.width;
+    let name = EditableSyntax.from_json(
+      json.pocket_mapping_type_name, position, source);
+    position += name.width;
+    let equal = EditableSyntax.from_json(
+      json.pocket_mapping_type_equal, position, source);
+    position += equal.width;
+    let type = EditableSyntax.from_json(
+      json.pocket_mapping_type_type, position, source);
+    position += type.width;
+    return new PocketMappingTypeDeclaration(
+        keyword,
+        name,
+        equal,
+        type);
+  }
+  get children_keys()
+  {
+    if (PocketMappingTypeDeclaration._children_keys == null)
+      PocketMappingTypeDeclaration._children_keys = [
+        'keyword',
+        'name',
+        'equal',
+        'type'];
+    return PocketMappingTypeDeclaration._children_keys;
+  }
+}
 
 
 function from_json(json)
@@ -17779,7 +22467,10 @@ exports.AsToken = AsToken;
 exports.AsyncToken = AsyncToken;
 exports.AttributeToken = AttributeToken;
 exports.AwaitToken = AwaitToken;
+exports.BackslashToken = BackslashToken;
+exports.BinaryToken = BinaryToken;
 exports.BoolToken = BoolToken;
+exports.BooleanToken = BooleanToken;
 exports.BreakToken = BreakToken;
 exports.CaseToken = CaseToken;
 exports.CatchToken = CatchToken;
@@ -17793,6 +22484,7 @@ exports.ConstructToken = ConstructToken;
 exports.ContinueToken = ContinueToken;
 exports.CoroutineToken = CoroutineToken;
 exports.DarrayToken = DarrayToken;
+exports.DeclareToken = DeclareToken;
 exports.DefaultToken = DefaultToken;
 exports.DefineToken = DefineToken;
 exports.DestructToken = DestructToken;
@@ -17803,11 +22495,18 @@ exports.EchoToken = EchoToken;
 exports.ElseToken = ElseToken;
 exports.ElseifToken = ElseifToken;
 exports.EmptyToken = EmptyToken;
+exports.EndforToken = EndforToken;
+exports.EndforeachToken = EndforeachToken;
+exports.EnddeclareToken = EnddeclareToken;
+exports.EndifToken = EndifToken;
+exports.EndswitchToken = EndswitchToken;
+exports.EndwhileToken = EndwhileToken;
 exports.EnumToken = EnumToken;
 exports.EvalToken = EvalToken;
 exports.ExtendsToken = ExtendsToken;
 exports.FallthroughToken = FallthroughToken;
 exports.FloatToken = FloatToken;
+exports.FileToken = FileToken;
 exports.FinalToken = FinalToken;
 exports.FinallyToken = FinallyToken;
 exports.ForToken = ForToken;
@@ -17815,17 +22514,23 @@ exports.ForeachToken = ForeachToken;
 exports.FromToken = FromToken;
 exports.FunctionToken = FunctionToken;
 exports.GlobalToken = GlobalToken;
+exports.ConcurrentToken = ConcurrentToken;
 exports.GotoToken = GotoToken;
+exports.HaltCompilerToken = HaltCompilerToken;
 exports.IfToken = IfToken;
 exports.ImplementsToken = ImplementsToken;
 exports.IncludeToken = IncludeToken;
 exports.Include_onceToken = Include_onceToken;
+exports.InoutToken = InoutToken;
 exports.InstanceofToken = InstanceofToken;
 exports.InsteadofToken = InsteadofToken;
 exports.IntToken = IntToken;
+exports.IntegerToken = IntegerToken;
 exports.InterfaceToken = InterfaceToken;
+exports.IsToken = IsToken;
 exports.IssetToken = IssetToken;
 exports.KeysetToken = KeysetToken;
+exports.LetToken = LetToken;
 exports.ListToken = ListToken;
 exports.MixedToken = MixedToken;
 exports.NamespaceToken = NamespaceToken;
@@ -17840,6 +22545,10 @@ exports.PrintToken = PrintToken;
 exports.PrivateToken = PrivateToken;
 exports.ProtectedToken = ProtectedToken;
 exports.PublicToken = PublicToken;
+exports.RealToken = RealToken;
+exports.ReifyToken = ReifyToken;
+exports.RecordToken = RecordToken;
+exports.RecordDecToken = RecordDecToken;
 exports.RequireToken = RequireToken;
 exports.Require_onceToken = Require_onceToken;
 exports.RequiredToken = RequiredToken;
@@ -17860,6 +22569,7 @@ exports.TupleToken = TupleToken;
 exports.TypeToken = TypeToken;
 exports.UnsetToken = UnsetToken;
 exports.UseToken = UseToken;
+exports.UsingToken = UsingToken;
 exports.VarToken = VarToken;
 exports.VarrayToken = VarrayToken;
 exports.VecToken = VecToken;
@@ -17868,6 +22578,7 @@ exports.WhereToken = WhereToken;
 exports.WhileToken = WhileToken;
 exports.XorToken = XorToken;
 exports.YieldToken = YieldToken;
+exports.NullLiteralToken = NullLiteralToken;
 exports.LeftBracketToken = LeftBracketToken;
 exports.RightBracketToken = RightBracketToken;
 exports.LeftParenToken = LeftParenToken;
@@ -17905,7 +22616,10 @@ exports.AmpersandToken = AmpersandToken;
 exports.AmpersandAmpersandToken = AmpersandAmpersandToken;
 exports.BarBarToken = BarBarToken;
 exports.QuestionToken = QuestionToken;
+exports.QuestionAsToken = QuestionAsToken;
+exports.QuestionColonToken = QuestionColonToken;
 exports.QuestionQuestionToken = QuestionQuestionToken;
+exports.QuestionQuestionEqualToken = QuestionQuestionEqualToken;
 exports.ColonToken = ColonToken;
 exports.SemicolonToken = SemicolonToken;
 exports.EqualToken = EqualToken;
@@ -17930,23 +22644,20 @@ exports.QuestionMinusGreaterThanToken = QuestionMinusGreaterThanToken;
 exports.DotDotDotToken = DotDotDotToken;
 exports.DollarDollarToken = DollarDollarToken;
 exports.BarGreaterThanToken = BarGreaterThanToken;
-exports.NullLiteralToken = NullLiteralToken;
 exports.SlashGreaterThanToken = SlashGreaterThanToken;
 exports.LessThanSlashToken = LessThanSlashToken;
 exports.LessThanQuestionToken = LessThanQuestionToken;
 exports.QuestionGreaterThanToken = QuestionGreaterThanToken;
+exports.ColonAtToken = ColonAtToken;
 
 exports.ErrorTokenToken = ErrorTokenToken;
 exports.NameToken = NameToken;
-exports.QualifiedNameToken = QualifiedNameToken;
 exports.VariableToken = VariableToken;
-exports.NamespacePrefixToken = NamespacePrefixToken;
 exports.DecimalLiteralToken = DecimalLiteralToken;
 exports.OctalLiteralToken = OctalLiteralToken;
 exports.HexadecimalLiteralToken = HexadecimalLiteralToken;
 exports.BinaryLiteralToken = BinaryLiteralToken;
 exports.FloatingLiteralToken = FloatingLiteralToken;
-exports.ExecutionStringToken = ExecutionStringToken;
 exports.SingleQuotedStringLiteralToken = SingleQuotedStringLiteralToken;
 exports.DoubleQuotedStringLiteralToken = DoubleQuotedStringLiteralToken;
 exports.DoubleQuotedStringLiteralHeadToken = DoubleQuotedStringLiteralHeadToken;
@@ -17976,16 +22687,21 @@ exports.FixMe = FixMe;
 exports.IgnoreError = IgnoreError;
 exports.FallThrough = FallThrough;
 exports.ExtraTokenError = ExtraTokenError;
+exports.AfterHaltCompiler = AfterHaltCompiler;
 
 exports.EndOfFile = EndOfFile;
 exports.Script = Script;
+exports.QualifiedName = QualifiedName;
 exports.SimpleTypeSpecifier = SimpleTypeSpecifier;
 exports.LiteralExpression = LiteralExpression;
+exports.PrefixedStringExpression = PrefixedStringExpression;
 exports.VariableExpression = VariableExpression;
-exports.QualifiedNameExpression = QualifiedNameExpression;
 exports.PipeVariableExpression = PipeVariableExpression;
+exports.FileAttributeSpecification = FileAttributeSpecification;
 exports.EnumDeclaration = EnumDeclaration;
 exports.Enumerator = Enumerator;
+exports.RecordDeclaration = RecordDeclaration;
+exports.RecordField = RecordField;
 exports.AliasDeclaration = AliasDeclaration;
 exports.PropertyDeclaration = PropertyDeclaration;
 exports.PropertyDeclarator = PropertyDeclarator;
@@ -18000,6 +22716,7 @@ exports.FunctionDeclarationHeader = FunctionDeclarationHeader;
 exports.WhereClause = WhereClause;
 exports.WhereConstraint = WhereConstraint;
 exports.MethodishDeclaration = MethodishDeclaration;
+exports.MethodishTraitResolution = MethodishTraitResolution;
 exports.ClassishDeclaration = ClassishDeclaration;
 exports.ClassishBody = ClassishBody;
 exports.TraitUsePrecedenceItem = TraitUsePrecedenceItem;
@@ -18014,18 +22731,26 @@ exports.DecoratedExpression = DecoratedExpression;
 exports.ParameterDeclaration = ParameterDeclaration;
 exports.VariadicParameter = VariadicParameter;
 exports.AttributeSpecification = AttributeSpecification;
-exports.Attribute = Attribute;
 exports.InclusionExpression = InclusionExpression;
 exports.InclusionDirective = InclusionDirective;
 exports.CompoundStatement = CompoundStatement;
+exports.AlternateLoopStatement = AlternateLoopStatement;
 exports.ExpressionStatement = ExpressionStatement;
 exports.MarkupSection = MarkupSection;
 exports.MarkupSuffix = MarkupSuffix;
 exports.UnsetStatement = UnsetStatement;
+exports.LetStatement = LetStatement;
+exports.UsingStatementBlockScoped = UsingStatementBlockScoped;
+exports.UsingStatementFunctionScoped = UsingStatementFunctionScoped;
+exports.DeclareDirectiveStatement = DeclareDirectiveStatement;
+exports.DeclareBlockStatement = DeclareBlockStatement;
 exports.WhileStatement = WhileStatement;
 exports.IfStatement = IfStatement;
 exports.ElseifClause = ElseifClause;
 exports.ElseClause = ElseClause;
+exports.AlternateIfStatement = AlternateIfStatement;
+exports.AlternateElseifClause = AlternateElseifClause;
+exports.AlternateElseClause = AlternateElseClause;
 exports.TryStatement = TryStatement;
 exports.CatchClause = CatchClause;
 exports.FinallyClause = FinallyClause;
@@ -18033,6 +22758,7 @@ exports.DoStatement = DoStatement;
 exports.ForStatement = ForStatement;
 exports.ForeachStatement = ForeachStatement;
 exports.SwitchStatement = SwitchStatement;
+exports.AlternateSwitchStatement = AlternateSwitchStatement;
 exports.SwitchSection = SwitchSection;
 exports.SwitchFallthrough = SwitchFallthrough;
 exports.CaseLabel = CaseLabel;
@@ -18043,12 +22769,12 @@ exports.GotoStatement = GotoStatement;
 exports.ThrowStatement = ThrowStatement;
 exports.BreakStatement = BreakStatement;
 exports.ContinueStatement = ContinueStatement;
-exports.FunctionStaticStatement = FunctionStaticStatement;
-exports.StaticDeclarator = StaticDeclarator;
 exports.EchoStatement = EchoStatement;
-exports.GlobalStatement = GlobalStatement;
+exports.ConcurrentStatement = ConcurrentStatement;
 exports.SimpleInitializer = SimpleInitializer;
+exports.AnonymousClass = AnonymousClass;
 exports.AnonymousFunction = AnonymousFunction;
+exports.Php7AnonymousFunction = Php7AnonymousFunction;
 exports.AnonymousFunctionUseClause = AnonymousFunctionUseClause;
 exports.LambdaExpression = LambdaExpression;
 exports.LambdaSignature = LambdaSignature;
@@ -18063,10 +22789,14 @@ exports.PrefixUnaryExpression = PrefixUnaryExpression;
 exports.PostfixUnaryExpression = PostfixUnaryExpression;
 exports.BinaryExpression = BinaryExpression;
 exports.InstanceofExpression = InstanceofExpression;
+exports.IsExpression = IsExpression;
+exports.AsExpression = AsExpression;
+exports.NullableAsExpression = NullableAsExpression;
 exports.ConditionalExpression = ConditionalExpression;
 exports.EvalExpression = EvalExpression;
 exports.EmptyExpression = EmptyExpression;
 exports.DefineExpression = DefineExpression;
+exports.HaltCompilerExpression = HaltCompilerExpression;
 exports.IssetExpression = IssetExpression;
 exports.FunctionCallExpression = FunctionCallExpression;
 exports.ParenthesizedExpression = ParenthesizedExpression;
@@ -18075,6 +22805,8 @@ exports.EmbeddedBracedExpression = EmbeddedBracedExpression;
 exports.ListExpression = ListExpression;
 exports.CollectionLiteralExpression = CollectionLiteralExpression;
 exports.ObjectCreationExpression = ObjectCreationExpression;
+exports.ConstructorCall = ConstructorCall;
+exports.RecordCreationExpression = RecordCreationExpression;
 exports.ArrayCreationExpression = ArrayCreationExpression;
 exports.ArrayIntrinsicExpression = ArrayIntrinsicExpression;
 exports.DarrayIntrinsicExpression = DarrayIntrinsicExpression;
@@ -18094,7 +22826,8 @@ exports.XHPRequired = XHPRequired;
 exports.XHPClassAttributeDeclaration = XHPClassAttributeDeclaration;
 exports.XHPClassAttribute = XHPClassAttribute;
 exports.XHPSimpleClassAttribute = XHPSimpleClassAttribute;
-exports.XHPAttribute = XHPAttribute;
+exports.XHPSimpleAttribute = XHPSimpleAttribute;
+exports.XHPSpreadAttribute = XHPSpreadAttribute;
 exports.XHPOpen = XHPOpen;
 exports.XHPExpression = XHPExpression;
 exports.XHPClose = XHPClose;
@@ -18110,6 +22843,7 @@ exports.DarrayTypeSpecifier = DarrayTypeSpecifier;
 exports.MapArrayTypeSpecifier = MapArrayTypeSpecifier;
 exports.DictionaryTypeSpecifier = DictionaryTypeSpecifier;
 exports.ClosureTypeSpecifier = ClosureTypeSpecifier;
+exports.ClosureParameterTypeSpecifier = ClosureParameterTypeSpecifier;
 exports.ClassnameTypeSpecifier = ClassnameTypeSpecifier;
 exports.FieldSpecifier = FieldSpecifier;
 exports.FieldInitializer = FieldInitializer;
@@ -18118,9 +22852,19 @@ exports.ShapeExpression = ShapeExpression;
 exports.TupleExpression = TupleExpression;
 exports.GenericTypeSpecifier = GenericTypeSpecifier;
 exports.NullableTypeSpecifier = NullableTypeSpecifier;
+exports.LikeTypeSpecifier = LikeTypeSpecifier;
 exports.SoftTypeSpecifier = SoftTypeSpecifier;
+exports.ReifiedTypeArgument = ReifiedTypeArgument;
 exports.TypeArguments = TypeArguments;
 exports.TypeParameters = TypeParameters;
 exports.TupleTypeSpecifier = TupleTypeSpecifier;
 exports.ErrorSyntax = ErrorSyntax;
 exports.ListItem = ListItem;
+exports.PocketAtomExpression = PocketAtomExpression;
+exports.PocketIdentifierExpression = PocketIdentifierExpression;
+exports.PocketAtomMappingDeclaration = PocketAtomMappingDeclaration;
+exports.PocketEnumDeclaration = PocketEnumDeclaration;
+exports.PocketFieldTypeExprDeclaration = PocketFieldTypeExprDeclaration;
+exports.PocketFieldTypeDeclaration = PocketFieldTypeDeclaration;
+exports.PocketMappingIdDeclaration = PocketMappingIdDeclaration;
+exports.PocketMappingTypeDeclaration = PocketMappingTypeDeclaration;

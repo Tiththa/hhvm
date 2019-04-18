@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
+ * This source code is licensed under the MIT license found in the
  * LICENSE file in the "hack" directory of this source tree. An additional
- * grant of patent rights can be found in the PATENTS file in the same
  * directory.
  *
  **
@@ -13,8 +12,6 @@
  * To regenerate this file, run
  *
  *   buck run //hphp/hack/src:generate_full_fidelity
- *
- * This module contains the type describing the structure of a syntax tree.
  *
  **
  *
@@ -31,6 +28,9 @@ type t =
   | IgnoreError
   | FallThrough
   | ExtraTokenError
+  | AfterHaltCompiler
+
+  [@@deriving show, enum]
 
 let to_string kind =
   match kind with
@@ -44,3 +44,4 @@ let to_string kind =
   | IgnoreError       -> "ignore_error"
   | FallThrough       -> "fall_through"
   | ExtraTokenError   -> "extra_token_error"
+  | AfterHaltCompiler -> "after_halt_compiler"

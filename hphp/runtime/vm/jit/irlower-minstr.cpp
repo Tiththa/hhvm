@@ -31,10 +31,10 @@
 #include "hphp/runtime/vm/jit/bc-marker.h"
 #include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
-#include "hphp/runtime/vm/jit/code-gen-internal.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/minstr-helpers.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
+#include "hphp/runtime/vm/jit/translator-runtime.h"
 
 #include "hphp/util/immed.h"
 #include "hphp/util/stack-trace.h"
@@ -57,8 +57,7 @@ void cgBaseG(IRLS& env, const IRInstruction* inst) {
   auto const args = argGroup(env, inst).typedValue(0);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void cgFinishMemberOp(IRLS&, const IRInstruction*) {}
@@ -84,22 +83,29 @@ void implProp(IRLS& env, const IRInstruction* inst) {
   auto const key     = inst->src(1);
   auto const keyType = getKeyTypeNoInt(key);
 
-  void (*helper)();
-  if (base->isA(TObj)) {
-    BUILD_OPTAB(PROP_OBJ_HELPER_TABLE, mode, keyType);
-    helper = opFunc;
-  } else {
-    BUILD_OPTAB(PROP_HELPER_TABLE, mode, keyType);
-    helper = opFunc;
-  }
-
-  auto const args = propArgs(env, inst)
+  auto args = propArgs(env, inst)
     .memberKeyS(1)
     .ssa(2);
 
+  auto const target = [&] {
+    if (inst->is(PropDX)) {
+      BUILD_OPTAB2(base->isA(TObj),
+                   PROPD_OBJ_HELPER_TABLE,
+                   PROPD_HELPER_TABLE,
+                   keyType);
+      args.ssa(3);
+      return target;
+    } else {
+      BUILD_OPTAB2(base->isA(TObj),
+                   PROP_OBJ_HELPER_TABLE,
+                   PROP_HELPER_TABLE,
+                   mode, keyType);
+      return target;
+    }
+  }();
+
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(helper), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void implIssetEmptyProp(IRLS& env, const IRInstruction* inst) {
@@ -108,20 +114,15 @@ void implIssetEmptyProp(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
   auto const keyType = getKeyTypeNoInt(key);
 
-  void (*helper)();
-  if (base->isA(TObj)) {
-    BUILD_OPTAB(ISSET_EMPTY_OBJ_PROP_HELPER_TABLE, keyType, isEmpty);
-    helper = opFunc;
-  } else {
-    BUILD_OPTAB(ISSET_EMPTY_PROP_HELPER_TABLE, keyType, isEmpty);
-    helper = opFunc;
-  }
+  BUILD_OPTAB2(base->isA(TObj),
+               ISSET_EMPTY_OBJ_PROP_HELPER_TABLE,
+               ISSET_EMPTY_PROP_HELPER_TABLE,
+               keyType, isEmpty);
 
   auto const args = propArgs(env, inst).memberKeyS(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(helper), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 }
@@ -150,20 +151,15 @@ void cgCGetProp(IRLS& env, const IRInstruction* inst) {
   auto const key     = inst->src(1);
   auto const keyType = getKeyTypeNoInt(key);
 
-  void (*helper)();
-  if (base->isA(TObj)) {
-    BUILD_OPTAB(CGET_OBJ_PROP_HELPER_TABLE, keyType, mode);
-    helper = opFunc;
-  } else {
-    BUILD_OPTAB(CGET_PROP_HELPER_TABLE, keyType, mode);
-    helper = opFunc;
-  }
+  BUILD_OPTAB2(base->isA(TObj),
+               CGET_OBJ_PROP_HELPER_TABLE,
+               CGET_PROP_HELPER_TABLE,
+               keyType, mode);
 
   auto const args = propArgs(env, inst).memberKeyS(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(helper), callDestTV(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDestTV(env, inst), SyncOptions::Sync, args);
 }
 
 void cgCGetPropQ(IRLS& env, const IRInstruction* inst) {
@@ -186,33 +182,15 @@ void cgVGetProp(IRLS& env, const IRInstruction* inst) {
   auto const key     = inst->src(1);
   auto const keyType = getKeyTypeNoInt(key);
 
-  void (*helper)();
-  if (base->isA(TObj)) {
-    BUILD_OPTAB(VGET_OBJ_PROP_HELPER_TABLE, keyType);
-    helper = opFunc;
-  } else {
-    BUILD_OPTAB(VGET_PROP_HELPER_TABLE, keyType);
-    helper = opFunc;
-  }
+  BUILD_OPTAB2(base->isA(TObj),
+               VGET_OBJ_PROP_HELPER_TABLE,
+               VGET_PROP_HELPER_TABLE,
+               keyType);
 
-  auto const args = propArgs(env, inst).memberKeyS(1);
+  auto const args = propArgs(env, inst).memberKeyS(1).ssa(2);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(helper), callDest(env, inst),
-               SyncOptions::Sync, args);
-}
-
-void cgBindProp(IRLS& env, const IRInstruction* inst) {
-  auto const base = inst->src(0);
-
-  auto helper = base->isA(TObj)
-    ? CallSpec::direct(MInstrHelpers::bindPropCO)
-    : CallSpec::direct(MInstrHelpers::bindPropC);
-
-  auto const args = propArgs(env, inst).typedValue(1).ssa(2);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, helper, callDest(env, inst), SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void cgSetProp(IRLS& env, const IRInstruction* inst) {
@@ -220,22 +198,23 @@ void cgSetProp(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
   auto const keyType = getKeyTypeNoInt(key);
 
-  void (*helper)();
-  if (base->isA(TObj)) {
-    BUILD_OPTAB(SETPROP_OBJ_HELPER_TABLE, keyType);
-    helper = opFunc;
-  } else {
-    BUILD_OPTAB(SETPROP_HELPER_TABLE, keyType);
-    helper = opFunc;
-  }
-
-  auto const args = propArgs(env, inst)
+  auto args = propArgs(env, inst)
     .memberKeyS(1)
     .typedValue(2);
 
+  auto const target = [&] {
+    if (base->isA(TObj)) {
+      BUILD_OPTAB(SETPROP_OBJ_HELPER_TABLE, keyType);
+      return target;
+    } else {
+      BUILD_OPTAB(SETPROP_HELPER_TABLE, keyType);
+      args.ssa(3);
+      return target;
+    }
+  }();
+
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(helper),
-               kVoidDest, SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, kVoidDest, SyncOptions::Sync, args);
 }
 
 void cgUnsetProp(IRLS& env, const IRInstruction* inst) {
@@ -259,10 +238,11 @@ void cgSetOpProp(IRLS& env, const IRInstruction* inst) {
     ? CallSpec::direct(MInstrHelpers::setOpPropCO)
     : CallSpec::direct(MInstrHelpers::setOpPropC);
 
-  auto const args = propArgs(env, inst)
+  auto args = propArgs(env, inst)
     .typedValue(1)
     .typedValue(2)
     .imm(static_cast<int32_t>(extra->op));
+  if (!base->isA(TObj)) args.ssa(3);
 
   auto& v = vmain(env);
   cgCallHelper(v, env, helper, callDestTV(env, inst), SyncOptions::Sync, args);
@@ -276,9 +256,10 @@ void cgIncDecProp(IRLS& env, const IRInstruction* inst) {
     ? CallSpec::direct(MInstrHelpers::incDecPropCO)
     : CallSpec::direct(MInstrHelpers::incDecPropC);
 
-  auto const args = propArgs(env, inst)
+  auto args = propArgs(env, inst)
     .typedValue(1)
     .imm(static_cast<int32_t>(extra->op));
+  if (!base->isA(TObj)) args.ssa(2);
 
   auto& v = vmain(env);
   cgCallHelper(v, env, helper, callDestTV(env, inst),
@@ -311,24 +292,32 @@ ArgGroup elemArgs(IRLS& env, const IRInstruction* inst) {
 void implElem(IRLS& env, const IRInstruction* inst) {
   auto const mode  = inst->extra<MOpModeData>()->mode;
   auto const key   = inst->src(1);
-  BUILD_OPTAB(ELEM_HELPER_TABLE, getKeyType(key), mode,
-              RuntimeOption::EvalHackArrCompatNotices);
 
-  auto const args = elemArgs(env, inst).ssa(2);
+  auto args = elemArgs(env, inst).ssa(2);
+
+  auto const target = [&] {
+    if (inst->is(ElemDX)) {
+      assertx(mode == MOpMode::Define);
+      BUILD_OPTAB(ELEMD_HELPER_TABLE, getKeyType(key));
+      args.ssa(3);
+      return target;
+    } else {
+      BUILD_OPTAB(ELEM_HELPER_TABLE, getKeyType(key), mode);
+      return target;
+    }
+  }();
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void implIssetEmptyElem(IRLS& env, const IRInstruction* inst) {
   auto const isEmpty = inst->op() == EmptyElem;
   auto const key     = inst->src(1);
-  BUILD_OPTAB(ISSET_EMPTY_ELEM_HELPER_TABLE, getKeyType(key),
-              isEmpty, RuntimeOption::EvalHackArrCompatNotices);
+  BUILD_OPTAB(ISSET_EMPTY_ELEM_HELPER_TABLE, getKeyType(key), isEmpty);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
+  cgCallHelper(v, env, target, callDest(env, inst),
                SyncOptions::Sync, elemArgs(env, inst));
 }
 
@@ -343,79 +332,50 @@ void cgElemUX(IRLS& env, const IRInstruction* i) { implElem(env, i); }
 void cgCGetElem(IRLS& env, const IRInstruction* inst) {
   auto const mode  = inst->extra<MOpModeData>()->mode;
   auto const key   = inst->src(1);
-  BUILD_OPTAB(CGETELEM_HELPER_TABLE, getKeyType(key), mode,
-              RuntimeOption::EvalHackArrCompatNotices);
+  BUILD_OPTAB(CGETELEM_HELPER_TABLE, getKeyType(key), mode);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDestTV(env, inst),
-               SyncOptions::Sync, elemArgs(env, inst));
-}
-
-void cgVGetElem(IRLS& env, const IRInstruction* inst) {
-  auto const key = inst->src(1);
-  BUILD_OPTAB(VGETELEM_HELPER_TABLE, getKeyType(key),
-              RuntimeOption::EvalHackArrCompatNotices);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
+  cgCallHelper(v, env, target, callDestTV(env, inst),
                SyncOptions::Sync, elemArgs(env, inst));
 }
 
 void cgSetElem(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
-  BUILD_OPTAB(SETELEM_HELPER_TABLE, getKeyType(key),
-              RuntimeOption::EvalHackArrCompatNotices);
+  BUILD_OPTAB(SETELEM_HELPER_TABLE, getKeyType(key));
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, elemArgs(env, inst).typedValue(2));
+  cgCallHelper(v, env, target, callDest(env, inst),
+               SyncOptions::Sync, elemArgs(env, inst).typedValue(2).ssa(3));
+}
+
+void cgSetRange(IRLS& env, const IRInstruction* inst) {
+  auto const target = inst->is(SetRangeRev) ?
+    CallSpec::direct(HPHP::SetRange<true>) :
+    CallSpec::direct(HPHP::SetRange<false>);
+  cgCallHelper(
+    vmain(env), env, target, callDest(env, inst),
+    SyncOptions::Sync,
+    argGroup(env, inst).ssa(0).ssa(1).typedValue(2).ssa(3).ssa(4)
+  );
+}
+
+void cgSetRangeRev(IRLS& env, const IRInstruction* inst) {
+  cgSetRange(env, inst);
 }
 
 IMPL_OPCODE_CALL(SetNewElem);
-IMPL_OPCODE_CALL(BindNewElem);
-
-void cgSetWithRefElem(IRLS& env, const IRInstruction* inst) {
-  auto& v = vmain(env);
-
-  auto const target = RuntimeOption::EvalHackArrCompatNotices
-    ? CallSpec::direct(MInstrHelpers::setWithRefElem<true>)
-    : CallSpec::direct(MInstrHelpers::setWithRefElem<false>);
-
-  auto const args = argGroup(env, inst)
-    .ssa(0)
-    .typedValue(1)
-    .typedValue(2);
-
-  cgCallHelper(v, env, target, kVoidDest, SyncOptions::Sync, args);
-}
-
-void cgBindElem(IRLS& env, const IRInstruction* inst) {
-  auto& v = vmain(env);
-
-  auto const target = RuntimeOption::EvalHackArrCompatNotices
-    ? CallSpec::direct(MInstrHelpers::bindElemC<true>)
-    : CallSpec::direct(MInstrHelpers::bindElemC<false>);
-
-  auto const args = argGroup(env, inst)
-    .ssa(0)
-    .typedValue(1)
-    .ssa(2);
-
-  cgCallHelper(v, env, target, kVoidDest, SyncOptions::Sync, args);
-}
 
 void cgSetOpElem(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
-  auto const target = RuntimeOption::EvalHackArrCompatNotices
-    ? CallSpec::direct(MInstrHelpers::setOpElem<true>)
-    : CallSpec::direct(MInstrHelpers::setOpElem<false>);
+  auto const target = CallSpec::direct(MInstrHelpers::setOpElem);
 
   auto const args = argGroup(env, inst)
     .ssa(0)
     .typedValue(1)
     .typedValue(2)
-    .imm(uint32_t(inst->extra<SetOpElem>()->op));
+    .imm(uint32_t(inst->extra<SetOpElem>()->op))
+    .ssa(3);
 
   cgCallHelper(v, env, target, callDestTV(env, inst),
                SyncOptions::Sync, args);
@@ -424,14 +384,13 @@ void cgSetOpElem(IRLS& env, const IRInstruction* inst) {
 void cgIncDecElem(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
-  auto const target = RuntimeOption::EvalHackArrCompatNotices
-    ? CallSpec::direct(MInstrHelpers::incDecElem<true>)
-    : CallSpec::direct(MInstrHelpers::incDecElem<false>);
+  auto const target = CallSpec::direct(MInstrHelpers::incDecElem);
 
   auto const args = argGroup(env, inst)
     .ssa(0)
     .typedValue(1)
-    .imm(uint32_t(inst->extra<IncDecElem>()->op));
+    .imm(uint32_t(inst->extra<IncDecElem>()->op))
+    .ssa(2);
 
   cgCallHelper(v, env, target, callDestTV(env, inst),
                SyncOptions::Sync, args);
@@ -439,11 +398,10 @@ void cgIncDecElem(IRLS& env, const IRInstruction* inst) {
 
 void cgUnsetElem(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
-  BUILD_OPTAB(UNSET_ELEM_HELPER_TABLE, getKeyType(key),
-              RuntimeOption::EvalHackArrCompatNotices);
+  BUILD_OPTAB(UNSET_ELEM_HELPER_TABLE, getKeyType(key));
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), kVoidDest,
+  cgCallHelper(v, env, target, kVoidDest,
                SyncOptions::Sync, elemArgs(env, inst));
 }
 
@@ -455,35 +413,12 @@ void cgEmptyElem(IRLS& env, const IRInstruction* i) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-namespace {
-
-/*
- * Make an ArgGroup for array elem instructions that takes:
- *    1/ the ArrayData* (or pointer to a KindOfArray TV)
- *    2/ the index key
- */
-ArgGroup arrArgs(IRLS& env, const IRInstruction* inst,
-                 const ArrayKeyInfo& keyInfo) {
-  auto args = argGroup(env, inst).ssa(0);
-  if (keyInfo.converted) {
-    args.imm(keyInfo.convertedInt);
-  } else {
-    args.ssa(1);
-  }
-  return args;
-}
-
-}
-
-///////////////////////////////////////////////////////////////////////////////
 // Offset profiling.
 
 namespace {
 
-template<class OpFunc>
 void implProfileHackArrayOffset(IRLS& env, const IRInstruction* inst,
-                                OpFunc opFunc) {
+                                const CallSpec& target) {
   auto& v = vmain(env);
 
   auto const rprof = v.makeReg();
@@ -491,8 +426,7 @@ void implProfileHackArrayOffset(IRLS& env, const IRInstruction* inst,
 
   auto args = argGroup(env, inst).ssa(0).ssa(1).reg(rprof);
 
-  cgCallHelper(v, env, CallSpec::direct(opFunc), kVoidDest,
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, kVoidDest, SyncOptions::Sync, args);
 }
 
 void implCheckMixedArrayLikeOffset(IRLS& env, const IRInstruction* inst,
@@ -516,6 +450,7 @@ void implCheckMixedArrayLikeOffset(IRLS& env, const IRInstruction* inst,
     v << cmpqm{key, arr[elmOff + Elm::keyOff()], sf};
     ifThen(v, CC_NE, sf, branch);
   }
+  auto const is_str_key = key_type == KeyType::Str;
   { // Fail if the Elm key type doesn't match.
     auto const sf = v.makeReg();
     v << cmplim{0, arr[elmOff + Elm::dataOff() + TVOFF(m_aux)], sf};
@@ -525,50 +460,47 @@ void implCheckMixedArrayLikeOffset(IRLS& env, const IRInstruction* inst,
     // Note that if `key' actually is an integer-ish string, we'd fail this
     // check (and most likely would have failed the previous check also), but
     // this false negative is allowed.
-    auto const is_str_key = key_type == KeyType::Str;
     ifThen(v, is_str_key ? CC_L : CC_GE, sf, branch);
   }
   { // Fail if the Elm is a tombstone.  See MixedArray::isTombstone().
-    auto const sf = v.makeReg();
-    v << cmpbim{KindOfUninit, arr[elmOff + Elm::dataOff() + TVOFF(m_type)], sf};
-    ifThen(v, CC_L, sf, branch);
+    // We set the key type to look like an int when setting it be a tombstone.
+    // This is originally to simplify the type scan, however we can use this
+    // to elide this check when looking for string keys.
+    if (!is_str_key) {
+      auto const sf = v.makeReg();
+      v << cmpbim{static_cast<data_type_t>(kInvalidDataType),
+                  arr[elmOff + Elm::dataOff() + TVOFF(m_type)], sf};
+      ifThen(v, CC_E, sf, branch);
+    }
   }
 }
 
 }
 
 void cgProfileMixedArrayOffset(IRLS& env, const IRInstruction* inst) {
-  auto const arr = inst->src(0);
-  auto const key = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(arr->type(), key->type());
-
   BUILD_OPTAB(PROFILE_MIXED_ARRAY_OFFSET_HELPER_TABLE,
-              keyInfo.type,
-              keyInfo.checkForInt);
+              getKeyType(inst->src(1)));
   auto& v = vmain(env);
 
   auto const rprof = v.makeReg();
   v << lea{rvmtl()[inst->extra<ProfileMixedArrayOffset>()->handle], rprof};
 
-  cgCallHelper(v, env, CallSpec::direct(opFunc), kVoidDest, SyncOptions::Sync,
-               arrArgs(env, inst, keyInfo).reg(rprof));
+  cgCallHelper(v, env, target, kVoidDest, SyncOptions::Sync,
+               argGroup(env, inst).ssa(0).ssa(1).reg(rprof));
 }
 
 void cgProfileDictOffset(IRLS& env, const IRInstruction* inst) {
   BUILD_OPTAB(PROFILE_DICT_OFFSET_HELPER_TABLE, getKeyType(inst->src(1)));
-  implProfileHackArrayOffset(env, inst, opFunc);
+  implProfileHackArrayOffset(env, inst, target);
 }
 
 void cgProfileKeysetOffset(IRLS& env, const IRInstruction* inst) {
   BUILD_OPTAB(PROFILE_KEYSET_OFFSET_HELPER_TABLE, getKeyType(inst->src(1)));
-  implProfileHackArrayOffset(env, inst, opFunc);
+  implProfileHackArrayOffset(env, inst, target);
 }
 
 void cgCheckMixedArrayOffset(IRLS& env, const IRInstruction* inst) {
-  implCheckMixedArrayLikeOffset(
-    env, inst,
-    checkStrictlyInteger(inst->src(0)->type(), inst->src(1)->type()).type
-  );
+  implCheckMixedArrayLikeOffset(env, inst, getKeyType(inst->src(1)));
 }
 
 void cgCheckDictOffset(IRLS& env, const IRInstruction* inst) {
@@ -605,8 +537,9 @@ void cgCheckKeysetOffset(IRLS& env, const IRInstruction* inst) {
   }
   { // Fail if the Elm is a tombstone.  See SetArray::isTombstone().
     auto const sf = v.makeReg();
-    v << cmpbim{KindOfUninit, keyset[tvOff + TVOFF(m_type)], sf};
-    ifThen(v, CC_L, sf, branch);
+    v << cmpbim{static_cast<data_type_t>(kInvalidDataType),
+                keyset[tvOff + TVOFF(m_type)], sf};
+    ifThen(v, CC_E, sf, branch);
   }
 }
 
@@ -614,8 +547,7 @@ void cgCheckArrayCOW(IRLS& env, const IRInstruction* inst) {
   auto const arr = srcLoc(env, inst, 0).reg();
   auto& v = vmain(env);
 
-  auto const sf = v.makeReg();
-  v << cmplim{1, arr[FAST_REFCOUNT_OFFSET], sf};
+  auto const sf = emitCmpRefCount(v, OneReference, arr);
   ifThen(v, CC_NE, sf, label(env, inst->taken()));
 }
 
@@ -624,66 +556,46 @@ void cgCheckArrayCOW(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
-void implElemArray(IRLS& env, const IRInstruction* inst) {
-  auto const arr = inst->src(0);
-  auto const key = inst->src(1);
-  auto const mode = inst->op() == ElemArrayW ? MOpMode::Warn : MOpMode::None;
-  auto const keyInfo = checkStrictlyInteger(arr->type(), key->type());
-  BUILD_OPTAB(ELEM_ARRAY_HELPER_TABLE,
-              keyInfo.type, keyInfo.checkForInt, mode,
-              RuntimeOption::EvalHackArrCompatNotices);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, arrArgs(env, inst, keyInfo));
-}
-
 void implArraySet(IRLS& env, const IRInstruction* inst) {
-  bool const setRef  = inst->op() == ArraySetRef;
-  auto const arr     = inst->src(0);
-  auto const key     = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(arr->type(), key->type());
-  BUILD_OPTAB(ARRAYSET_HELPER_TABLE,
-              keyInfo.type,
-              keyInfo.checkForInt,
-              setRef,
-              RuntimeOption::EvalHackArrCompatNotices);
+  auto const setRef = inst->op() == ArraySetRef;
+  BUILD_OPTAB2(setRef,
+               ARRAYSET_REF_HELPER_TABLE,
+               ARRAYSET_HELPER_TABLE,
+               getKeyType(inst->src(1)));
 
-
-  auto args = arrArgs(env, inst, keyInfo);
+  auto args = argGroup(env, inst).ssa(0).ssa(1);
   args.typedValue(2);
   if (setRef) args.ssa(3);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 }
 
-void cgElemArray(IRLS& env, const IRInstruction* i)  { implElemArray(env, i); }
-void cgElemArrayW(IRLS& env, const IRInstruction* i) { implElemArray(env, i); }
-
-void cgElemArrayD(IRLS& env, const IRInstruction* inst) {
-  auto const key     = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(inst->typeParam(), key->type());
-  BUILD_OPTAB(ELEM_ARRAY_D_HELPER_TABLE, keyInfo.type,
-              RuntimeOption::EvalHackArrCompatNotices);
+void cgElemArrayX(IRLS& env, const IRInstruction* inst) {
+  auto const mode = inst->extra<ElemArrayX>()->mode;
+  BUILD_OPTAB(ELEM_ARRAY_HELPER_TABLE, getKeyType(inst->src(1)), mode);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, arrArgs(env, inst, keyInfo));
+  cgCallHelper(v, env, target, callDest(env, inst),
+               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
+}
+
+void cgElemArrayD(IRLS& env, const IRInstruction* inst) {
+  BUILD_OPTAB(ELEM_ARRAY_D_HELPER_TABLE, getKeyType(inst->src(1)));
+
+  auto& v = vmain(env);
+  cgCallHelper(v, env, target, callDest(env, inst),
+               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
 }
 
 void cgElemArrayU(IRLS& env, const IRInstruction* inst) {
-  auto const key     = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(inst->typeParam(), key->type());
-  BUILD_OPTAB(ELEM_ARRAY_U_HELPER_TABLE, keyInfo.type,
-              RuntimeOption::EvalHackArrCompatNotices);
+  BUILD_OPTAB(ELEM_ARRAY_U_HELPER_TABLE, getKeyType(inst->src(1)));
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, arrArgs(env, inst, keyInfo));
+  cgCallHelper(v, env, target, callDest(env, inst),
+               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
 }
 
 void cgElemMixedArrayK(IRLS& env, const IRInstruction* inst) {
@@ -694,20 +606,20 @@ void cgElemMixedArrayK(IRLS& env, const IRInstruction* inst) {
 
   auto& v = vmain(env);
 
-  assertx(dst.numAllocated() == 1);
-  v << lea{arr[off], dst.reg()};
+  v << lea{arr[off], dst.reg(tv_lval::val_idx)};
+  if (wide_tv_val) {
+    static_assert(TVOFF(m_data) == 0, "");
+    v << lea{arr[off + TVOFF(m_type)], dst.reg(tv_lval::type_idx)};
+  }
 }
 
 void cgArrayGet(IRLS& env, const IRInstruction* inst) {
-  auto const arr = inst->src(0);
-  auto const key = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(arr->type(), key->type());
-  BUILD_OPTAB(ARRAYGET_HELPER_TABLE, keyInfo.type, keyInfo.checkForInt,
-                      RuntimeOption::EvalHackArrCompatNotices);
+  auto const mode = inst->extra<ArrayGet>()->mode;
+  BUILD_OPTAB(ARRAYGET_HELPER_TABLE, getKeyType(inst->src(1)), mode);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDestTV(env, inst),
-               SyncOptions::Sync, arrArgs(env, inst, keyInfo));
+  cgCallHelper(v, env, target, callDestTV(env, inst),
+               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
 }
 
 void cgMixedArrayGetK(IRLS& env, const IRInstruction* inst) {
@@ -727,12 +639,46 @@ IMPL_OPCODE_CALL(SetNewElemArray);
 IMPL_OPCODE_CALL(AddElemIntKey);
 IMPL_OPCODE_CALL(AddNewElem);
 
+static ArrayData* addNewElemKeysetImpl(ArrayData* keyset, Cell v) {
+  assertx(keyset->isKeyset());
+  auto out = SetArray::Append(keyset, v);
+  if (keyset != out) decRefArr(keyset);
+  return out;
+}
+
+static ArrayData* addNewElemVecImpl(ArrayData* vec, Cell v) {
+  assertx(vec->isVecArray());
+  auto out = PackedArray::AppendVec(vec, v);
+  if (vec != out) decRefArr(vec);
+  return out;
+}
+
+void cgAddNewElemKeyset(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(addNewElemKeysetImpl),
+    callDest(env, inst),
+    SyncOptions::Sync,
+    argGroup(env, inst).ssa(0).typedValue(1)
+  );
+}
+
+void cgAddNewElemVec(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(addNewElemVecImpl),
+    callDest(env, inst),
+    SyncOptions::None,
+    argGroup(env, inst).ssa(0).typedValue(1)
+  );
+}
+
 void cgAddElemStrKey(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
-  auto const target = RuntimeOption::EvalHackArrCompatNotices
-    ? CallSpec::direct(addElemStringKeyHelper<true>)
-    : CallSpec::direct(addElemStringKeyHelper<false>);
+  auto const target = CallSpec::direct(addElemStringKeyHelper);
 
   cgCallHelper(v, env, target,
                callDest(env, inst), SyncOptions::Sync,
@@ -740,37 +686,67 @@ void cgAddElemStrKey(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgArrayIsset(IRLS& env, const IRInstruction* inst) {
-  auto const arr     = inst->src(0);
-  auto const key     = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(arr->type(), key->type());
-  BUILD_OPTAB(ARRAY_ISSET_HELPER_TABLE, keyInfo.type, keyInfo.checkForInt,
-              RuntimeOption::EvalHackArrCompatNotices);
+  BUILD_OPTAB(ARRAY_ISSET_HELPER_TABLE, getKeyType(inst->src(1)));
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, arrArgs(env, inst, keyInfo));
+  cgCallHelper(v, env, target, callDest(env, inst),
+               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
 }
 
 void cgArrayIdx(IRLS& env, const IRInstruction* inst) {
-  auto const arr     = inst->src(0);
-  auto const key     = inst->src(1);
-  auto const keyInfo = checkStrictlyInteger(arr->type(), key->type());
+  auto const keyType = getKeyType(inst->src(1));
 
   auto const target = [&] () -> CallSpec {
-    if (keyInfo.checkForInt) {
-      return RuntimeOption::EvalHackArrCompatNotices
-        ? CallSpec::direct(arrayIdxSi<true>)
-        : CallSpec::direct(arrayIdxSi<false>);
-    }
-    if (keyInfo.type == KeyType::Int) {
+    if (keyType == KeyType::Int) {
       return CallSpec::direct(arrayIdxI);
     }
+    assertx(keyType == KeyType::Str);
     return CallSpec::direct(arrayIdxS);
   }();
 
   auto& v = vmain(env);
   cgCallHelper(v, env, target, callDestTV(env, inst), SyncOptions::Sync,
-               arrArgs(env, inst, keyInfo).typedValue(2));
+               argGroup(env, inst).ssa(0).ssa(1).typedValue(2));
+}
+
+template <TypedValue (*f)(ArrayData*)>
+void containerFirstLastHelper(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  cgCallHelper(v, env, CallSpec::direct(f),
+              callDestTV(env, inst), SyncOptions::None,
+              argGroup(env, inst).ssa(0));
+}
+
+void cgVecFirst(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<vecFirstLast<true>>(env, inst);
+}
+
+void cgVecLast(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<vecFirstLast<false>>(env, inst);
+}
+
+void cgDictFirst(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<arrFirstLast<true, false>>(env, inst);
+}
+
+void cgDictLast(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<arrFirstLast<false, false>>(env, inst);
+}
+
+void cgDictFirstKey(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<arrFirstLast<true, true>>(env, inst);
+}
+
+void cgDictLastKey(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<arrFirstLast<false, true>>(env, inst);
+}
+
+void cgKeysetFirst(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<arrFirstLast<true, false>>(env, inst);
+}
+
+void cgKeysetLast(IRLS& env, const IRInstruction* inst) {
+  containerFirstLastHelper<arrFirstLast<false, false>>(env, inst);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -778,19 +754,23 @@ void cgArrayIdx(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
-Vptr implPackedLayoutElemAddr(IRLS& env, Vloc arrLoc,
-                              Vloc idxLoc, const SSATmp* idx) {
+struct LvalPtrs {
+  Vptr type, val;
+};
+LvalPtrs implPackedLayoutElemAddr(IRLS& env, Vloc arrLoc,
+                                  Vloc idxLoc, const SSATmp* idx) {
   auto const rarr = arrLoc.reg();
   auto const ridx = idxLoc.reg();
   auto& v = vmain(env);
 
   static_assert(sizeof(TypedValue) == 16, "");
+  static_assert(TVOFF(m_data) == 0, "");
 
   if (idx->hasConstVal()) {
     auto const offset = PackedArray::entriesOffset() +
                         idx->intVal() * sizeof(TypedValue);
     if (deltaFits(offset, sz::dword)) {
-      return rarr[offset];
+      return {rarr[offset + TVOFF(m_type)], rarr[offset]};
     }
   }
 
@@ -808,13 +788,18 @@ Vptr implPackedLayoutElemAddr(IRLS& env, Vloc arrLoc,
   v << movtql{ridx, idxl};
   v << shlli{1, idxl, scaled_idxl, v.makeReg()};
   v << movzlq{scaled_idxl, scaled_idx};
-  return rarr[scaled_idx * int(sizeof(TypedValue) / 2)
-              + PackedArray::entriesOffset()];
+
+  auto const valPtr = rarr[
+    scaled_idx * int(sizeof(TypedValue) / 2) + PackedArray::entriesOffset()
+  ];
+  return {valPtr + TVOFF(m_type), valPtr};
 }
 
 void implVecSet(IRLS& env, const IRInstruction* inst) {
   bool const setRef = inst->op() == VecSetRef;
-  BUILD_OPTAB(VECSET_HELPER_TABLE, setRef);
+
+  auto const target = setRef ? CallSpec::direct(MInstrHelpers::vecSetIR)
+                             : CallSpec::direct(MInstrHelpers::vecSetI);
 
   auto args = argGroup(env, inst).
     ssa(0).
@@ -823,14 +808,13 @@ void implVecSet(IRLS& env, const IRInstruction* inst) {
   if (setRef) args.ssa(3);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 /*
  * Thread-local RDS packed array access sampling counter.
  */
-rds::Link<uint32_t> s_counter{rds::kInvalidHandle};
+rds::Link<uint32_t, rds::Mode::Local> s_counter;
 
 }
 
@@ -886,15 +870,33 @@ void cgLdPackedArrayDataElemAddr(IRLS& env, const IRInstruction* inst) {
     }
   }
 
+  auto const dstLoc = irlower::dstLoc(env, inst, 0);
   auto const addr = implPackedLayoutElemAddr(env, arrLoc, idxLoc, inst->src(1));
-  vmain(env) << lea{addr, dstLoc(env, inst, 0).reg()};
+  vmain(env) << lea{addr.val, dstLoc.reg(tv_lval::val_idx)};
+  if (wide_tv_val) {
+    vmain(env) << lea{addr.type, dstLoc.reg(tv_lval::type_idx)};
+  }
 }
 
-void cgLdVecElem(IRLS& env, const IRInstruction* inst) {
+namespace {
+
+void packedLayoutLoadImpl(IRLS& env, const IRInstruction* inst) {
   auto const arrLoc = srcLoc(env, inst, 0);
   auto const idxLoc = srcLoc(env, inst, 1);
   auto const addr = implPackedLayoutElemAddr(env, arrLoc, idxLoc, inst->src(1));
-  loadTV(vmain(env), inst->dst(), dstLoc(env, inst, 0), addr);
+
+  loadTV(vmain(env), inst->dst()->type(), dstLoc(env, inst, 0),
+         addr.type, addr.val);
+}
+
+}
+
+void cgLdVecElem(IRLS& env, const IRInstruction* inst) {
+  packedLayoutLoadImpl(env, inst);
+}
+
+void cgLdPackedElem(IRLS& env, const IRInstruction* inst) {
+  packedLayoutLoadImpl(env, inst);
 }
 
 IMPL_OPCODE_CALL(ElemVecD)
@@ -918,10 +920,10 @@ void cgReservePackedArrayDataNewElem(IRLS& env, const IRInstruction* i) {
   v << loadzlq{sizePtr, size};
 
   { // Bail out unless size < cap
-    auto const indexw = v.makeReg();
-    v << loadw{arrayData[HeaderAuxOffset], indexw};
+    auto const indexb = v.makeReg();
+    v << loadb{arrayData[PackedArray::SizeIndexOffset], indexb};
     auto const index = v.makeReg();
-    v << movzwq{indexw, index};
+    v << movzbq{indexb, index};
     auto const cap = v.makeReg();
     auto const table =
       reinterpret_cast<uintptr_t>(kSizeIndex2PackedArrayCapacity);
@@ -945,18 +947,6 @@ void cgReservePackedArrayDataNewElem(IRLS& env, const IRInstruction* i) {
 
 namespace {
 
-void implElemDict(IRLS& env, const IRInstruction* inst) {
-  auto const key = inst->src(1);
-  auto const mode = inst->op() == ElemDictW ? MOpMode::Warn : MOpMode::None;
-  BUILD_OPTAB(ELEM_DICT_HELPER_TABLE, getKeyType(key), mode);
-
-  auto args = argGroup(env, inst).ssa(0).ssa(1);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
-}
-
 void implDictGet(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
   auto const mode =
@@ -966,14 +956,15 @@ void implDictGet(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDestTV(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDestTV(env, inst), SyncOptions::Sync, args);
 }
 
 void implDictSet(IRLS& env, const IRInstruction* inst) {
-  auto const key = inst->src(1);
   bool const setRef  = inst->op() == DictSetRef;
-  BUILD_OPTAB(DICTSET_HELPER_TABLE, getKeyType(key), setRef);
+  BUILD_OPTAB2(setRef,
+               DICTSET_REF_HELPER_TABLE,
+               DICTSET_HELPER_TABLE,
+               getKeyType(inst->src(1)));
 
   auto args = argGroup(env, inst).
     ssa(0).
@@ -982,8 +973,7 @@ void implDictSet(IRLS& env, const IRInstruction* inst) {
   if (setRef) args.ssa(3);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void implDictIsset(IRLS& env, const IRInstruction* inst) {
@@ -994,14 +984,21 @@ void implDictIsset(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 }
 
-void cgElemDict(IRLS& env, const IRInstruction* i)  { implElemDict(env, i); }
-void cgElemDictW(IRLS& env, const IRInstruction* i) { implElemDict(env, i); }
+void cgElemDictX(IRLS& env, const IRInstruction* inst) {
+  auto const key = inst->src(1);
+  auto const mode = inst->extra<ElemDictX>()->mode;
+  BUILD_OPTAB(ELEM_DICT_HELPER_TABLE, getKeyType(key), mode);
+
+  auto args = argGroup(env, inst).ssa(0).ssa(1);
+
+  auto& v = vmain(env);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
+}
 
 void cgElemDictD(IRLS& env, const IRInstruction* inst) {
   auto const key     = inst->src(1);
@@ -1010,8 +1007,7 @@ void cgElemDictD(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void cgElemDictU(IRLS& env, const IRInstruction* inst) {
@@ -1021,8 +1017,7 @@ void cgElemDictU(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void cgElemDictK(IRLS& env, const IRInstruction* inst) {
@@ -1033,8 +1028,11 @@ void cgElemDictK(IRLS& env, const IRInstruction* inst) {
 
   auto& v = vmain(env);
 
-  assertx(dst.numAllocated() == 1);
-  v << lea{dict[off], dst.reg()};
+  v << lea{dict[off], dst.reg(tv_lval::val_idx)};
+  if (wide_tv_val) {
+    static_assert(TVOFF(m_data) == 0, "");
+    v << lea{dict[off + TVOFF(m_type)], dst.reg(tv_lval::type_idx)};
+  }
 }
 
 void cgDictGet(IRLS& env, const IRInstruction* inst) {
@@ -1082,20 +1080,6 @@ void cgDictIdx(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
-void implElemKeyset(IRLS& env, const IRInstruction* inst) {
-  auto const key = inst->src(1);
-  auto const mode = inst->op() == ElemKeysetW
-    ? MOpMode::Warn
-    : MOpMode::None;
-  BUILD_OPTAB(ELEM_KEYSET_HELPER_TABLE, getKeyType(key), mode);
-
-  auto args = argGroup(env, inst).ssa(0).ssa(1);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
-}
-
 void implKeysetGet(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
   auto const mode = inst->op() == KeysetGetQuiet
@@ -1106,8 +1090,7 @@ void implKeysetGet(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDestTV(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDestTV(env, inst), SyncOptions::Sync, args);
 }
 
 void implKeysetIsset(IRLS& env, const IRInstruction* inst) {
@@ -1118,14 +1101,21 @@ void implKeysetIsset(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 }
 
-void cgElemKeyset(IRLS& e, const IRInstruction* i)  { implElemKeyset(e, i); }
-void cgElemKeysetW(IRLS& e, const IRInstruction* i) { implElemKeyset(e, i); }
+void cgElemKeysetX(IRLS& env, const IRInstruction* inst) {
+  auto const key = inst->src(1);
+  auto const mode = inst->extra<ElemKeysetX>()->mode;
+  BUILD_OPTAB(ELEM_KEYSET_HELPER_TABLE, getKeyType(key), mode);
+
+  auto args = argGroup(env, inst).ssa(0).ssa(1);
+
+  auto& v = vmain(env);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
+}
 
 void cgElemKeysetU(IRLS& env, const IRInstruction* inst) {
   auto const key = inst->src(1);
@@ -1134,8 +1124,7 @@ void cgElemKeysetU(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void cgElemKeysetK(IRLS& env, const IRInstruction* inst) {
@@ -1145,8 +1134,11 @@ void cgElemKeysetK(IRLS& env, const IRInstruction* inst) {
   auto const off = SetArray::tvOff(pos);
 
   auto& v = vmain(env);
-  assertx(dst.numAllocated() == 1);
-  v << lea{keyset[off], dst.reg()};
+  v << lea{keyset[off], dst.reg(tv_lval::val_idx)};
+  if (wide_tv_val) {
+    static_assert(TVOFF(m_data) == 0, "");
+    v << lea{keyset[off + TVOFF(m_type)], dst.reg(tv_lval::type_idx)};
+  }
 }
 
 void cgKeysetGet(IRLS& env, const IRInstruction* inst) {
@@ -1172,8 +1164,7 @@ void cgSetNewElemKeyset(IRLS& env, const IRInstruction* inst) {
   auto args = argGroup(env, inst).ssa(0).ssa(1);
 
   auto& v = vmain(env);
-  cgCallHelper(v, env, CallSpec::direct(opFunc), callDest(env, inst),
-               SyncOptions::Sync, args);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 void cgKeysetIsset(IRLS& env, const IRInstruction* inst) {
@@ -1199,6 +1190,20 @@ void cgKeysetIdx(IRLS& env, const IRInstruction* inst) {
 
 IMPL_OPCODE_CALL(PairIsset);
 IMPL_OPCODE_CALL(VectorIsset);
+
+void cgVectorSet(IRLS& env, const IRInstruction* inst) {
+  auto const target = inst->src(1)->isA(TInt)
+    ? CallSpec::direct(MInstrHelpers::vectorSetImplI)
+    : CallSpec::direct(MInstrHelpers::vectorSetImplS);
+
+  auto const args = argGroup(env, inst)
+    .ssa(0)
+    .ssa(1)
+    .typedValue(2);
+
+  auto& v = vmain(env);
+  cgCallHelper(v, env, target, kVoidDest, SyncOptions::Sync, args);
+}
 
 void cgMapGet(IRLS& env, const IRInstruction* inst) {
   auto const target = inst->src(1)->isA(TInt)
@@ -1236,39 +1241,6 @@ void cgMapIsset(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
   cgCallHelper(v, env, target, callDest(env, inst),
                SyncOptions::Sync, args);
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void cgMemoGet(IRLS& env, const IRInstruction* inst) {
-  auto const extra = inst->extra<MemoGet>();
-  auto const fp    = srcLoc(env, inst, 0).reg();
-  auto& v          = vmain(env);
-
-  auto const args = argGroup(env, inst)
-    .ssa(1)
-    .addr(fp, localOffset(extra->locals.first))
-    .imm(extra->locals.restCount + 1);
-  cgCallHelper(
-    v, env, CallSpec::direct(MixedArray::MemoGet),
-    callDestTV(env, inst), SyncOptions::None, args
-  );
-}
-
-void cgMemoSet(IRLS& env, const IRInstruction* inst) {
-  auto const extra = inst->extra<MemoSet>();
-  auto const fp    = srcLoc(env, inst, 0).reg();
-  auto& v          = vmain(env);
-
-  auto const args = argGroup(env, inst)
-    .ssa(1)
-    .addr(fp, localOffset(extra->locals.first))
-    .imm(extra->locals.restCount + 1)
-    .typedValue(2);
-  cgCallHelper(
-    v, env, CallSpec::direct(MixedArray::MemoSet),
-    kVoidDest, SyncOptions::Sync, args
-  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////

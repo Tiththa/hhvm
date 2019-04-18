@@ -46,12 +46,17 @@ struct ImagickExtension final : Extension {
   static bool hasProgressMonitor();
 
  private:
+  void loadImagickClass();
+  void loadImagickDrawClass();
+  void loadImagickPixelClass();
+  void loadImagickPixelIteratorClass();
+
   struct ImagickIniSetting {
     bool m_locale_fix;
     bool m_progress_monitor;
   };
 
-  static DECLARE_THREAD_LOCAL(ImagickIniSetting, s_ini_setting);
+  static RDS_LOCAL(ImagickIniSetting, s_ini_setting);
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -69,7 +74,7 @@ struct ImagickExtension final : Extension {
     static Object allocObject(const Variant& arg) { \
       Object ret = allocObject(); \
       tvDecRefGen(\
-        g_context->invokeFunc(cls->getCtor(), make_packed_array(arg), \
+        g_context->invokeFunc(cls->getCtor(), make_vec_array(arg), \
                               ret.get()) \
       );\
       return ret; \
@@ -243,7 +248,7 @@ req::ptr<WandResource<DrawingWand>> getDrawingWandResource(const Object& obj) {
 ALWAYS_INLINE
 req::ptr<WandResource<PixelWand>> getPixelWandResource(const Object& obj) {
   auto ret = getWandResource<PixelWand>(s_ImagickPixel, obj);
-  assert(ret != nullptr && ret->getWand() != nullptr);
+  assertx(ret != nullptr && ret->getWand() != nullptr);
   return ret;
 }
 
@@ -305,10 +310,13 @@ String convertMagickData(size_t size, unsigned char* &data);
 
 template<typename T>
 ALWAYS_INLINE
-Array convertArray(size_t num, const T* arr) {
-  PackedArrayInit ret(num);
+typename std::enable_if<
+  std::is_scalar<typename std::remove_pointer<T>::type>::value,
+  Array
+>::type convertArray(size_t num, const T* arr) {
+  VArrayInit ret(num);
   for (size_t i = 0; i < num; ++i) {
-    ret.appendWithRef(arr[i]);
+    ret.append(arr[i]);
   }
   return ret.toArray();
 }

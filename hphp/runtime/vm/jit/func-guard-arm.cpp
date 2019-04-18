@@ -58,35 +58,40 @@ vixl::MemOperand M(Vptr p) {
 
 void emitFuncGuard(const Func* func, CodeBlock& cb, CGMeta& fixups) {
   vixl::MacroAssembler a { cb };
-  vixl::Label after_data;
+  vixl::Label after;
   vixl::Label target_data;
-  auto const start = reinterpret_cast<char*>(cb.frontier());
+  auto const begin = cb.frontier();
 
-  assertx(arm::abi(CodeKind::CrossTrace).gpUnreserved.contains(vixl::x0));
+  assertx(arm::abi(CodeKind::Prologue).gpUnreserved.contains(vixl::x0));
 
   emitSmashableMovq(cb, fixups, uint64_t(func), vixl::x0);
   a.  Ldr   (rAsm, M(rvmfp()[AROFF(m_func)]));
   a.  Cmp   (vixl::x0, rAsm);
-  a.  B     (&after_data, convertCC(CC_Z));
+  a.  B     (&after, convertCC(CC_Z));
 
-  a.  Ldr   (rAsm, &target_data);
+  // Although an address this unique stub should never change, so we don't
+  // need to mark it as an address.
+  poolLiteral(cb, fixups,
+              (uint64_t)makeTarget32(tc::ustubs().funcPrologueRedispatch),
+              32, false);
+  a.  bind  (&target_data);
+  a.  Ldr   (rAsm_w, &target_data);
   a.  Br    (rAsm);
 
-  a.  bind  (&target_data);
-  a.  dc64  (tc::ustubs().funcPrologueRedispatch);
-  a.  bind  (&after_data);
+  a.  bind  (&after);
 
-  __builtin___clear_cache(start, reinterpret_cast<char*>(cb.frontier()));
+  cb.sync(begin);
 }
 
 TCA funcGuardFromPrologue(TCA prologue, const Func* /*func*/) {
   if (!isPrologueStub(prologue)) {
-    // Typically a func guard is a smashable movq followed by an ldr, cmp, b,
-    // br, and a 64 bit target. However, relocation can shorten the sequence,
-    // so search backwards until the smashable movq is found.
-    for (int length = 0; length < (5 * 4) + 8; length += 4) {
+    // Typically a func guard is a smashable movq followed by an ldr, cmp, b.eq,
+    // ldr, and a br. However, relocation can shorten the sequence, or even
+    // increase it (turning the ldr into mov+movk), so search backwards until
+    // the smashable movq is found.
+    for (int length = 0; length <= vixl::kInstructionSize * 6; length += 4) {
       TCA inst = prologue - (smashableMovqLen() + length);
-      if (isSmashableMovq(inst)) return inst;
+      if (possiblySmashableMovq(inst)) return inst;
     }
     always_assert(false);
   }

@@ -1,0 +1,145 @@
+(env
+  (_ (flags (:standard -w @a-4-6-20-29-35-41-42-44-45-48-50 \ -strict-sequence))))
+
+(executable
+  (name hh_single_type_check)
+  (modules
+    hh_single_type_check)
+  (ocamlc_flags (:standard -custom))
+  (link_flags (:standard (:include dune_config/ld-opts.sexp)))
+  (libraries
+    ai
+    client
+    file_content
+    gen_deps
+    hhi
+    nast
+    parent
+    parser_syntax
+    server
+    server_env
+    sys_utils
+    tast
+    tast_typecheck
+    typed_positioned_syntax
+    typing
+    utils_core))
+
+(executable
+  (name hh_server)
+  (modules
+    hh_server)
+  (ocamlc_flags (:standard -custom))
+  (libraries
+    ai
+    client
+    file_content
+    gen_deps
+    hhi
+    hh_server_monitor
+    nast
+    parent
+    server
+    server_env
+    sys_utils
+    tast
+    typed_positioned_syntax
+    typing
+    utils_core))
+
+(executable
+  (name hh_client)
+  (modules
+    hh_client)
+  (ocamlc_flags (:standard -custom))
+  (libraries
+    ai
+    client
+    file_content
+    gen_deps
+    hhi
+    hh_server_monitor
+    nast
+    parent
+    server
+    server_env
+    sys_utils
+    tast
+    typed_positioned_syntax
+    typing
+    utils_core))
+
+(executable
+  (name hh_single_compile)
+  (modules
+    hh_single_compile)
+  (libraries
+    compiler_id
+    facts
+    global_config
+    global_options
+    hackc_parse_delegator
+    hhbc
+    hhi
+    heap_ident
+    logging
+    naming
+    parser_syntax_tree
+    pocket_universes
+    typing)
+  (ocamlc_flags (:standard -custom))
+  (flags (:standard -unsafe-string)))
+
+(executable
+  (name hh_parse)
+  (modules
+    hh_parse)
+  (ocamlc_flags (:standard -custom))
+  (libraries
+    debug
+    global_config
+    hackfmt
+    nast
+    parser_heap
+    parser_syntax
+    parser_syntax_transforms
+    parser_syntax_tree
+    utils_core))
+
+(executable
+  (name hackfmt)
+  (modules
+    hackfmt)
+  (ocamlc_flags (:standard -custom))
+  (libraries
+    hackfmt
+    hackfmt_debug
+    utils_config_file
+    utils_ocaml_overrides))
+
+(executable
+  (name hh_single_parse)
+  (modules
+    hh_single_parse)
+  (ocamlc_flags (:standard -custom))
+  (libraries
+    debug
+    global_config
+    hackfmt
+    nast
+    parser_heap
+    parser_syntax
+    parser_syntax_transforms
+    parser_syntax_tree))
+
+(executable
+  (name generate_full_fidelity)
+  (modules
+    generate_full_fidelity)
+  (ocamlc_flags (:standard -custom))
+  (libraries
+    procs_procs_lwt
+    core_kernel
+    str
+    parser_schema
+    collections))

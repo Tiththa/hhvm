@@ -506,7 +506,7 @@ static NEOERR* _set_value (HDF *hdf, const char *name, const char *value,
       hdf->value = strdup(value);
       if (hdf->value == NULL)
 	return nerr_raise (NERR_NOMEM, "Unable to duplicate value %s for %s",
-	    value, name);
+	    value, hdf->name);
     }
     else
     {
@@ -967,6 +967,7 @@ static NEOERR* hdf_dump_cb(HDF *hdf, const char *prefix, int dtype, int lvl,
 	if (err) return nerr_pass(err);
 	while (attr != NULL)
 	{
+    //#undef strcmp
 	  if (attr->value == NULL || !strcmp(attr->value, "1"))
 	    err = dump_cbf(rock, "%s", attr->key);
 	  else
@@ -1696,4 +1697,3 @@ NEOERR* hdf_read_file (HDF *hdf, const char *path)
   err = hdf_read_file_internal (hdf, path, INCLUDE_FILE);
   return nerr_pass(err);
 }
-

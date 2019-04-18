@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -16,25 +15,24 @@
  *)
 
 module TokenKind = Full_fidelity_token_kind
-module MinimalTrivia = Full_fidelity_minimal_trivia
-module TriviaKind = Full_fidelity_trivia_kind
+module Trivia = Full_fidelity_minimal_trivia
 
 type t = {
   kind: TokenKind.t;
   width: int;
-  leading: MinimalTrivia.t list;
-  trailing: MinimalTrivia.t list
-}
+  leading: Trivia.t list;
+  trailing: Trivia.t list
+} [@@deriving show]
 
-let make kind width leading trailing =
+let make kind _source _offset width leading trailing =
   { kind; width; leading; trailing }
 
 let leading_width token =
-  let folder sum t = sum + (MinimalTrivia.width t) in
+  let folder sum t = sum + (Trivia.width t) in
   List.fold_left folder 0 token.leading
 
 let trailing_width token =
-  let folder sum t = sum + (MinimalTrivia.width t) in
+  let folder sum t = sum + (Trivia.width t) in
   List.fold_left folder 0 token.trailing
 
 let width token =
@@ -55,22 +53,32 @@ let leading token =
 let trailing token =
   token.trailing
 
-let has_leading_end_of_line token =
-  Core.List.exists token.leading
-    ~f:(fun trivia ->  MinimalTrivia.kind trivia = TriviaKind.EndOfLine)
-
-let as_error_trivia_list token =
-  let error_trivia = MinimalTrivia.make_extra_token_error (width token) in
-    (leading token) @ [ error_trivia ] @ (trailing token)
-
-let prepend_to_leading token trivia_list =
-  let leading = trivia_list @ token.leading in
+let with_leading leading token =
   { token with leading }
+
+let with_trailing trailing token =
+  { token with trailing }
+
+let filter_leading_trivia_by_kind token kind =
+  List.filter (fun t -> Trivia.kind t = kind) token.leading
+
+let has_trivia_kind token kind =
+  List.exists (fun t -> Trivia.kind t = kind) token.leading ||
+  List.exists (fun t -> Trivia.kind t = kind) token.trailing
+
+let leading_start_offset _ =
+  0 (* Not available *)
+
+let text _ =
+  "" (* Not available *)
+
+let source_text _ =
+  Full_fidelity_source_text.empty (* Not available *)
 
 let to_json token =
   let open Hh_json in
   JSON_Object [
     ("kind", JSON_String (TokenKind.to_string token.kind));
     ("width", int_ token.width);
-    ("leading", JSON_Array (List.map MinimalTrivia.to_json token.leading));
-    ("trailing", JSON_Array (List.map MinimalTrivia.to_json token.trailing)) ]
+    ("leading", JSON_Array (List.map Trivia.to_json token.leading));
+    ("trailing", JSON_Array (List.map Trivia.to_json token.trailing)) ]

@@ -147,6 +147,11 @@ function st($x) {
     print 'default';
   }
 }
+class M{
+}
+
+<<__EntryPoint>>
+function main_1754() {
 f(0);
 f(-1);
 f(1);
@@ -159,8 +164,6 @@ f(1.0);
 f('1abc');
 f('3');
 f('foo');
-class M{
-}
 f(new M());
 f_str('0');
 f_str('');
@@ -173,7 +176,7 @@ f_dbl(5000000.3920);
 f_dbl(5000000.5);
 f_dbl(5000000.5001);
 f_dbl(5000000.0);
-f_dbl(log(0));
+f_dbl(log(0.0));
 f_dbl_notpe('5000000.3920');
 f_dbl_notpe('5000000.5');
 f_dbl_notpe('5000000.5001');
@@ -182,3 +185,4 @@ f_int(0x7fffffffffffffff);
 f_int(-120);
 f_int(0);
 st(10);
+}

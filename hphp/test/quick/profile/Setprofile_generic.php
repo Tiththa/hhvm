@@ -1,7 +1,6 @@
 <?php
 
 class Foo {
-  public function __destruct() { echo "heh\n"; }
 }
 
 function pure_function_many_locals($a) {
@@ -26,11 +25,11 @@ function pure_function_no_profile() {
   echo "yep\n";
 }
 
-function profiler() {
+function profiler(...$args) {
   // Calling functions from within the profiler function should note
   // use the profile (it would cause an infinite loop)
   pure_function_no_profile();
-  var_dump(func_get_args());
+  var_dump($args);
 }
 
 function main() {

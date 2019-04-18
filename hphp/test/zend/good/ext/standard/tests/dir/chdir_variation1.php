@@ -93,18 +93,15 @@ $inputs = array(
 $iterator = 1;
 foreach($inputs as $input) {
   echo "\n-- Iteration $iterator --\n";
-  var_dump( chdir($input) );
+  try { var_dump( chdir($input) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $iterator++;
 };
 
 fclose($fp);
 
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $file_path = dirname(__FILE__);
 $dir_path = $file_path."/chdir_basic";
 
 rmdir($dir_path);
-?>

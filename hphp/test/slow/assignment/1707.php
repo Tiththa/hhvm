@@ -7,7 +7,9 @@ function g($key, $old, $new, $s = false) {
       $old = f($old, true);
       $new = f($new, true);
     }
+    $diff['old'] = array();
     $diff['old'][$key] = $old;
+    $diff['new'] = array();
     $diff['new'][$key] = $new;
   }
   return $diff;
@@ -15,4 +17,8 @@ function g($key, $old, $new, $s = false) {
 function f($a0, $a1) {
   return 'should_be_modified';
 }
+
+<<__EntryPoint>>
+function main_1707() {
 var_dump(g('key', 'old', 'new', true));
+}

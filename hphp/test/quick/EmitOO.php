@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 print "Test begin\n";
 
@@ -35,10 +35,6 @@ class C extends B implements I {
     $x = $this;
     $this;
     return $this;
-    # Ignored.
-    function f2() {
-      return $this;
-    }
   }
 
   function g($x) {

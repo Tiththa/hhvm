@@ -174,14 +174,14 @@ string OfflineCode::getSymbolName(TCA addr) {
 }
 
 size_t OfflineCode::printBCMapping(BCMappingInfo bcMappingInfo,
-                                      size_t currBC,
-                                      TCA ip) {
+                                   size_t currBC,
+                                   TCA ip) {
 
   TransBCMapping curr, next;
   TCA tcaStart, tcaStop;
   auto const& bcMap = bcMappingInfo.bcMapping;
 
-  curr = next = TransBCMapping { MD5(), 0, 0, 0, 0 };
+  curr = next = TransBCMapping { SHA1(), 0, 0, 0, 0 };
   tcaStart = tcaStop = 0;
 
   // Account for the sentinel.
@@ -217,53 +217,37 @@ size_t OfflineCode::printBCMapping(BCMappingInfo bcMappingInfo,
   }
 
   if (currBC < mappingSize && tcaStart == ip) {
-    if (auto currUnit = g_repo->getUnit(curr.md5)) {
+    std::stringstream lineInfo;
+    if (auto currUnit = g_repo->getUnit(curr.sha1)) {
       auto bcPast = curr.bcStart + instrLen(currUnit->at(curr.bcStart));
 
-      currUnit->prettyPrint(std::cout,
+      currUnit->prettyPrint(lineInfo,
                             Unit::PrintOpts().range(curr.bcStart,
                                                     bcPast));
     } else {
-      std::cout << folly::format(
+      lineInfo << folly::format(
         "<<< couldn't find unit {} to print bytecode at offset {} >>>\n",
-        curr.md5, curr.bcStart);
+        curr.sha1, curr.bcStart);
     }
-
+    g_logger->printLine(lineInfo.str());
     currBC++;
   }
 
   return currBC;
 }
 
-void OfflineCode::printEventStats(TCA address,
-                                     uint32_t instrLen,
-                                     const PerfEventsMap<TCA>& perfEvents) {
-  static const PerfEventType AnnotatedEvents[] = {
-    EVENT_CYCLES,
-    EVENT_BRANCH_MISSES,
-    EVENT_ICACHE_MISSES,
-    EVENT_DCACHE_MISSES,
-    EVENT_LLC_MISSES,
-    EVENT_ITLB_MISSES,
-    EVENT_DTLB_MISSES,
-  };
-
-  const size_t NumAnnotatedEvents =
-    sizeof(AnnotatedEvents) / sizeof(AnnotatedEvents[0]);
-
-  static const char* SmallCaptions[] = {"cy", "bm", "ic", "dc", "lc", "it",
-                                        "dt"};
-
-  assert(sizeof(SmallCaptions)/sizeof(SmallCaptions[0]) == NumAnnotatedEvents);
-
-  for (size_t i = 0; i < NumAnnotatedEvents; i++) {
+void OfflineCode::printEventStats(TCA address, uint32_t instrLen,
+                                  const PerfEventsMap<TCA>& perfEvents) {
+  for (size_t i = getFirstEventType(); i < getNumEventTypes(); i++) {
+    PerfEventType event = static_cast<PerfEventType>(i);
     uint64_t eventCount = perfEvents.getEventCount(address,
                                                    address + instrLen - 1,
-                                                   AnnotatedEvents[i]);
+                                                   event);
     std::string eventStr;
     if (eventCount) {
       eventStr = folly::format("{:>3}:{:>4}",
-                               SmallCaptions[i], eventCount).str();
+                               eventTypeToSmallCaption(event),
+                               eventCount).str();
     }
     std::cout << folly::format("{:<10} ", eventStr);
   }

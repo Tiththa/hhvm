@@ -27,22 +27,27 @@
 #ifdef __FreeBSD__
 #include <sys/param.h>
 #endif
+#ifdef __linux__
+#include <sys/sysmacros.h>
+#endif
 #include <folly/portability/Unistd.h>
 #include <pwd.h>
 
 #include <folly/String.h>
 
 #include "hphp/runtime/base/array-init.h"
-#include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/file-util.h"
+#include "hphp/runtime/base/file.h"
+#include "hphp/runtime/base/request-injection-data.h"
 #include "hphp/runtime/server/cli-server.h"
+#include "hphp/util/sync-signal.h"
 
 namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
 
 static struct POSIXExtension final : Extension {
-  POSIXExtension() : Extension("posix", NO_EXTENSION_VERSION_YET) {}
+  POSIXExtension() : Extension("posix", "1.0") {}
   void moduleInit() override {
     HHVM_RC_INT(POSIX_S_IFMT, S_IFMT);
     HHVM_RC_INT(POSIX_S_IFSOCK, S_IFSOCK);
@@ -186,7 +191,7 @@ const StaticString
 static Variant php_posix_group_to_array(int gid,
                    const String& gname = uninit_variant.toString()) {
   // Don't pass a gid *and* a gname to this.
-  assert((gid <  0) || gname.size() == 0);
+  assertx((gid <  0) || gname.size() == 0);
 
   if ((gid < 0) && (gname.size() == 0)) {
     return false;
@@ -204,7 +209,7 @@ static Variant php_posix_group_to_array(int gid,
   // If we somehow reach this point and both gname and gid were
   // passed, then the gid values will override the gname values,
   // but it will otherwise function just fine.
-  // The assert() clause above should prevent that, however.
+  // The assertx() clause above should prevent that, however.
   if ((gname.size() > 0) &&
       (getgrnam_r(gname.data(), &gr, grbuf.get(), grbuflen, &retgrptr) != 0 ||
       retgrptr == nullptr)) {
@@ -286,7 +291,7 @@ int64_t HHVM_FUNCTION(posix_getppid) {
 static Variant php_posix_passwd_to_array(int uid,
                    const String& name = uninit_variant.toString()) {
   // Don't pass a uid *and* a name to this.
-  assert((uid <  0) || name.size() == 0);
+  assertx((uid <  0) || name.size() == 0);
 
   if ((uid < 0) && name.size() == 0) {
     return false;
@@ -304,7 +309,7 @@ static Variant php_posix_passwd_to_array(int uid,
   // If we somehow reach this point and both name and uid were
   // passed, then the uid values will override the name values,
   // but it will otherwise function just fine.
-  // The assert() clauses above should prevent that, however.
+  // The assertx() clauses above should prevent that, however.
   if ((name.size() > 0) &&
       getpwnam_r(name.data(), &pw, pwbuf.get(), pwbuflen, &retpwptr)) {
     return false;
@@ -440,6 +445,14 @@ bool HHVM_FUNCTION(posix_isatty,
 bool HHVM_FUNCTION(posix_kill,
                    int pid,
                    int sig) {
+  if (pid == 0 || pid == getpid()) {
+    if (is_sync_signal(sig)) {
+      // Only send to the current thread, and invoke signal handlers in PHP, if
+      // any.
+      RID().sendSignal(sig);
+      return true;
+    }
+  }
   return kill(pid, sig) >= 0;
 }
 

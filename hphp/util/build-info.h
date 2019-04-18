@@ -35,6 +35,26 @@ folly::StringPiece repoSchemaId();
  */
 folly::StringPiece compilerId();
 
+/*
+ * Unique identifier for this hhvm binary, determined at build-time. Unlike
+ * compilerId(), this is computed based on the contents of the executable and
+ * thus varies depending on the type of build. It cannot be overridden and
+ * serves as an id for anything relying on an exact binary.
+ */
+folly::StringPiece buildId();
+
+/*
+ * Search path for the hhjs babel transform executable. Paths are formatted as
+ * "path1:path2:path3" etc. A path may be absolute like "/usr/bin/exe" or
+ * relative, like "{}/my/relative/path/exe". Paths with {} are relative to HHVM.
+ */
+folly::StringPiece hhjsBabelTransform();
+
+/*
+ * Replace %{schema} with the repo schema in path.
+ */
+std::string insertSchema(const char* path);
+
 }
 
 #endif

@@ -46,11 +46,11 @@ struct c_ExternalThreadEventWaitHandle final : c_WaitableWaitHandle {
     Create(AsioExternalThreadEvent* event, ObjectData* priv_data);
 
   c_ExternalThreadEventWaitHandle* getNextToProcess() {
-    assert(getState() == STATE_WAITING);
+    assertx(getState() == STATE_WAITING);
     return m_nextToProcess;
   }
   void setNextToProcess(c_ExternalThreadEventWaitHandle* next) {
-    assert(getState() == STATE_WAITING);
+    assertx(getState() == STATE_WAITING);
     m_nextToProcess = next;
   }
   ObjectData* getPrivData() { return m_privData.get(); }
@@ -82,7 +82,6 @@ struct c_ExternalThreadEventWaitHandle final : c_WaitableWaitHandle {
   // also be tracked as roots but its more complicated since they
   // are malloc'd and accessed by other threads.
   SweepableMember<c_ExternalThreadEventWaitHandle> m_sweepable;
-
  public:
   static const uint8_t STATE_WAITING = 2;
 
@@ -96,8 +95,8 @@ void HHVM_STATIC_METHOD(ExternalThreadEventWaitHandle, setOnSuccessCallback,
 void HHVM_STATIC_METHOD(ExternalThreadEventWaitHandle, setOnFailCallback,
                         const Variant& callback);
 
-inline c_ExternalThreadEventWaitHandle* c_WaitHandle::asExternalThreadEvent() {
-  assert(getKind() == Kind::ExternalThreadEvent);
+inline c_ExternalThreadEventWaitHandle* c_Awaitable::asExternalThreadEvent() {
+  assertx(getKind() == Kind::ExternalThreadEvent);
   return static_cast<c_ExternalThreadEventWaitHandle*>(this);
 }
 

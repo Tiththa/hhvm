@@ -18,7 +18,6 @@
 #include "hphp/runtime/ext/stream/ext_stream.h"
 
 #include "hphp/runtime/ext/sockets/ext_sockets.h"
-#include "hphp/runtime/ext/stream/ext_stream-user-filters.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
@@ -35,7 +34,6 @@
 #include "hphp/runtime/base/ssl-socket.h"
 #include "hphp/runtime/base/stream-wrapper.h"
 #include "hphp/runtime/base/stream-wrapper-registry.h"
-#include "hphp/runtime/base/user-stream-wrapper.h"
 #include "hphp/system/systemlib.h"
 #include "hphp/util/network.h"
 #include <memory>
@@ -166,10 +164,6 @@ static struct StreamExtension final : Extension {
     HHVM_FE(stream_get_transports);
     HHVM_FE(stream_get_wrappers);
     HHVM_FE(stream_is_local);
-    HHVM_FE(stream_register_wrapper);
-    HHVM_FE(stream_wrapper_register);
-    HHVM_FE(stream_wrapper_restore);
-    HHVM_FE(stream_wrapper_unregister);
     HHVM_FE(stream_resolve_include_path);
     HHVM_FE(stream_select);
     HHVM_FE(stream_await);
@@ -270,7 +264,7 @@ Variant HHVM_FUNCTION(stream_context_get_default,
   const Array& arrOptions = options.isNull() ? null_array : options.toArray();
   auto context = g_context->getStreamContext();
   if (!context) {
-    context = req::make<StreamContext>(Array::Create(), Array::Create());
+    context = req::make<StreamContext>(empty_darray(), empty_darray());
     g_context->setStreamContext(context);
   }
   if (!arrOptions.isNull() &&
@@ -407,7 +401,7 @@ Variant HHVM_FUNCTION(stream_get_meta_data,
 }
 
 Array HHVM_FUNCTION(stream_get_transports) {
-  return make_packed_array("tcp", "udp", "unix", "udg", "ssl", "tls");
+  return make_vec_array("tcp", "udp", "unix", "udg", "ssl", "tls");
 }
 
 Variant HHVM_FUNCTION(stream_resolve_include_path, const String& filename,
@@ -417,7 +411,9 @@ Variant HHVM_FUNCTION(stream_resolve_include_path, const String& filename,
   }
 
   struct stat s;
-  String ret = resolveVmInclude(filename.get(), "", &s, true);
+  String ret = resolveVmInclude(filename.get(), "", &s,
+                                Native::s_noNativeFuncs,
+                                /*allow_dir*/true);
   if (ret.isNull()) {
     return false;
   }
@@ -489,7 +485,9 @@ Variant HHVM_FUNCTION(stream_set_chunk_size,
 
 const StaticString
   s_sec("sec"),
-  s_usec("usec");
+  s_usec("usec"),
+  s_options("options"),
+  s_notification("notification");
 
 bool HHVM_FUNCTION(stream_set_timeout,
                    const Resource& stream,
@@ -558,44 +556,6 @@ bool HHVM_FUNCTION(stream_is_local,
   return true;
 }
 
-
-bool HHVM_FUNCTION(stream_register_wrapper,
-                   const String& protocol,
-                   const String& classname,
-                   int flags) {
-  return HHVM_FN(stream_wrapper_register)(protocol, classname, flags);
-}
-
-bool HHVM_FUNCTION(stream_wrapper_register,
-                   const String& protocol,
-                   const String& classname,
-                   int flags) {
-  auto const cls = Unit::loadClass(classname.get());
-  if (!cls) {
-    raise_warning("Undefined class: '%s'", classname.data());
-    return false;
-  }
-
-  auto wrapper = req::unique_ptr<Stream::Wrapper>(
-      req::make_raw<UserStreamWrapper>(protocol, cls, flags)
-  );
-  if (!Stream::registerRequestWrapper(protocol, std::move(wrapper))) {
-    raise_warning("Unable to register protocol: %s\n", protocol.data());
-    return false;
-  }
-  return true;
-}
-
-bool HHVM_FUNCTION(stream_wrapper_restore,
-                   const String& protocol) {
-  return Stream::restoreWrapper(protocol);
-}
-
-bool HHVM_FUNCTION(stream_wrapper_unregister,
-                   const String& protocol) {
-  return Stream::disableWrapper(protocol);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // stream socket functions
 
@@ -609,7 +569,7 @@ static Variant socket_accept_impl(
   if (isa<SSLSocket>(socket)) {
     auto sock = cast<SSLSocket>(socket);
     auto new_fd = accept(sock->fd(), addr, addrlen);
-    double timeout = ThreadInfo::s_threadInfo.getNoCheck()->
+    double timeout = RequestInfo::s_requestInfo.getNoCheck()->
       m_reqInjectionData.getSocketDefaultTimeout();
     sslsock = SSLSocket::Create(new_fd, sock->getType(),
                                 sock->getCryptoMethod(), sock->getAddress(),
@@ -707,7 +667,7 @@ Variant HHVM_FUNCTION(stream_socket_accept,
   p.revents = 0;
   IOStatusHelper io("socket_accept");
   if (timeout == -1) {
-    timeout = ThreadInfo::s_threadInfo.getNoCheck()->
+    timeout = RequestInfo::s_requestInfo.getNoCheck()->
       m_reqInjectionData.getSocketDefaultTimeout();
   }
   n = poll(&p, 1, (uint64_t)(timeout * 1000.0));
@@ -903,8 +863,8 @@ req::ptr<StreamContext> get_stream_context(const Variant& stream_or_context) {
   auto file = dyn_cast_or_null<File>(resource);
   if (file != nullptr) {
     auto context = file->getStreamContext();
-    if (!file->getStreamContext()) {
-      context = req::make<StreamContext>(Array::Create(), Array::Create());
+    if (!context) {
+      context = req::make<StreamContext>(empty_darray(), empty_darray());
       file->setStreamContext(context);
     }
     return context;
@@ -933,16 +893,16 @@ bool StreamContext::validateOptions(const Variant& options) {
 
 void StreamContext::mergeOptions(const Array& options) {
   if (m_options.isNull()) {
-    m_options = Array::Create();
+    m_options = Array::CreateDArray();
   }
   for (ArrayIter it(options); it; ++it) {
     Variant wrapper = it.first();
     if (!m_options.exists(wrapper)) {
-      m_options.set(wrapper, Array::Create());
+      m_options.set(wrapper, Array::CreateDArray());
     }
-    assert(m_options[wrapper].isArray());
-    Array& opts = m_options.lvalAt(wrapper).toArrRef();
-    Array new_opts = it.second().toArray();
+    assertx(m_options[wrapper].isArray());
+    Array& opts = asArrRef(m_options.lvalAt(wrapper));
+    const Array& new_opts = it.second().toArray();
     for (ArrayIter it2(new_opts); it2; ++it2) {
       opts.set(it2.first(), it2.second());
     }
@@ -953,19 +913,19 @@ void StreamContext::setOption(const String& wrapper,
                                const String& option,
                                const Variant& value) {
   if (m_options.isNull()) {
-    m_options = Array::Create();
+    m_options = Array::CreateDArray();
   }
   if (!m_options.exists(wrapper)) {
-    m_options.set(wrapper, Array::Create());
+    m_options.set(wrapper, Array::CreateDArray());
   }
-  assert(m_options[wrapper].isArray());
-  Array& opts = m_options.lvalAt(wrapper).toArrRef();
+  assertx(m_options[wrapper].isArray());
+  Array& opts = asArrRef(m_options.lvalAt(wrapper));
   opts.set(option, value);
 }
 
 Array StreamContext::getOptions() const {
   if (m_options.isNull()) {
-    return empty_array();
+    return empty_darray();
   }
   return m_options;
 }
@@ -975,12 +935,11 @@ bool StreamContext::validateParams(const Variant& params) {
     return false;
   }
   const Array& arr = params.toArray();
-  const String& options_key = String::FromCStr("options");
   for (ArrayIter it(arr); it; ++it) {
     if (!it.first().isString()) {
       return false;
     }
-    if (it.first().toString() == options_key) {
+    if (it.first().toString() == s_options) {
       if (!StreamContext::validateOptions(it.second())) {
         return false;
       }
@@ -991,26 +950,23 @@ bool StreamContext::validateParams(const Variant& params) {
 
 void StreamContext::mergeParams(const Array& params) {
   if (m_params.isNull()) {
-    m_params = Array::Create();
+    m_params = Array::CreateDArray();
   }
-  const String& notification_key = String::FromCStr("notification");
-  if (params.exists(notification_key)) {
-    m_params.set(notification_key, params[notification_key]);
+  if (params.exists(s_notification)) {
+    m_params.set(s_notification, params[s_notification]);
   }
-  const String& options_key = String::FromCStr("options");
-  if (params.exists(options_key)) {
-    assert(params[options_key].isArray());
-    mergeOptions(params[options_key].toArray());
+  if (params.exists(s_options)) {
+    assertx(params[s_options].isArray());
+    mergeOptions(params[s_options].toArray());
   }
 }
 
 Array StreamContext::getParams() const {
   Array params = m_params;
   if (params.isNull()) {
-    params = Array::Create();
+    params = Array::CreateDArray();
   }
-  const String& options_key = String::FromCStr("options");
-  params.set(options_key, getOptions());
+  params.set(s_options, getOptions());
   return params;
 }
 

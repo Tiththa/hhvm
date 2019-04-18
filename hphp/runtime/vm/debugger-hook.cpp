@@ -27,6 +27,7 @@
 #include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/pc-filter.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/logger.h"
@@ -42,13 +43,9 @@ using StepOutState = RequestInjectionData::StepOutState;
 //////////////////////////////////////////////////////////////////////////
 // DebuggerHook implementation
 
-bool isHphpd(const DebuggerHook* hook) {
-  return dynamic_cast<const Eval::HphpdHook*>(hook) != nullptr;
-}
-
-void DebuggerHook::detach(ThreadInfo* ti /* = nullptr */) {
-  // Kegacy hphpd code expects no failure if no hook is attached.
-  ti = (ti != nullptr) ? ti : &TI();
+void DebuggerHook::detach(RequestInfo* ti /* = nullptr */) {
+  // Legacy hphpd code expects no failure if no hook is attached.
+  ti = (ti != nullptr) ? ti : &RI();
   if (!isDebuggerAttached(ti)) {
     return;
   }
@@ -58,7 +55,7 @@ void DebuggerHook::detach(ThreadInfo* ti /* = nullptr */) {
   // Do not remove/delete m_debuggerHook, it's a singleton, and code in another
   // thread could be using it.
 
-  if (ti == &TI()) {
+  if (ti == &RI()) {
     // Clear the pc filters.  We can only do this for the current thread.
     ti->m_reqInjectionData.m_breakPointFilter.clear();
     ti->m_reqInjectionData.m_flowFilter.clear();
@@ -73,43 +70,31 @@ void DebuggerHook::detach(ThreadInfo* ti /* = nullptr */) {
   // If there are no more hooks attached, clear the blacklist.
   Lock lock(s_lock);
   if (--s_numAttached == 0) {
+    s_activeHook = nullptr;
     jit::clearDbgBL();
   }
 }
 
 Mutex DebuggerHook::s_lock;
-int DebuggerHook::s_numAttached = 0;
+int DebuggerHook::s_numAttached {0};
+DebuggerHook* DebuggerHook::s_activeHook {nullptr};
 
 //////////////////////////////////////////////////////////////////////////
 // Helpers
 
 namespace {
 
-// Ensure we interpret all code at the given offsets. This sets up a guard for
-// each piece of translated code to ensure we punt to the interpreter when the
-// debugger is attached.
-void blacklistRangesInJit(const Unit* unit, const OffsetRangeVec& offsets) {
-  for (auto const& range : offsets) {
-    for (PC pc = unit->at(range.base); pc < unit->at(range.past);
-         pc += instrLen(pc)) {
-      jit::addDbgBLPC(pc);
-    }
-  }
-  if (!jit::tc::addDbgGuards(unit)) {
-    Logger::Warning("Failed to set breakpoints in Jitted code");
-  }
-  // In this case, we may be setting a breakpoint in a tracelet which could
-  // already be jitted, and present on the stack. Make sure we don't return
-  // to it so we have a chance to honor breakpoints.
-  debuggerPreventReturnsToTC();
-}
-
 // Ensure we interpret an entire function when the debugger is attached.
 void blacklistFuncInJit(const Func* f) {
-  auto unit = f->unit();
-  OffsetRangeVec ranges;
-  ranges.push_back(OffsetRange(f->base(), f->past()));
-  blacklistRangesInJit(unit, ranges);
+  if (jit::addDbgBLFunc(f)) {
+    if (!jit::tc::addDbgGuards(f)) {
+      Logger::Warning("Failed to set breakpoints in Jitted code");
+    }
+    // In this case, we may be setting a breakpoint in a tracelet which could
+    // already be jitted, and present on the stack. Make sure we don't return
+    // to it so we have a chance to honor breakpoints.
+    debuggerPreventReturnsToTC();
+  }
 }
 
 }
@@ -187,7 +172,8 @@ void phpDebuggerOpcodeHook(const unsigned char* pc) {
   }
 
   // Check if we are hitting a line breakpoint.
-  if (UNLIKELY(req_data.m_lineBreakPointFilter.checkPC(pc))) {
+  if (UNLIKELY(active_line != line &&
+               req_data.m_lineBreakPointFilter.checkPC(pc))) {
     req_data.setActiveLineBreak(line);
     hook->onLineBreak(unit, line);
     return;
@@ -231,11 +217,11 @@ void phpDebuggerOpcodeHook(const unsigned char* pc) {
   }
 
   // If the current state is OUT and we are still at a stack level less than the
-  // original, then we skip over the PopR opcode if it exists and then break
+  // original, then we skip over the PopC opcode if it exists and then break
   // (matching hphpd).
   if (UNLIKELY(req_data.getDebuggerStepOut() == StepOutState::Out &&
       curStackDisp == StackDepthDisposition::Shallower &&
-      peek_op(pc) != OpPopR)) {
+      peek_op(pc) != OpPopC)) {
     req_data.setDebuggerStepOut(StepOutState::None);
     if (!req_data.getDebuggerNext()) {
       // Next command not active, break
@@ -266,12 +252,6 @@ StackDepthDisposition getStackDisposition(int baseline) {
 void phpDebuggerRequestInitHook() {
   VMRegAnchor anchor;
   getDebuggerHook()->onRequestInit();
-}
-
-// Hook called on request shutdown after main() exits
-void phpDebuggerRequestShutdownHook() {
-  VMRegAnchor anchor;
-  getDebuggerHook()->onRequestShutdown();
 }
 
 // Hook called on function entry. Since function entry breakpoints are handled
@@ -341,7 +321,7 @@ void phpDebuggerExceptionHandlerHook() noexcept {
 }
 
 // Hook called when the VM raises an error.
-void phpDebuggerErrorHook(const ExtendedException &ee,
+void phpDebuggerErrorHook(const ExtendedException& ee,
                           int errnum,
                           const std::string& message) {
   VMRegAnchor anchor;
@@ -380,6 +360,14 @@ void phpDebuggerDefFuncHook(const Func* func) {
   getDebuggerHook()->onDefFunc(func);
 }
 
+// Called by the VM when a function intercept is registered.
+void phpDebuggerInterceptRegisterHook(const String& name) {
+  VMRegAnchor anchor;
+  auto hook = getDebuggerHook();
+  if (hook != nullptr) {
+    hook->onRegisterFuncIntercept(name);
+  }
+}
 
 //////////////////////////////////////////////////////////////////////////
 // Flow Control
@@ -500,9 +488,11 @@ void phpAddBreakPoint(const Unit* unit, Offset offset) {
   PC pc = unit->at(offset);
   getBreakPointFilter()->addPC(pc);
   if (RuntimeOption::EvalJit) {
-    if (jit::addDbgBLPC(pc)) {
+    auto const func = unit->getFunc(offset);
+    always_assert(func);
+    if (jit::addDbgBLFunc(func)) {
       // if a new entry is added in blacklist
-      if (!jit::tc::addDbgGuards(unit)) {
+      if (!jit::tc::addDbgGuards(func)) {
         Logger::Warning("Failed to set breakpoints in Jitted code");
       }
       // In this case, we may be setting a breakpoint in a tracelet which could
@@ -529,9 +519,9 @@ void phpAddBreakPointFuncEntry(const Func* f) {
 
   // Blacklist the location
   if (RuntimeOption::EvalJit) {
-    if (jit::addDbgBLPC(pc)) {
+    if (jit::addDbgBLFunc(f)) {
       // if a new entry is added in blacklist
-      if (!jit::tc::addDbgGuard(f, base, false)) {
+      if (!jit::tc::addDbgGuards(f)) {
         Logger::Warning("Failed to set breakpoints in Jitted code");
       }
     }
@@ -543,7 +533,8 @@ void phpAddBreakPointFuncExit(const Func* f) {
   const Unit* unit = f->unit();
   for (PC pc = unit->at(f->base()); pc < unit->at(f->past());
        pc += instrLen(pc)) {
-    if (peek_op(pc) != OpRetC) {
+    if (peek_op(pc) != OpRetC && peek_op(pc) != OpRetCSuspended &&
+        peek_op(pc) != OpRetM) {
       continue;
     }
 
@@ -552,8 +543,8 @@ void phpAddBreakPointFuncExit(const Func* f) {
     RID().m_retBreakPointFilter.addPC(pc);
 
     // Blacklist the location
-    if (RuntimeOption::EvalJit && jit::addDbgBLPC(pc)) {
-      if (!jit::tc::addDbgGuard(f, unit->offsetOf(pc), false)) {
+    if (RuntimeOption::EvalJit && jit::addDbgBLFunc(f)) {
+      if (!jit::tc::addDbgGuards(f)) {
         Logger::Warning("Failed to set breakpoints in Jitted code");
       }
     }
@@ -569,11 +560,29 @@ bool phpAddBreakPointLine(const Unit* unit, int line) {
 
   // Add to the breakpoint filter and the line filter.
   assertx(offsets.size() > 0);
-  auto bpOffset = offsets[0].base;
-  phpAddBreakPoint(unit, bpOffset);
+  bool containsEntryNop = false;
+  for (auto const offset : offsets) {
+    auto bpOffset = offset.base;
+    auto op = unit->getOp(bpOffset);
+    if (op == Op::EntryNop) {
+      containsEntryNop = true;
+    }
 
-  auto pc = unit->at(bpOffset);
-  RID().m_lineBreakPointFilter.addPC(pc);
+    if (containsEntryNop) {
+      phpAddBreakPoint(unit, offset.base);
+    }
+  }
+
+  if (containsEntryNop) {
+    RID().m_lineBreakPointFilter.addRanges(unit, offsets);
+  } else {
+    auto bpOffset = offsets[0].base;
+    phpAddBreakPoint(unit, bpOffset);
+
+    auto pc = unit->at(bpOffset);
+    RID().m_lineBreakPointFilter.addPC(pc);
+  }
+
   return true;
 }
 
@@ -597,7 +606,8 @@ void phpRemoveBreakPointFuncExit(const Func* f) {
   auto& req_data = RID();
   for (PC pc = unit->at(f->base()); pc < unit->at(f->past());
        pc += instrLen(pc)) {
-    if (peek_op(pc) == OpRetC) {
+    if (peek_op(pc) == OpRetC || peek_op(pc) == OpRetCSuspended ||
+        peek_op(pc) == OpRetM) {
       req_data.m_retBreakPointFilter.removePC(pc);
     }
   }
@@ -607,7 +617,7 @@ void phpRemoveBreakPointLine(const Unit* unit, int line) {
   // See note in debugger-hook.h. This can only remove from the line filter
   OffsetRangeVec offsets;
   if (unit->getOffsetRanges(line, offsets)) {
-    ThreadInfo::s_threadInfo->
+    RequestInfo::s_requestInfo->
       m_reqInjectionData.m_lineBreakPointFilter.removeRanges(unit, offsets);
   }
 }

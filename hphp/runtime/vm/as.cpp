@@ -60,8 +60,6 @@
  *
  * Missing features (partial list):
  *
- *   - builtinType (for native funcs) field on ParamInfo
- *
  *   - while class/function names can contains ':', '$', and ';',
  *     .use declarations can't handle those names because of syntax
  *     conflicts
@@ -71,11 +69,13 @@
 
 #include "hphp/runtime/vm/as.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <iostream>
-#include <algorithm>
 #include <iterator>
+#include <sstream>
 #include <vector>
+
 #include <boost/algorithm/string.hpp>
 #include <boost/scoped_ptr.hpp>
 #include <boost/bind.hpp>
@@ -86,16 +86,22 @@
 #include <folly/Range.h>
 #include <folly/String.h>
 
-#include "hphp/util/md5.h"
+#include "hphp/util/sha1.h"
 
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/repo-auth-type-codec.h"
 #include "hphp/runtime/base/repo-auth-type.h"
+#include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/tv-type.h"
 #include "hphp/runtime/vm/as-shared.h"
+#include "hphp/runtime/vm/bc-pattern.h"
 #include "hphp/runtime/vm/func-emitter.h"
 #include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/native.h"
 #include "hphp/runtime/vm/preclass-emitter.h"
+#include "hphp/runtime/vm/record-emitter.h"
+#include "hphp/runtime/vm/rx.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 #include "hphp/system/systemlib.h"
@@ -104,19 +110,22 @@ TRACE_SET_MOD(hhas);
 
 namespace HPHP {
 
+AssemblerError::AssemblerError(int where, const std::string& what)
+  : std::runtime_error(
+      folly::sformat("Assembler Error: line {}: {}", where, what))
+{}
+
 //////////////////////////////////////////////////////////////////////
 
 namespace {
 
+StringData* makeDocComment(const String& s) {
+  if (RuntimeOption::EvalGenerateDocComments) return makeStaticString(s);
+  return staticEmptyString();
+}
+
 struct AsmState;
 typedef void (*ParserFunc)(AsmState& as);
-
-struct Error : std::runtime_error {
-  explicit Error(int where, const std::string& what)
-    : std::runtime_error(folly::sformat(
-        "Assembler Error: line {}: {}", where, what))
-  {}
-};
 
 struct Input {
   explicit Input(std::istream& in)
@@ -155,7 +164,7 @@ struct Input {
     const int currentLine = m_lineNumber;
     skipWhitespace();
     if (getc() != c) {
-      throw Error(currentLine,
+      throw AssemblerError(currentLine,
         folly::sformat("expected character `{}'", char(c)));
     }
   }
@@ -200,7 +209,7 @@ struct Input {
     if (peek() == '-') buf += (char)getc();
     consumePred(isdigit, std::back_inserter(buf));
     if (buf.empty() || buf == "-") {
-      throw Error(m_lineNumber, "expected integral value");
+      throw AssemblerError(m_lineNumber, "expected integral value");
     }
     return folly::to<int32_t>(buf);
   }
@@ -216,7 +225,7 @@ struct Input {
              (i >= 'A' && i <= 'F');
     };
     auto hex_val = [&] (int i) -> uint32_t {
-      assert(is_hex(i));
+      assertx(is_hex(i));
       return i >= '0' && i <= '9' ? i - '0' :
              i >= 'a' && i <= 'f' ? i - 'a' + 10 : i - 'A' + 10;
     };
@@ -346,8 +355,7 @@ struct Input {
 
   // Skips whitespace (including newlines and comments).
   void skipWhitespace() {
-    for (;;) {
-      skipPred(boost::is_any_of(" \t\r\n"));
+    while (skipPred(boost::is_any_of(" \t\r\n"))) {
       if (peek() == '#') {
         skipPred(!boost::is_any_of("\n"));
         expect('\n');
@@ -364,23 +372,31 @@ struct Input {
   }
 
   template<class Predicate>
-  void skipPred(Predicate pred) {
-    int c;
-    while (pred(c = peek())) { getc(); }
+  bool skipPred(Predicate pred) {
+    while (pred(peek())) {
+      if (getc() == EOF) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   template<class Predicate, class OutputIterator>
-  void consumePred(Predicate pred, OutputIterator out) {
+  bool consumePred(Predicate pred, OutputIterator out) {
     int c;
-    while (pred(c = peek())) { *out++ = getc(); }
+    while (pred(c = peek())) {
+      if (getc() == EOF) {
+        return false;
+      }
+
+      *out++ = c;
+    }
+
+    return true;
   }
 
 private:
-  struct is_bareword {
-    bool operator()(int i) const {
-      return isalnum(i) || i == '_' || i == '.' || i == '$' || i == '\\';
-    }
-  };
   // whether a character is a valid part of the extended sorts of
   // names that HHVM uses for certain generated constructs
   // (closures, __Memoize implementations, etc)
@@ -393,7 +409,7 @@ private:
   };
 
   void error(const std::string& what) {
-    throw Error(getLineNumber(), what);
+    throw AssemblerError(getLineNumber(), what);
   }
 
   void io_error_if_bad() {
@@ -464,7 +480,7 @@ struct StackDepth {
   void addListener(AsmState& as, StackDepth* target);
   void setBase(AsmState& as, int stackDepth);
   int absoluteDepth() {
-    assert(baseValue.hasValue());
+    assertx(baseValue.hasValue());
     return baseValue.value() + currentOffset;
   }
 
@@ -504,9 +520,16 @@ struct Label {
   std::vector<size_t> ehEnts;
 };
 
+struct HashSymbolRef {
+  size_t operator()(SymbolRef s) const {
+    return static_cast<size_t>(s);
+  }
+};
+
 struct AsmState {
-  explicit AsmState(std::istream& in)
-    : in(in)
+  explicit AsmState(std::istream& in, bool wants_symbol_refs = false)
+    : in{in}
+    , wants_symbol_refs{wants_symbol_refs}
   {
     currentStackDepth->setBase(*this, 0);
   }
@@ -516,8 +539,8 @@ struct AsmState {
 
   template<typename... Args>
   void error(const std::string& fmt, Args&&... args) {
-    throw Error(in.getLineNumber(),
-                folly::sformat(fmt, std::forward<Args>(args)...));
+    throw AssemblerError(in.getLineNumber(),
+      folly::sformat(fmt, std::forward<Args>(args)...));
   }
 
 
@@ -648,7 +671,7 @@ struct AsmState {
       // Base value still unknown, this will need to be updated later.
 
       // Store the FPIEnt's index in the FuncEmitter's entry table.
-      assert(&fe->fpitab[fe->fpitab.size()-1] == &ent);
+      assertx(&fe->fpitab[fe->fpitab.size()-1] == &ent);
       fpiToUpdate.emplace_back(fe->fpitab.size() - 1, reg.stackDepth);
     }
 
@@ -658,10 +681,16 @@ struct AsmState {
   }
 
   void finishClass() {
-    assert(!fe);
+    assertx(!fe && !re);
     ue->addPreClassEmitter(pce);
     pce = 0;
     enumTySet = false;
+  }
+
+  void finishRecord() {
+    assertx(!fe && !pce);
+    ue->addRecordEmitter(re);
+    re = nullptr;
   }
 
   void patchLabelOffsets(const Label& label) {
@@ -718,7 +747,6 @@ struct AsmState {
       clsRefCountToCells(fe->numClsRefSlots());
 
     fe->finish(ue->bcPos(), false);
-    ue->recordFunction(fe);
 
     fe = 0;
     fpiRegs.clear();
@@ -732,23 +760,6 @@ struct AsmState {
     fdescDepth = 0;
     maxUnnamed = -1;
     fpiToUpdate.clear();
-  }
-
-  void resolveDynCallWrappers() {
-    auto const& allFuncs = ue->fevec();
-    for (auto const& p : dynCallWrappers) {
-      auto const iter = std::find_if(
-        allFuncs.begin(),
-        allFuncs.end(),
-        [&](const FuncEmitter* f){ return f->name->isame(p.second); }
-      );
-      if (iter == allFuncs.end()) {
-        error("{} specifies unknown function {} as a dyncall wrapper",
-              p.first->name, p.second);
-      }
-      p.first->dynCallWrapperId = (*iter)->id();
-    }
-    dynCallWrappers.clear();
   }
 
   int getLocalId(const std::string& name) {
@@ -785,12 +796,26 @@ struct AsmState {
   UnitEmitter* ue;
   Input in;
   bool emittedPseudoMain{false};
+  bool emittedTopLevelFunc{false};
 
-  std::map<std::string,ArrayData*> adataMap;
-  std::map<FuncEmitter*,const StringData*> dynCallWrappers;
+  // Map of adata identifiers to their associated static arrays and potential DV
+  // overrides.
+  std::map<
+    std::string,
+    std::pair<ArrayData*,VariableSerializer::DVOverrides>
+  > adataMap;
+  // Map of array immediates to their adata identifiers.
+  std::map<Offset, std::string> adataUses;
+
+  // In whole program mode it isn't possible to lookup a litstr in the global
+  // table while emitting, so keep a lookaside of litstrs seen by the assembler.
+  std::unordered_map<Id, const StringData*> litstrMap;
 
   // When inside a class, this state is active.
-  PreClassEmitter* pce;
+  PreClassEmitter* pce{nullptr};
+
+  // When inside a record, this state is active.
+  RecordEmitter* re{nullptr};
 
   // When we're doing a function or method body, this state is active.
   FuncEmitter* fe{nullptr};
@@ -809,6 +834,10 @@ struct AsmState {
   std::set<std::string,stdltistr> hoistables;
   std::unordered_map<uint32_t,Offset> defClsOffsets;
   Location::Range srcLoc{-1,-1,-1,-1};
+  hphp_fast_map<SymbolRef,
+                CompactVector<std::string>,
+                HashSymbolRef> symbol_refs;
+  bool wants_symbol_refs;
 };
 
 void StackDepth::adjust(AsmState& as, int delta) {
@@ -851,7 +880,7 @@ void StackDepth::setBase(AsmState& as, int stackDepth) {
 
   // We finally know the base value. Update AsmState accordingly.
   if (*baseValue + minOffset < 0) {
-    throw Error(
+    throw AssemblerError(
       minOffsetLine,
       "opcode sequence caused stack depth to go negative"
     );
@@ -869,6 +898,12 @@ void StackDepth::setBase(AsmState& as, int stackDepth) {
 
 void StackDepth::setCurrentAbsolute(AsmState& as, int stackDepth) {
   setBase(as, stackDepth - currentOffset);
+}
+
+template<class F>
+void suppressOOM(F func) {
+  MemoryManager::SuppressOOM so(*tl_heap);
+  func();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -941,7 +976,7 @@ std::vector<std::string> read_strvector(AsmState& as) {
   return ret;
 }
 
-ArrayData* read_litarray(AsmState& as) {
+std::pair<ArrayData*, std::string> read_litarray(AsmState& as) {
   as.in.skipSpaceTab();
   if (as.in.getc() != '@') {
     as.error("expecting an `@foo' array literal reference");
@@ -955,7 +990,7 @@ ArrayData* read_litarray(AsmState& as) {
   if (it == as.adataMap.end()) {
     as.error("unknown array data literal name " + name);
   }
-  return it->second;
+  return {it->second.first, std::move(name)};
 }
 
 RepoAuthType read_repo_auth_type(AsmState& as) {
@@ -985,9 +1020,12 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   Y("?Obj=",    T::OptExactObj);
   Y("?Obj<=",   T::OptSubObj);
   Y("Obj<=",    T::SubObj);
-
   X("Arr",      T::Arr);
   X("?Arr",     T::OptArr);
+  X("VArr",     T::VArr);
+  X("?VArr",    T::OptVArr);
+  X("DArr",     T::DArr);
+  X("?DArr",    T::OptDArr);
   X("Vec",      T::Vec);
   X("?Vec",     T::OptVec);
   X("Dict",     T::Dict);
@@ -1009,11 +1047,21 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("Null",     T::Null);
   X("Obj",      T::Obj);
   X("?Obj",     T::OptObj);
+  X("Func",     T::Func);
+  X("?Func",    T::OptFunc);
+  X("Cls",      T::Cls);
+  X("?Cls",     T::OptCls);
+  X("ClsMeth",  T::ClsMeth);
+  X("?ClsMeth", T::OptClsMeth);
   X("Ref",      T::Ref);
   X("?Res",     T::OptRes);
   X("Res",      T::Res);
   X("?SArr",    T::OptSArr);
   X("SArr",     T::SArr);
+  X("?SVArr",   T::OptSVArr);
+  X("SVArr",    T::SVArr);
+  X("?SDArr",   T::OptSDArr);
+  X("SDArr",    T::SDArr);
   X("?SVec",    T::OptSVec);
   X("SVec",     T::SVec);
   X("?SDict",   T::OptSDict);
@@ -1029,6 +1077,10 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?ArrKey",  T::OptArrKey);
   X("UncArrKey",T::UncArrKey);
   X("ArrKey",   T::ArrKey);
+  X("?UncStrLike",T::OptUncStrLike);
+  X("?StrLike",T::OptStrLike);
+  X("UncStrLike",T::UncStrLike);
+  X("StrLike",T::StrLike);
   X("Uninit",   T::Uninit);
 
 #undef X
@@ -1056,6 +1108,14 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptSArr:
   case T::Arr:
   case T::OptArr:
+  case T::SVArr:
+  case T::OptSVArr:
+  case T::VArr:
+  case T::OptVArr:
+  case T::SDArr:
+  case T::OptSDArr:
+  case T::DArr:
+  case T::OptDArr:
   case T::SVec:
   case T::OptSVec:
   case T::Vec:
@@ -1070,12 +1130,22 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptKeyset:
   case T::Obj:
   case T::OptObj:
+  case T::Func:
+  case T::OptFunc:
+  case T::Cls:
+  case T::OptCls:
+  case T::ClsMeth:
+  case T::OptClsMeth:
   case T::InitUnc:
   case T::Unc:
   case T::OptUncArrKey:
   case T::OptArrKey:
   case T::UncArrKey:
   case T::ArrKey:
+  case T::OptUncStrLike:
+  case T::OptStrLike:
+  case T::UncStrLike:
+  case T::StrLike:
   case T::InitCell:
   case T::Cell:
   case T::Ref:
@@ -1092,12 +1162,34 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   not_reached();
 }
 
+// Read a vector of IVAs, with format <int, int, int, ...>, the vector may be
+// excluded entirely if it is empty.
+std::vector<uint32_t> read_argv32(AsmState& as) {
+  as.in.skipSpaceTab();
+  if (as.in.peek() != '<') return {};
+  as.in.getc();
+
+  std::vector<uint32_t> result;
+  for (;;) {
+    auto const num = as.in.readint();
+    if (num < 0) as.error("Was expecting a positive integer");
+    result.push_back(num);
+    as.in.skipWhitespace();
+    if (as.in.peek() == '>') break;
+    as.in.expectWs(',');
+  }
+  as.in.expectWs('>');
+
+  return result;
+}
+
 // Read in a vector of iterators the format for this vector is:
-// <(TYPE) ID, (TYPE) ID, ...>
-// Where TYPE := Iter | MIter | CIter
+// <(TYPE) ID LOCAL?, (TYPE) ID LOCAL?, ...>
+// Where TYPE := Iter | LIter
 // and   ID   := Integer
-std::vector<uint32_t> read_itervec(AsmState& as) {
-  std::vector<uint32_t> ret;
+// and   LOCAL := String (only valid when TYPE = LIter)
+IterTable read_iter_table(AsmState& as) {
+  IterTable ret;
 
   as.in.skipSpaceTab();
   as.in.expect('<');
@@ -1105,18 +1197,28 @@ std::vector<uint32_t> read_itervec(AsmState& as) {
   std::string word;
 
   for (;;) {
+    IterTableEnt ent;
     as.in.expectWs('(');
     if (!as.in.readword(word)) as.error("Was expecting Iterator type.");
-    if (!word.compare("Iter")) ret.push_back(KindOfIter);
-    else if (!word.compare("MIter")) ret.push_back(KindOfMIter);
-    else if (!word.compare("CIter")) ret.push_back(KindOfCIter);
+    if (!word.compare("Iter")) ent.kind = KindOfIter;
+    else if (!word.compare("LIter")) ent.kind = KindOfLIter;
     else as.error("Unknown iterator type `" + word + "'");
     as.in.expectWs(')');
 
     as.in.skipSpaceTab();
 
     if (!as.in.readword(word)) as.error("Was expecting iterator id.");
-    ret.push_back(folly::to<uint32_t>(word));
+    ent.id = as.getIterId(folly::to<uint32_t>(word));
+
+    if (ent.kind == KindOfLIter) {
+      as.in.skipSpaceTab();
+      if (!as.in.readword(word)) as.error("Was expecting local.");
+      ent.local = as.getLocalId(word);
+    } else {
+      ent.local = kInvalidId;
+    }
+
+    ret.push_back(std::move(ent));
 
     if (!isdigit(word.back())) {
       if (word.back() == '>') break;
@@ -1229,12 +1331,77 @@ LocalRange read_local_range(AsmState& as) {
   if (pos == std::string::npos) as.error("expecting `+' in local range");
   auto const rest = first.substr(pos + 1);
   first = first.substr(0, pos);
+  auto const count = folly::to<uint32_t>(rest);
+  if (!count) return LocalRange{0, 0};
   auto const firstLoc = as.getLocalId(first);
-  auto const restCount = folly::to<uint32_t>(rest);
-  if (firstLoc + restCount > as.maxUnnamed) {
-    as.maxUnnamed = firstLoc + restCount;
+  if (firstLoc + count - 1 > as.maxUnnamed) {
+    as.maxUnnamed = firstLoc + count - 1;
   }
-  return LocalRange{uint32_t(firstLoc), restCount};
+  return LocalRange{uint32_t(firstLoc), count};
+}
+
+FCallArgs::Flags read_fcall_flags(AsmState& as) {
+  uint8_t flags = 0;
+
+  as.in.skipSpaceTab();
+  as.in.expect('<');
+
+  std::string flag;
+  while (as.in.readword(flag)) {
+    if (flag == "SupportsAER") {
+      flags |= FCallArgs::SupportsAsyncEagerReturn;
+      continue;
+    }
+    if (flag == "Unpack") { flags |= FCallArgs::HasUnpack; continue; }
+    as.error("unrecognized FCall flag `" + flag + "'");
+  }
+  as.in.expectWs('>');
+
+  return static_cast<FCallArgs::Flags>(flags);
+}
+
+// Read a vector of booleans formatted as a quoted string of '0' and '1'.
+std::unique_ptr<uint8_t[]> read_by_refs(AsmState& as, uint32_t numArgs) {
+  as.in.skipSpaceTab();
+  std::string strVal;
+  if (!as.in.readQuotedStr(strVal)) {
+    as.error("expected quoted string literal");
+  }
+
+  if (strVal.empty()) return nullptr;
+  if (strVal.length() != numArgs) {
+    as.error("reffiness vector must be either empty or match number of args");
+  }
+
+  auto result = std::make_unique<uint8_t[]>((numArgs + 7) / 8);
+  for (auto i = 0; i < numArgs; ++i) {
+    auto const c = strVal[i];
+    if (c != '0' && c != '1') as.error("Was expecting a boolean (0 or 1)");
+    result[i / 8] |= (c == '1' ? 1 : 0) << (i % 8);
+  }
+
+  return result;
+}
+
+std::tuple<FCallArgsBase, std::unique_ptr<uint8_t[]>, std::string>
+read_fcall_args(AsmState& as) {
+  auto const flags = read_fcall_flags(as);
+  auto const numArgs = read_opcode_arg<uint32_t>(as);
+  auto const numRets = read_opcode_arg<uint32_t>(as);
+  auto byRefs = read_by_refs(as, numArgs);
+  auto asyncEagerLabel = read_opcode_arg<std::string>(as);
+  return std::make_tuple(
+    FCallArgsBase(flags, numArgs, numRets),
+    std::move(byRefs),
+    std::move(asyncEagerLabel)
+  );
+}
+
+Id create_litstr_id(AsmState& as) {
+  auto const sd = read_litstr(as);
+  auto const id = as.ue->mergeLitstr(sd);
+  as.litstrMap.emplace(id, sd);
+  return id;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1246,13 +1413,11 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define IMM_TWO(t1, t2) IMM_ONE(t1); ++immIdx; IMM_##t2
 #define IMM_THREE(t1, t2, t3) IMM_TWO(t1, t2); ++immIdx; IMM_##t3
 #define IMM_FOUR(t1, t2, t3, t4) IMM_THREE(t1, t2, t3); ++immIdx; IMM_##t4
+#define IMM_FIVE(t1, t2, t3, t4, t5) IMM_FOUR(t1, t2, t3, t4); ++immIdx; IMM_##t5
 
 // Some bytecodes need to know an iva imm for (PUSH|POP)_*.
 #define IMM_IVA do {                                      \
     auto imm = read_opcode_arg<uint32_t>(as);             \
-    if (imm < 0) {                                        \
-      as.error("IVA immediates may not be less than 0");  \
-    }                                                     \
     as.ue->emitIVA(imm);                                  \
     immIVA[immIdx] = imm;                                 \
   } while (0)
@@ -1260,12 +1425,12 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define IMM_VSA \
   std::vector<std::string> vecImm = read_strvector(as);                 \
   auto const vecImmStackValues = vecImm.size();                         \
-  as.ue->emitInt32(vecImmStackValues);                                  \
+  as.ue->emitIVA(vecImmStackValues);                                    \
   for (size_t i = 0; i < vecImmStackValues; ++i) {                      \
     as.ue->emitInt32(as.ue->mergeLitstr(String(vecImm[i]).get()));      \
   }
 
-#define IMM_SA     as.ue->emitInt32(as.ue->mergeLitstr(read_litstr(as)))
+#define IMM_SA     as.ue->emitInt32(create_litstr_id(as))
 #define IMM_RATA   encodeRAT(*as.ue, read_repo_auth_type(as))
 #define IMM_I64A   as.ue->emitInt64(read_opcode_arg<int64_t>(as))
 #define IMM_DA     as.ue->emitDouble(read_opcode_arg<double>(as))
@@ -1278,8 +1443,28 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define IMM_CAW    as.ue->emitIVA(as.getClsRefSlot( \
                      read_opcode_arg<int32_t>(as)))
 #define IMM_OA(ty) as.ue->emitByte(read_subop<ty>(as));
-#define IMM_AA     as.ue->emitInt32(as.ue->mergeArray(read_litarray(as)))
 #define IMM_LAR    encodeLocalRange(*as.ue, read_local_range(as))
+#define IMM_FCA do {                                                \
+    auto const fca = read_fcall_args(as);                           \
+    encodeFCallArgs(                                                \
+      *as.ue, std::get<0>(fca), std::get<1>(fca).get(),             \
+      std::get<2>(fca) != "-",                                      \
+      [&] {                                                         \
+        labelJumps.emplace_back(std::get<2>(fca), as.ue->bcPos());  \
+        as.ue->emitInt32(0);                                        \
+      }                                                             \
+    );                                                              \
+    immFCA = std::get<0>(fca);                                      \
+  } while (0)
+
+// Record the offset of the immediate so that we can correlate it with its
+// associated adata later.
+#define IMM_AA do {                             \
+  auto const p = read_litarray(as);             \
+  auto const pos = as.ue->bcPos();              \
+  as.ue->emitInt32(as.ue->mergeArray(p.first)); \
+  as.adataUses[pos] = std::move(p.second);      \
+} while (0)
 
 /*
  * There can currently be no more than one immvector per instruction,
@@ -1288,16 +1473,28 @@ std::map<std::string,ParserFunc> opcode_parsers;
  * integer.
  */
 #define IMM_ILA do {                               \
-  std::vector<uint32_t> vecImm = read_itervec(as); \
-  as.ue->emitInt32(vecImm.size() / 2);             \
-  for (auto& i : vecImm) {                         \
+  auto const immTable = read_iter_table(as);       \
+  as.ue->emitIVA(immTable.size());                 \
+  for (auto const& it : immTable) {                \
+    as.ue->emitIVA(it.kind);                       \
+    as.ue->emitIVA(it.id);                         \
+    if (it.kind == KindOfLIter) {                  \
+      as.ue->emitIVA(it.local);                    \
+    }                                              \
+  }                                                \
+} while (0)
+
+#define IMM_I32LA do {                             \
+  std::vector<uint32_t> vecImm = read_argv32(as);  \
+  as.ue->emitIVA(vecImm.size());                   \
+  for (auto i : vecImm) {                          \
     as.ue->emitInt32(i);                           \
   }                                                \
 } while (0)
 
 #define IMM_BLA do {                                    \
   std::vector<std::string> vecImm = read_jmpvector(as); \
-  as.ue->emitInt32(vecImm.size());                      \
+  as.ue->emitIVA(vecImm.size());                        \
   for (auto const& imm : vecImm) {                      \
     labelJumps.emplace_back(imm, as.ue->bcPos());       \
     as.ue->emitInt32(0); /* to be patched */            \
@@ -1306,7 +1503,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
 
 #define IMM_SLA do {                                       \
   auto vecImm = read_sswitch_jmpvector(as);                \
-  as.ue->emitInt32(vecImm.size());                         \
+  as.ue->emitIVA(vecImm.size());                           \
   for (auto const& pair : vecImm) {                        \
     as.ue->emitInt32(pair.first);                          \
     labelJumps.emplace_back(pair.second, as.ue->bcPos());  \
@@ -1329,22 +1526,26 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define NUM_PUSH_TWO(a,b) 2
 #define NUM_PUSH_THREE(a,b,c) 3
 #define NUM_PUSH_INS_1(a) 1
+#define NUM_PUSH_FPUSH immIVA[0]
+#define NUM_PUSH_FCALL immFCA.numRets
 #define NUM_POP_NOV 0
 #define NUM_POP_ONE(a) 1
 #define NUM_POP_TWO(a,b) 2
 #define NUM_POP_THREE(a,b,c) 3
 #define NUM_POP_MFINAL immIVA[0]
-#define NUM_POP_F_MFINAL immIVA[1]
-#define NUM_POP_C_MFINAL (immIVA[0] + 1)
-#define NUM_POP_V_MFINAL NUM_POP_C_MFINAL
-#define NUM_POP_FMANY immIVA[0] /* number of arguments */
+#define NUM_POP_C_MFINAL(n) (immIVA[0] + n)
+#define NUM_POP_CUMANY immIVA[0] /* number of arguments */
 #define NUM_POP_CVUMANY immIVA[0] /* number of arguments */
+#define NUM_POP_FPUSH(nin, nobj) (immIVA[0] + nin + 3)
+#define NUM_POP_FCALL (immFCA.numArgs + (immFCA.hasUnpack() ? 1 : 0) + \
+                       immFCA.numRets - 1)
 #define NUM_POP_CMANY immIVA[0] /* number of arguments */
 #define NUM_POP_SMANY vecImmStackValues
 
 #define O(name, imm, pop, push, flags)                                 \
   void parse_opcode_##name(AsmState& as) {                             \
-    UNUSED uint32_t immIVA[4];                                         \
+    UNUSED auto immFCA = FCallArgsBase(FCallArgsBase::None, -1, -1);   \
+    UNUSED uint32_t immIVA[kMaxHhbcImms];                              \
     UNUSED auto const thisOpcode = Op::name;                           \
     UNUSED const Offset curOpcodeOff = as.ue->bcPos();                 \
     std::vector<std::pair<std::string, Offset> > labelJumps;           \
@@ -1366,30 +1567,50 @@ std::map<std::string,ParserFunc> opcode_parsers;
       as.endFpi();                                                     \
     }                                                                  \
                                                                        \
-    /* Other FCall* functions perform their own bounds checking. */    \
-    if (Op##name == OpFCall || Op##name == OpFCallD ||                 \
-        Op##name == OpFCallAwait) {                                    \
-      as.fe->containsCalls = true;                                     \
-    }                                                                  \
-                                                                       \
     as.ue->emitOp(Op##name);                                           \
                                                                        \
     UNUSED size_t immIdx = 0;                                          \
     IMM_##imm;                                                         \
                                                                        \
-    int stackDelta = NUM_PUSH_##push - NUM_POP_##pop;                  \
-    as.adjustStack(stackDelta);                                        \
+    as.adjustStack(-NUM_POP_##pop);                                    \
                                                                        \
     if (isFPush(Op##name)) {                                           \
       as.beginFpi(curOpcodeOff);                                       \
     }                                                                  \
                                                                        \
-    for (auto& kv : labelJumps) {                                      \
-      as.addLabelJump(kv.first, kv.second, curOpcodeOff);              \
+    if (thisOpcode == OpMemoGet) {                                     \
+      /* MemoGet pushes after branching */                             \
+      assertx(labelJumps.size() == 1);                                 \
+      as.addLabelJump(                                                 \
+        labelJumps[0].first, labelJumps[0].second, curOpcodeOff        \
+      );                                                               \
+      as.adjustStack(NUM_PUSH_##push);                                 \
+    } else if (thisOpcode == OpMemoGetEager) {                         \
+      /* MemoGetEager pushes on its second branch only */              \
+      assertx(labelJumps.size() == 2);                                 \
+      as.addLabelJump(                                                 \
+        labelJumps[0].first, labelJumps[0].second, curOpcodeOff        \
+      );                                                               \
+      as.adjustStack(NUM_PUSH_##push);                                 \
+      as.addLabelJump(                                                 \
+        labelJumps[1].first, labelJumps[1].second, curOpcodeOff        \
+      );                                                               \
+    } else {                                                           \
+      /* Everything else pushes before branching */                    \
+      as.adjustStack(NUM_PUSH_##push);                                 \
+      for (auto& kv : labelJumps) {                                    \
+        as.addLabelJump(kv.first, kv.second, curOpcodeOff);            \
+      }                                                                \
     }                                                                  \
                                                                        \
-    /* Stack depth should be 0 after RetC or RetV. */                  \
-    if (thisOpcode == OpRetC || thisOpcode == OpRetV) {                \
+    /* FCalls with unpack perform their own bounds checking. */        \
+    if (Op##name == OpFCall && !immFCA.hasUnpack()) {                  \
+      as.fe->containsCalls = true;                                     \
+    }                                                                  \
+                                                                       \
+    /* Stack depth should be 0 after RetC or RetM. */                  \
+    if (thisOpcode == OpRetC || thisOpcode == OpRetCSuspended ||       \
+        thisOpcode == OpRetM) {                                        \
       as.enforceStackDepth(0);                                         \
     }                                                                  \
                                                                        \
@@ -1427,6 +1648,8 @@ OPCODES
 #undef IMM_CAR
 #undef IMM_CAW
 #undef IMM_BA
+#undef IMM_ILA
+#undef IMM_I32LA
 #undef IMM_BLA
 #undef IMM_SLA
 #undef IMM_OA
@@ -1435,6 +1658,7 @@ OPCODES
 #undef IMM_VSA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_FCA
 
 #undef NUM_PUSH_NOV
 #undef NUM_PUSH_ONE
@@ -1442,17 +1666,19 @@ OPCODES
 #undef NUM_PUSH_THREE
 #undef NUM_PUSH_POS_N
 #undef NUM_PUSH_INS_1
+#undef NUM_PUSH_FPUSH
+#undef NUM_PUSH_FCALL
 #undef NUM_POP_NOV
 #undef NUM_POP_ONE
 #undef NUM_POP_TWO
 #undef NUM_POP_THREE
 #undef NUM_POP_POS_N
 #undef NUM_POP_MFINAL
-#undef NUM_POP_F_MFINAL
 #undef NUM_POP_C_MFINAL
-#undef NUM_POP_V_MFINAL
-#undef NUM_POP_FMANY
+#undef NUM_POP_CUMANY
 #undef NUM_POP_CVUMANY
+#undef NUM_POP_FPUSH
+#undef NUM_POP_FCALL
 #undef NUM_POP_CMANY
 #undef NUM_POP_SMANY
 
@@ -1514,6 +1740,36 @@ String parse_maybe_long_string(AsmState& as) {
   return String(&buffer[0], buffer.size() - 1, CopyString);
 }
 
+void checkSize(TypedValue tv, size_t& available) {
+  auto const update = [&] (size_t sz) {
+    if (sz > available) {
+      throw AssemblerFatal("Maximum allowable size of scalar exceeded");
+    }
+    available -= sz;
+  };
+
+  if (isArrayLikeType(type(tv))) {
+    update(allocSize(val(tv).parr));
+
+    IterateKVNoInc(val(tv).parr, [&] (Cell k, TypedValue v) {
+      if (isStringType(type(k))) {
+        update(val(k).pstr->heapSize());
+      }
+      checkSize(v, available);
+    });
+  }
+
+  if (isStringType(type(tv))) {
+    update(val(tv).pstr->heapSize());
+  }
+}
+
+Variant checkSize(Variant val) {
+  size_t avail = RuntimeOption::EvalAssemblerMaxScalarSize;
+  checkSize(*val.asTypedValue(), avail);
+  return val;
+}
+
 /*
  * php-serialized : long-string-literal
  *                ;
@@ -1524,8 +1780,29 @@ String parse_maybe_long_string(AsmState& as) {
  * Returns a Variant representing the serialized data.  It's up to the
  * caller to make sure it is a legal literal.
  */
-Variant parse_php_serialized(AsmState& as) {
-  return unserialize_from_string(parse_long_string(as));
+Variant parse_php_serialized(
+  AsmState& as,
+  VariableSerializer::DVOverrides* overrides = nullptr
+) {
+  auto const str = parse_long_string(as);
+  VariableUnserializer vu(
+    str.data(),
+    str.size(),
+    VariableUnserializer::Type::Internal,
+    true
+  );
+  if (overrides) vu.setDVOverrides(overrides);
+  try {
+    return checkSize(vu.unserialize());
+  } catch (const FatalErrorException&) {
+    throw;
+  } catch (const AssemblerFatal&) {
+    throw;
+  } catch (const std::exception& e) {
+    auto const msg =
+      folly::sformat("AssemblerUnserializationError: {}", e.what());
+    throw AssemblerUnserializationError(msg);
+  }
 }
 
 /*
@@ -1534,7 +1811,19 @@ Variant parse_php_serialized(AsmState& as) {
  */
 Variant parse_maybe_php_serialized(AsmState& as) {
   auto s = parse_maybe_long_string(as);
-  if (!s.empty()) return unserialize_from_string(s);
+  if (!s.empty()) {
+    try {
+      return unserialize_from_string(s, VariableUnserializer::Type::Internal);
+    } catch (const FatalErrorException&) {
+      throw;
+    } catch (const AssemblerFatal&) {
+      throw;
+    } catch (const std::exception& e) {
+      auto const msg =
+        folly::sformat("AssemblerUnserializationError: {}", e.what());
+      throw AssemblerUnserializationError(msg);
+    }
+  }
   return Variant();
 }
 
@@ -1576,43 +1865,20 @@ void parse_numclsrefslots(AsmState& as) {
  * the exact assignment matters (like for closures).
  */
 void parse_declvars(AsmState& as) {
-  std::string var;
-  while (as.in.readword(var)) {
-    as.getLocalId(var);
+  while (true) {
+    as.in.skipWhitespace();
+    std::string var;
+    if (as.in.readQuotedStr(var) || as.in.readword(var)) {
+      as.getLocalId(var);
+    }
+    else {
+      break;
+    }
   }
   as.in.expectWs(';');
 }
 
 void parse_function_body(AsmState&, int nestLevel = 0);
-
-/*
- * directive-fault : identifier integer? '{' function-body
- *                 ;
- */
-void parse_fault(AsmState& as, int nestLevel) {
-  const Offset start = as.ue->bcPos();
-
-  std::string label;
-  if (!as.in.readword(label)) {
-    as.error("expected label name after .try_fault");
-  }
-  int iterId = -1;
-  as.in.skipWhitespace();
-  if (as.in.peek() != '{') {
-    iterId = read_opcode_arg<int32_t>(as);
-  }
-  as.in.expectWs('{');
-  parse_function_body(as, nestLevel + 1);
-
-  auto& eh = as.fe->addEHEnt();
-  eh.m_type = EHEnt::Type::Fault;
-  eh.m_base = start;
-  eh.m_past = as.ue->bcPos();
-  eh.m_iterId = iterId;
-  eh.m_end = kInvalidOffset;
-
-  as.addLabelEHEnt(label, as.fe->ehtab.size() - 1);
-}
 
 /*
  * directive-catch : identifier integer? '{' function-body
@@ -1634,7 +1900,6 @@ void parse_catch(AsmState& as, int nestLevel) {
   parse_function_body(as, nestLevel + 1);
 
   auto& eh = as.fe->addEHEnt();
-  eh.m_type = EHEnt::Type::Catch;
   eh.m_base = start;
   eh.m_past = as.ue->bcPos();
   eh.m_iterId = iterId;
@@ -1667,7 +1932,6 @@ void parse_try_catch(AsmState& as, int nestLevel) {
 
   // Emit catch body.
   as.enterReachableRegion(0);
-  as.ue->emitOp(OpCatch);
   as.adjustStack(1);
   as.enforceStackDepth(1);
 
@@ -1683,7 +1947,6 @@ void parse_try_catch(AsmState& as, int nestLevel) {
   const Offset end = as.ue->bcPos();
 
   auto& eh = as.fe->addEHEnt();
-  eh.m_type = EHEnt::Type::Catch;
   eh.m_base = start;
   eh.m_past = handler;
   eh.m_iterId = iterId;
@@ -1716,28 +1979,6 @@ void parse_srcloc(AsmState& as, int /*nestLevel*/) {
 }
 
 /*
- * directive-static : '$' local_name = long-string-literal ';'
- *                  ;
- *
- * Record that the function contains a static named local_name along with an
- * associated initializer.
- */
-void parse_static(AsmState& as) {
-  Func::SVInfo svInfo;
-  std::string name;
-  String init;
-
-  as.in.expectWs('$');
-  if (!as.in.readword(name)) {
-    as.error("Statics must be named");
-  }
-  svInfo.name = makeStaticString(name);
-  as.fe->staticVars.push_back(svInfo);
-
-  as.in.expectWs(';');
-}
-
-/*
  * directive-doccomment : long-string-literal ';'
  *                      ;
  *
@@ -1746,7 +1987,128 @@ void parse_func_doccomment(AsmState& as) {
   auto const doc = parse_long_string(as);
   as.in.expectWs(';');
 
-  as.fe->docComment = makeStaticString(doc);
+  as.fe->docComment = makeDocComment(doc);
+}
+
+/*
+ * fixup_default_values: This function does a *rough* match of the default value
+ * initializers for a function and attempts to construct corresponding default
+ * TypedValues for them. It will also attempt to normalize the phpCode using a
+ * variable serializer.
+ */
+void fixup_default_values(AsmState& as, FuncEmitter* fe) {
+  using Atom = BCPattern::Atom;
+  using Captures = BCPattern::CaptureVec;
+
+  auto end = as.ue->bc() + fe->past;
+  for (uint32_t paramIdx = 0; paramIdx < fe->params.size(); ++paramIdx) {
+    auto& pi = fe->params[paramIdx];
+    if (!pi.hasDefaultValue() || pi.funcletOff == kInvalidOffset) continue;
+    auto inst = as.ue->bc() + pi.funcletOff;
+
+    // Check that the DV intitializer is actually setting the local for the
+    // parameter being initialized.
+    auto checkloc = [&] (PC pc, const Captures&) {
+      auto const UNUSED op = decode_op(pc);
+      assertx(op == OpSetL || op == OpPopL);
+      auto const loc = decode_iva(pc);
+      return loc == paramIdx;
+    };
+
+    // Look for DV initializers which push a primitive value onto the stack and
+    // then immediately use it to set the parameter local and pop it from the
+    // stack. Currently the following relatively limited sequences are accepted:
+    //
+    // Int | String | Double | Null | True | False | Array | Dict | Keyset | Vec
+    // SetL loc, PopC | PopL loc
+    auto result = BCPattern {
+      Atom::alt(
+        Atom(OpInt), Atom(OpString), Atom(OpDouble), Atom(OpNull), Atom(OpTrue),
+        Atom(OpFalse), Atom(OpArray), Atom(OpDict), Atom(OpVec), Atom(OpKeyset)
+      ).capture(),
+      Atom::alt(
+        Atom(OpPopL).onlyif(checkloc),
+        Atom::seq(Atom(OpSetL).onlyif(checkloc), Atom(OpPopC))
+      ),
+    }.ignore({OpAssertRATL, OpAssertRATStk}).matchAnchored(inst, end);
+
+    // Verify that the pattern we matched is either for the last DV initializer,
+    // in which case it must end with a JmpNS that targets the function entry,
+    // or is immediately followed by the next DV initializer.
+    if (!result.found() || result.getEnd() >= end) continue;
+    auto pc = result.getEnd();
+    auto off = pc - as.ue->bc();
+    auto const valid = [&] {
+      for (uint32_t next = paramIdx + 1; next < fe->params.size(); ++next) {
+        auto& npi = fe->params[next];
+        if (!npi.hasDefaultValue() || npi.funcletOff == kInvalidOffset) {
+          continue;
+        }
+        return npi.funcletOff == off;
+      }
+      auto const orig = pc;
+      auto const base = as.ue->bc() + fe->base;
+      return decode_op(pc) == OpJmpNS && orig + decode_raw<Offset>(pc) == base;
+    }();
+    if (!valid) continue;
+
+    // Use the captured initializer bytecode to construct the default value for
+    // this parameter.
+    auto capture = result.getCapture(0);
+    assertx(capture);
+
+    TypedValue dv = make_tv<KindOfUninit>();
+    const VariableSerializer::DVOverrides* overrides = nullptr;
+    SCOPE_EXIT { overrides = nullptr; };
+    auto decode_array = [&] (DataType dt) {
+      auto const captureCopy = capture;
+      if (auto arr = as.ue->lookupArray(decode_raw<uint32_t>(capture))) {
+        dv.m_type = dt;
+        dv.m_data.parr = const_cast<ArrayData*>(arr);
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          auto const litOffset = captureCopy - as.ue->bc();
+          auto const it = as.adataUses.find(litOffset);
+          assertx(it != as.adataUses.end());
+          overrides = &as.adataMap[it->second].second;
+        }
+      }
+    };
+
+    switch (decode_op(capture)) {
+    case OpNull:   dv = make_tv<KindOfNull>();           break;
+    case OpTrue:   dv = make_tv<KindOfBoolean>(true);    break;
+    case OpFalse:  dv = make_tv<KindOfBoolean>(false);   break;
+    case OpArray:  decode_array(KindOfPersistentArray);  break;
+    case OpVec:    decode_array(KindOfPersistentVec);    break;
+    case OpDict:   decode_array(KindOfPersistentDict);   break;
+    case OpKeyset: decode_array(KindOfPersistentKeyset); break;
+    case OpInt:
+      dv = make_tv<KindOfInt64>(decode_raw<int64_t>(capture));
+      break;
+    case OpDouble:
+      dv = make_tv<KindOfDouble>(decode_raw<double>(capture));
+      break;
+    case OpString:
+      if (auto str = as.litstrMap[decode_raw<uint32_t>(capture)]) {
+        dv = make_tv<KindOfPersistentString>(str);
+      }
+      break;
+    default:
+      always_assert(false);
+    }
+
+    // Use the variable serializer to construct a serialized version of the
+    // default value, matching the behavior of hphpc.
+    if (dv.m_type != KindOfUninit) {
+      VariableSerializer vs(VariableSerializer::Type::PHPOutput);
+      if (RuntimeOption::EvalHackArrDVArrs && overrides) {
+        vs.setDVOverrides(overrides);
+      }
+      auto str = vs.serialize(tvAsCVarRef(&dv), true);
+      pi.defaultValue = dv;
+      pi.phpCode = makeStaticString(str.get());
+    }
+  }
 }
 
 /*
@@ -1760,7 +2122,7 @@ void parse_func_doccomment(AsmState& as) {
  *            |  ".try_catch" directive-catch
  *            |  ".try" directive-try-catch
  *            |  ".ismemoizewrapper"
- *            |  ".dyncallwrapper" string-literal
+ *            |  ".ismemoizewrapperlsb"
  *            |  ".srcloc" directive-srcloc
  *            |  ".doc" directive-doccomment
  *            |  label-name
@@ -1794,19 +2156,18 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
         as.in.expectWs(';');
         continue;
       }
-      if (word == ".dyncallwrapper") {
-        as.dynCallWrappers.emplace(as.fe, read_litstr(as));
+      if (word == ".ismemoizewrapperlsb") {
+        as.fe->isMemoizeWrapper = true;
+        as.fe->isMemoizeWrapperLSB = true;
         as.in.expectWs(';');
         continue;
       }
       if (word == ".numiters")  { parse_numiters(as); continue; }
       if (word == ".declvars")  { parse_declvars(as); continue; }
       if (word == ".numclsrefslots") { parse_numclsrefslots(as); continue; }
-      if (word == ".try_fault") { parse_fault(as, nestLevel); continue; }
       if (word == ".try_catch") { parse_catch(as, nestLevel); continue; }
       if (word == ".try") { parse_try_catch(as, nestLevel); continue; }
       if (word == ".srcloc") { parse_srcloc(as, nestLevel); continue; }
-      if (word == ".static") { parse_static(as); continue; }
       if (word == ".doc") { parse_func_doccomment(as); continue; }
       as.error("unrecognized directive `" + word + "' in function");
     }
@@ -1835,21 +2196,23 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
 
 void parse_user_attribute(AsmState& as,
                           UserAttributeMap& userAttrs) {
-  auto name = read_litstr(as);
-  as.in.expectWs('(');
+  suppressOOM([&] {
+    auto name = read_litstr(as);
+    as.in.expectWs('(');
 
-  TypedValue tvInit;
-  tvWriteNull(&tvInit); // Don't confuse Variant with uninit data
-  tvAsVariant(&tvInit) = parse_php_serialized(as);
+    auto var = parse_php_serialized(as);
 
-  as.in.expectWs(')');
+    as.in.expectWs(')');
 
-  if (!tvIsArray(&tvInit)) {
-    as.error("user attribute values must be arrays");
-  }
+    if (!var.isArray()) {
+      as.error("user attribute values must be arrays");
+    }
 
-  tvInit = make_tv<KindOfArray>(ArrayData::GetScalarArray(tvInit.m_data.parr));
-  userAttrs[name] = tvInit;
+    userAttrs[name] =
+      RuntimeOption::EvalHackArrDVArrs
+        ? make_tv<KindOfVec>(ArrayData::GetScalarArray(std::move(var)))
+        : make_tv<KindOfArray>(ArrayData::GetScalarArray(std::move(var)));
+  });
 }
 
 /*
@@ -1870,15 +2233,11 @@ Attr parse_attribute_list(AsmState& as, AttrContext ctx,
                           bool* isTop = nullptr) {
   as.in.skipWhitespace();
   int ret = AttrNone;
-  if (ctx == AttrContext::Class || ctx == AttrContext::Func) {
-    if (!SystemLib::s_inited) {
-      ret |= AttrUnique | AttrPersistent | AttrBuiltin;
-    }
-  }
   if (as.in.peek() != '[') return Attr(ret);
   as.in.getc();
 
   std::string word;
+  auto seen_rxl = false;
   for (;;) {
     as.in.skipWhitespace();
     if (as.in.peek() == ']') break;
@@ -1895,6 +2254,13 @@ Attr parse_attribute_list(AsmState& as, AttrContext ctx,
     }
     if (isTop && word == "nontop") {
       *isTop = false;
+      continue;
+    }
+    auto const rxAttrs = rxAttrsFromAttrString(word);
+    if (rxAttrs != 0) {
+      if (seen_rxl) as.error("multiple rx attributes");
+      seen_rxl = true;
+      ret |= rxAttrs;
       continue;
     }
 
@@ -1973,9 +2339,12 @@ void parse_parameter_list(AsmState& as) {
   as.in.getc();
 
   bool seenVariadic = false;
+  bool seenRef = false;
 
   for (;;) {
     FuncEmitter::ParamInfo param;
+    param.byRef = false;
+    param.inout = false;
 
     as.in.skipWhitespace();
     int ch = as.in.peek();
@@ -1984,6 +2353,8 @@ void parse_parameter_list(AsmState& as) {
     if (seenVariadic) {
       as.error("functions can only have one variadic argument");
     }
+
+    parse_attribute_list(as, AttrContext::Parameter, &param.userAttributes);
 
     if (ch == '.') {
       as.in.getc();
@@ -1997,14 +2368,35 @@ void parse_parameter_list(AsmState& as) {
       as.fe->attrs |= AttrVariadicParam;
     }
 
+    if (as.in.tryConsume("inout")) {
+      if (seenVariadic) {
+        as.error("inout parameters cannot be variadic");
+      }
+      if (seenRef) {
+        as.error("functions cannot contain both inout and ref parameters");
+      }
+      param.inout = true;
+      as.fe->attrs |= AttrTakesInOutParams;
+    }
+
     std::tie(param.userType, param.typeConstraint) = parse_type_info(as);
 
     as.in.skipWhitespace();
     ch = as.in.getc();
 
     if (ch == '&') {
+      if (param.inout) {
+        as.error("parameters cannot be marked both inout and ref");
+      }
+      if (as.fe->attrs & AttrTakesInOutParams) {
+        as.error("functions cannot contain both inout and ref parameters");
+      }
+      seenRef = true;
       param.byRef = true;
       ch = as.in.getc();
+      if (param.variadic) {
+        as.fe->attrs |= AttrVariadicByRef;
+      }
     }
     if (ch != '$') {
       as.error("function parameters must have a $ prefix");
@@ -2033,15 +2425,32 @@ void parse_parameter_list(AsmState& as) {
         String str = parse_long_string(as);
         param.phpCode = makeStaticString(str);
         TypedValue tv;
-        tvWriteUninit(&tv);
+        tvWriteUninit(tv);
         if (str.size() == 4) {
           if (!strcasecmp("null", str.data())) {
-            tvWriteNull(&tv);
+            tvWriteNull(tv);
           } else if (!strcasecmp("true", str.data())) {
             tv = make_tv<KindOfBoolean>(true);
           }
         } else if (str.size() == 5 && !strcasecmp("false", str.data())) {
           tv = make_tv<KindOfBoolean>(false);
+        }
+        auto utype = param.typeConstraint.underlyingDataType();
+        if (tv.m_type == KindOfUninit &&
+            (!utype || *utype == KindOfInt64 || *utype == KindOfDouble)) {
+          int64_t ival;
+          double dval;
+          int overflow = 0;
+          auto dt = str.get()->isNumericWithVal(ival, dval, false, &overflow);
+          if (overflow == 0) {
+            if (dt == KindOfInt64) {
+              if (utype == KindOfDouble) tv = make_tv<KindOfDouble>(ival);
+              else tv = make_tv<KindOfInt64>(ival);
+            } else if (dt == KindOfDouble &&
+                       (!utype || utype == KindOfDouble)) {
+              tv = make_tv<KindOfDouble>(dval);
+            }
+          }
         }
         if (tv.m_type != KindOfUninit) {
           param.defaultValue = tv;
@@ -2074,6 +2483,12 @@ void parse_function_flags(AsmState& as) {
       as.fe->isClosureBody = true;
     } else if (flag == "isPairGenerator") {
       as.fe->isPairGenerator = true;
+    } else if (flag == "isRxDisabled") {
+      // this relies on attributes being parsed before flags
+      if (!funcAttrIsAnyRx(as.fe->attrs)) {
+        as.error("isRxDisabled on non-rx func");
+      }
+      as.fe->isRxDisabled = true;
     } else {
       as.error("Unexpected function flag \"" + flag + "\"");
     }
@@ -2084,17 +2499,116 @@ void parse_function_flags(AsmState& as) {
  * line-range : "(" integer "," integer ")"
  *            ;
  */
-std::pair<int,int> parse_line_range(AsmState& as) {
+bool parse_line_range(AsmState& as, int& line0, int& line1) {
   as.in.skipWhitespace();
   if (as.in.peek() != '(') {
-    return std::make_pair(as.in.getLineNumber(), as.in.getLineNumber() + 1);
+    line0 = as.in.getLineNumber();
+    line1 = as.in.getLineNumber() + 1;
+    return false;
   }
   as.in.getc();
-  int line0 = as.in.readint();
+  line0 = as.in.readint();
   as.in.expectWs(',');
-  int line1 = as.in.readint();
+  line1 = as.in.readint();
   as.in.expectWs(')');
-  return std::make_pair(line0, line1);
+  return true;
+}
+
+/*
+ * If we haven't seen a pseudomain and we are compiling systemlib,
+ * add a pseudomain and return true
+ * If we haven't seen a pseudomain and we are not compiling systemlib,
+ * return false so that the caller can give an assembler error
+ * Otherwise, return true
+ */
+bool ensure_pseudomain(AsmState& as) {
+  if (!as.emittedPseudoMain) {
+    if (!SystemLib::s_inited) {
+      /*
+       * The SystemLib::s_hhas_unit is required to be merge-only,
+       * and we create the source by concatenating separate .hhas files
+       * Rather than choosing one to have the .main directive, we just
+       * generate a trivial pseudoMain automatically.
+       */
+      as.ue->addTrivialPseudoMain();
+      as.emittedPseudoMain = true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+static StaticString s_native("__Native");
+
+MaybeDataType type_constraint_to_data_type(LowStringPtr user_type,
+  const TypeConstraint& tc) {
+    if (auto type = tc.typeName()) {
+      // in type_annotation.cpp this code uses m_typeArgs
+      // as indicator that type can represent one of collection types
+      // when we extract data from the constraint we know if type is one of
+      // collection types but we don't have direct way to figure out if
+      // type used to have type arguments - do it indirectly by checking
+      // if name of user type contains '<'
+      auto has_type_args =
+        user_type && user_type->slice().str().find('<') != std::string::npos;
+      return get_datatype(
+        type->toCppString(),
+        has_type_args,
+        false, // no syntactic functions in type annotations
+        false, // no xhp type annotation
+        false, // no tuples in type annotation
+        tc.isNullable(),
+        tc.isSoft());
+    }
+    return folly::none;
+}
+
+static const StaticString
+  s_AllowStatic("__AllowStatic");
+
+
+/*
+ * Checks whether the current function is native by looking at the user
+ * attribute map and sets the isNative flag accoringly
+ * If the give function is op code implementation, then isNative is not set
+ */
+void check_native(AsmState& as, bool is_construct_or_destruct) {
+  if (as.fe->userAttributes.count(s_native.get())) {
+    as.fe->hniReturnType = is_construct_or_destruct
+      ? KindOfNull
+      : type_constraint_to_data_type(as.fe->retUserType,
+        as.fe->retTypeConstraint);
+
+    as.fe->isNative =
+      !(as.fe->parseNativeAttributes(as.fe->attrs) & Native::AttrOpCodeImpl);
+
+    if (as.fe->isNative) {
+      auto info = as.fe->getNativeInfo();
+      if (!info) {
+        if (SystemLib::s_inited) {
+          // non-builtin native functions must have a valid binding
+          as.error("No NativeFunctionInfo for function {}",
+                   as.fe->nativeFullname());
+        } else {
+          // Allow builtins to have mising NativeFunctionInfo, to support
+          // conditional compilation. Calling such a function will Fatal.
+        }
+      }
+    } else {
+      // was AttrOpCodeImpl
+    }
+
+    // set extra attributes for builtin native functions
+    if (!SystemLib::s_inited) {
+      as.fe->attrs |= AttrBuiltin | AttrSkipFrame | AttrMayUseVV;
+    }
+
+    for (auto& pi : as.fe->params) {
+      pi.builtinType =
+        type_constraint_to_data_type(pi.userType, pi.typeConstraint);
+    }
+  }
 }
 
 /*
@@ -2103,7 +2617,7 @@ std::pair<int,int> parse_line_range(AsmState& as) {
  *                    ;
  */
 void parse_function(AsmState& as) {
-  if (!as.emittedPseudoMain) {
+  if (!ensure_pseudomain(as)) {
     as.error(".function blocks must all follow the .main block");
   }
 
@@ -2114,9 +2628,23 @@ void parse_function(AsmState& as) {
   UserAttributeMap userAttrs;
   Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs, &isTop);
 
+  if (!SystemLib::s_inited) {
+    attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
+  }
+
+  // Be conservative by default. HHBBC can clear it where appropriate.
+  attrs |= AttrMayUseVV;
+
+  if(!isTop && as.emittedTopLevelFunc) {
+    as.error("All top level functions must be defined after any "
+             "non-top functions");
+  }
+
+  as.emittedTopLevelFunc |= isTop;
+
   int line0;
   int line1;
-  std::tie(line0, line1) = parse_line_range(as);
+  parse_line_range(as, line0, line1);
 
   auto typeInfo = parse_type_info(as);
   std::string name;
@@ -2130,7 +2658,10 @@ void parse_function(AsmState& as) {
   as.fe->userAttributes = userAttrs;
 
   parse_parameter_list(as);
+  // parse_function_flabs relies on as.fe already having valid attrs
   parse_function_flags(as);
+
+  check_native(as, false);
 
   as.in.expectWs('{');
 
@@ -2149,9 +2680,17 @@ void parse_method(AsmState& as) {
   UserAttributeMap userAttrs;
   Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
 
+  if (!SystemLib::s_inited) {
+    attrs |= AttrBuiltin;
+
+    if (!(attrs & AttrStatic) && !userAttrs.count(s_AllowStatic.get())) {
+      attrs |= AttrRequiresThis;
+    }
+  }
+
   int line0;
   int line1;
-  std::tie(line0, line1) = parse_line_range(as);
+  parse_line_range(as, line0, line1);
 
   auto typeInfo = parse_type_info(as);
   std::string name;
@@ -2159,7 +2698,12 @@ void parse_method(AsmState& as) {
     as.error(".method requires a method name");
   }
 
-  as.fe = as.ue->newMethodEmitter(makeStaticString(name), as.pce);
+  auto const sname = makeStaticString(name);
+  if (as.pce->hasMethod(sname)) {
+    as.error("duplicate method name " + sname->toCppString());
+  }
+
+  as.fe = as.ue->newMethodEmitter(sname, as.pce);
   as.pce->addMethod(as.fe);
   as.fe->init(line0, line1,
               as.ue->bcPos(), attrs, false, 0);
@@ -2167,7 +2711,10 @@ void parse_method(AsmState& as) {
   as.fe->userAttributes = userAttrs;
 
   parse_parameter_list(as);
+  // parse_function_flabs relies on as.fe already having valid attrs
   parse_function_flags(as);
+
+  check_native(as, name == "__construct" || name == "__destruct");
 
   as.in.expectWs('{');
 
@@ -2185,7 +2732,7 @@ TypedValue parse_member_tv_initializer(AsmState& as) {
   as.in.skipWhitespace();
 
   TypedValue tvInit;
-  tvWriteNull(&tvInit); // Don't confuse Variant with uninit data
+  tvWriteNull(tvInit); // Don't confuse Variant with uninit data
 
   int what = as.in.getc();
   if (what == '=') {
@@ -2198,32 +2745,20 @@ TypedValue parse_member_tv_initializer(AsmState& as) {
                  "const/property initializer");
       }
       as.in.expectWs(';');
-      tvWriteUninit(&tvInit);
+      tvWriteUninit(tvInit);
       return tvInit;
     }
 
-    tvAsVariant(&tvInit) = parse_php_serialized(as);
-    if (isStringType(tvInit.m_type)) {
-      tvInit.m_data.pstr = makeStaticString(tvInit.m_data.pstr);
-      tvInit.m_type = KindOfPersistentString;
-      as.ue->mergeLitstr(tvInit.m_data.pstr);
-    } else if (isArrayType(tvInit.m_type)) {
-      tvInit.m_data.parr = ArrayData::GetScalarArray(tvInit.m_data.parr);
-      tvInit.m_type = KindOfPersistentArray;
-    } else if (isVecType(tvInit.m_type)) {
-      tvInit.m_data.parr = ArrayData::GetScalarArray(tvInit.m_data.parr);
-      tvInit.m_type = KindOfPersistentVec;
-    } else if (isDictType(tvInit.m_type)) {
-      tvInit.m_data.parr = ArrayData::GetScalarArray(tvInit.m_data.parr);
-      tvInit.m_type = KindOfPersistentDict;
-    } else if (isKeysetType(tvInit.m_type)) {
-      tvInit.m_data.parr = ArrayData::GetScalarArray(tvInit.m_data.parr);
-      tvInit.m_type = KindOfPersistentKeyset;
-    } else if (tvInit.m_type == KindOfObject) {
-      as.error("property initializer can't be an object");
-    } else if (tvInit.m_type == KindOfResource) {
-      as.error("property initializer can't be a resource");
-    }
+    suppressOOM([&] {
+      tvAsVariant(&tvInit) = parse_php_serialized(as);
+      if (tvInit.m_type == KindOfObject) {
+        as.error("property initializer can't be an object");
+      } else if (tvInit.m_type == KindOfResource) {
+        as.error("property initializer can't be a resource");
+      } else {
+        tvAsVariant(&tvInit).setEvalScalar();
+      }
+    });
     as.in.expectWs(';');
   } else if (what == ';') {
     // already null
@@ -2234,6 +2769,41 @@ TypedValue parse_member_tv_initializer(AsmState& as) {
   return tvInit;
 }
 
+template<class EmitterType, class AdderType>
+void parse_prop_or_field_impl(AsmState& as,
+                              EmitterType* AsmState::* em,
+                              AdderType EmitterType::* add) {
+  as.in.skipWhitespace();
+
+  UserAttributeMap userAttributes;
+  Attr attrs = parse_attribute_list(as, AttrContext::Prop, &userAttributes);
+
+  auto const heredoc = makeStaticString(parse_maybe_long_string(as));
+
+  const StringData* userTy;
+  TypeConstraint typeConstraint;
+  std::tie(userTy, typeConstraint) = parse_type_info(as, false);
+  auto const userTyStr = userTy ? userTy : staticEmptyString();
+
+  std::string name;
+  as.in.skipSpaceTab();
+  as.in.consumePred(!boost::is_any_of(" \t\r\n#;="),
+                    std::back_inserter(name));
+  if (name.empty()) {
+    as.error("expected name for property or field");
+  }
+
+  TypedValue tvInit = parse_member_tv_initializer(as);
+  ((as.*em)->*add)(makeStaticString(name),
+                      attrs,
+                      userTyStr,
+                      typeConstraint,
+                      heredoc,
+                      &tvInit,
+                      RepoAuthType{},
+                      userAttributes);
+}
+
 /*
  * directive-property : attribute-list maybe-long-string-literal type-info
  *                      identifier member-tv-initializer
@@ -2242,27 +2812,13 @@ TypedValue parse_member_tv_initializer(AsmState& as) {
  * Define a property with an associated type and heredoc.
  */
 void parse_property(AsmState& as) {
-  as.in.skipWhitespace();
-
-  Attr attrs = parse_attribute_list(as, AttrContext::Prop);
-
-  auto const heredoc = makeStaticString(parse_maybe_long_string(as));
-  auto const userTy = parse_type_info(as, false).first;
-  auto const userTyStr = userTy ? userTy : staticEmptyString();
-
-  std::string name;
-  if (!as.in.readword(name)) {
-    as.error("expected name for property");
-  }
-
-  TypedValue tvInit = parse_member_tv_initializer(as);
-  as.pce->addProperty(makeStaticString(name),
-                      attrs,
-                      userTyStr,
-                      heredoc,
-                      &tvInit,
-                      RepoAuthType{});
+  parse_prop_or_field_impl(as, &AsmState::pce, &PreClassEmitter::addProperty);
 }
+
+void parse_record_field(AsmState& as) {
+  parse_prop_or_field_impl(as, &AsmState::re, &RecordEmitter::addField);
+}
+
 
 /*
  * const-flags     : isType
@@ -2302,21 +2858,10 @@ void parse_constant(AsmState& as) {
  * directive-default-ctor : ';'
  *                        ;
  *
- * Creates an 86ctor stub for the class.
+ * No-op, for backward compat
  */
 void parse_default_ctor(AsmState& as) {
-  assert(!as.fe && as.pce);
-
-  as.fe = as.ue->newMethodEmitter(
-    makeStaticString("86ctor"), as.pce);
-  as.pce->addMethod(as.fe);
-  as.fe->init(as.in.getLineNumber(), as.in.getLineNumber(),
-              as.ue->bcPos(), AttrPublic, true, 0);
-  as.ue->emitOp(OpNull);
-  as.ue->emitOp(OpRetC);
-  as.fe->maxStackCells = 1;
-  as.finishFunction();
-
+  assertx(!as.fe && as.pce);
   as.in.expectWs(';');
 }
 
@@ -2373,6 +2918,9 @@ void parse_use(AsmState& as) {
     }
 
     if (as.in.tryConsume("as")) {
+      bool strict = as.in.tryConsume("strict");
+      bool async = as.in.tryConsume("async");
+
       Attr attrs = parse_attribute_list(as, AttrContext::TraitImport);
       std::string alias;
       if (!as.in.readword(alias)) {
@@ -2388,7 +2936,9 @@ void parse_use(AsmState& as) {
         makeStaticString(traitName),
         makeStaticString(identifier),
         makeStaticString(alias),
-        attrs));
+        attrs,
+        strict,
+        async));
     } else if (as.in.tryConsume("insteadof")) {
       if (traitName.empty()) {
         as.error("Must specify TraitName::name when using a trait insteadof");
@@ -2472,7 +3022,7 @@ void parse_cls_doccomment(AsmState& as) {
   auto const doc = parse_long_string(as);
   as.in.expectWs(';');
 
-  as.pce->setDocComment(makeStaticString(doc));
+  as.pce->setDocComment(makeDocComment(doc));
 }
 
 /*
@@ -2490,7 +3040,7 @@ void parse_cls_doccomment(AsmState& as) {
  *                 ;
  */
 void parse_class_body(AsmState& as) {
-  if (!as.emittedPseudoMain) {
+  if (!ensure_pseudomain(as)) {
     as.error(".class blocks must all follow the .main block");
   }
 
@@ -2506,6 +3056,28 @@ void parse_class_body(AsmState& as) {
     if (directive == ".doc")          { parse_cls_doccomment(as); continue; }
 
     as.error("unrecognized directive `" + directive + "' in class");
+  }
+  as.in.expect('}');
+}
+
+/*
+ * record-body : record-body-line* '}'
+ *             ;
+ *
+ * record-body-line : ".property"  directive-property
+ *                  ;
+ */
+void parse_record_body(AsmState& as) {
+  if (!ensure_pseudomain(as)) {
+    as.error(".record blocks must all follow the .main block");
+  }
+
+  std::string directive;
+  while (as.in.readword(directive)) {
+    if (directive == ".property") { parse_record_field(as); continue; }
+
+    as.error(folly::to<std::string>("unrecognized directive `",
+                                    directive, "` in record"));
   }
   as.in.expect('}');
 }
@@ -2557,14 +3129,27 @@ void parse_class(AsmState& as) {
 
   UserAttributeMap userAttrs;
   Attr attrs = parse_attribute_list(as, AttrContext::Class, &userAttrs, &isTop);
+  if (!SystemLib::s_inited) {
+    attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
+  }
+
   std::string name;
   if (!as.in.readname(name)) {
     as.error(".class must have a name");
   }
+  if (PreClassEmitter::IsAnonymousClassName(name)) {
+    // assign unique numbers to anonymous classes
+    // they must not be pre-numbered in the hhas
+    auto p = name.find(';');
+    if (p != std::string::npos) {
+      as.error("anonymous class and closure names may not contain ids in hhas");
+    }
+    name = HPHP::NewAnonymousClassName(name);
+  }
 
   int line0;
   int line1;
-  std::tie(line0, line1) = parse_line_range(as);
+  parse_line_range(as, line0, line1);
 
   std::string parentName;
   if (as.in.tryConsume("extends")) {
@@ -2609,6 +3194,47 @@ void parse_class(AsmState& as) {
 }
 
 /*
+ * directive-record : identifier ?line-range
+ *                    '{' record-body
+ *                  ;
+ */
+void parse_record(AsmState& as) {
+  if (!RuntimeOption::EvalHackRecords) {
+    as.error("Records not supported");
+  }
+
+  as.in.skipWhitespace();
+
+  bool isTop = true;
+
+  UserAttributeMap userAttrs;
+  Attr attrs = parse_attribute_list(as, AttrContext::Class, &userAttrs, &isTop);
+  if (!SystemLib::s_inited) {
+    attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
+  }
+
+  std::string name;
+  if (!as.in.readname(name)) {
+    as.error(".record must have a name");
+  }
+
+  int line0;
+  int line1;
+  parse_line_range(as, line0, line1);
+
+  as.re = as.ue->newBareRecordEmitter(name);
+  as.re->init(line0,
+              line1,
+              attrs,
+              staticEmptyString());
+
+  as.in.expectWs('{');
+  parse_record_body(as);
+
+  as.finishRecord();
+}
+
+/*
  * directive-filepath : quoted-string-literal ';'
  *                    ;
  */
@@ -2624,23 +3250,23 @@ void parse_filepath(AsmState& as) {
  */
 void parse_main(AsmState& as) {
   if (as.emittedPseudoMain) {
-    if (!SystemLib::s_inited) {
-      as.error(".main found in systemlib");
-    } else {
-      as.error("Multiple .main directives found");
-    }
+    as.error("Multiple .main directives found");
   }
 
   int line0;
   int line1;
-  std::tie(line0, line1) = parse_line_range(as);
+  bool fromSrcLoc = parse_line_range(as, line0, line1);
 
   as.in.expectWs('{');
 
   as.ue->initMain(line0, line1);
   as.fe = as.ue->getMain();
   as.emittedPseudoMain = true;
-  as.srcLoc = Location::Range{-1,-1,-1,-1};
+  if (fromSrcLoc) {
+    as.srcLoc = Location::Range{line0,0,line1,0};
+  } else {
+    as.srcLoc = Location::Range{-1,-1,-1,-1};
+  }
   parse_function_body(as);
 }
 
@@ -2659,14 +3285,20 @@ void parse_adata(AsmState& as) {
   }
 
   as.in.expectWs('=');
-  Variant var = parse_php_serialized(as);
-  if (!var.isArray()) {
-    as.error(".adata only supports serialized arrays");
-  }
-  Array arr(var.toArray());
-  ArrayData* data = ArrayData::GetScalarArray(arr.get());
-  as.ue->mergeArray(data);
-  as.adataMap[dataLabel] = data;
+
+  suppressOOM([&] {
+    VariableSerializer::DVOverrides overrides;
+    auto var = parse_php_serialized(
+      as,
+      RuntimeOption::EvalHackArrDVArrs ? &overrides : nullptr
+    );
+    if (!var.isArray()) {
+      as.error(".adata only supports serialized arrays");
+    }
+    auto const data = ArrayData::GetScalarArray(std::move(var));
+    as.ue->mergeArray(data);
+    as.adataMap[dataLabel] = std::make_pair(data, std::move(overrides));
+  });
 
   as.in.expectWs(';');
 }
@@ -2687,7 +3319,11 @@ void parse_adata(AsmState& as) {
 void parse_alias(AsmState& as) {
   as.in.skipWhitespace();
 
-  Attr attrs = parse_attribute_list(as, AttrContext::Alias);
+  TypeAlias record;
+  Attr attrs = parse_attribute_list(as, AttrContext::Alias, &record.userAttrs);
+  if (!SystemLib::s_inited) {
+    attrs |= AttrPersistent;
+  }
   std::string name;
   if (!as.in.readname(name)) {
     as.error(".alias must have a name");
@@ -2702,27 +3338,56 @@ void parse_alias(AsmState& as) {
   }
 
   const StringData* typeName = ty.typeName();
-  if (!typeName) typeName = makeStaticString("");
+  if (!typeName) typeName = staticEmptyString();
   const StringData* sname = makeStaticString(name);
   // Merge to ensure namedentity creation, according to
   // emitTypedef in emitter.cpp
   as.ue->mergeLitstr(sname);
   as.ue->mergeLitstr(typeName);
 
-  TypeAlias record;
   record.name = sname;
   record.value = typeName;
   record.type = typeName->empty() ? AnnotType::Mixed : ty.type();
   record.nullable = (ty.flags() & TypeConstraint::Nullable) != 0;
   record.attrs = attrs;
   if (ts.isInitialized()) {
-    record.typeStructure = ArrNR(ArrayData::GetScalarArray(ts.toArray().get()));
+    record.typeStructure = ArrNR(ArrayData::GetScalarArray(std::move(ts)));
   }
-  as.ue->addTypeAlias(record);
+  auto aliasId = as.ue->addTypeAlias(record);
+  as.ue->pushMergeableTypeAlias(Unit::MergeKind::TypeAlias, aliasId);
 
   as.in.expectWs(';');
 }
 
+/*
+ * directive-hh-file : '1' ';'
+ *                   | '0' ';'
+ *                   ;
+ */
+void parse_hh_file(AsmState& as) {
+  as.in.skipWhitespace();
+  std::string word;
+  if (!as.in.readword(word)) {
+    as.error(".hh_file must have a value");
+  }
+  as.ue->m_isHHFile = word == "1";
+
+  if (!as.ue->m_isHHFile && word != "0") {
+    as.error(".hh_file must be either 1 or 0");
+  }
+
+  if (as.ue->m_isHHFile || RuntimeOption::EnableHipHopSyntax) {
+    as.ue->m_useStrictTypes = true;
+  }
+
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-strict : '1' ';'
+ *                  | '0' ';'
+ *                  ;
+ */
 void parse_strict(AsmState& as) {
   as.in.skipWhitespace();
   std::string word;
@@ -2733,11 +3398,108 @@ void parse_strict(AsmState& as) {
     as.error("Cannot set .strict without PHP7 ScalarTypes");
   }
 
-  as.ue->m_useStrictTypes = as.ue->m_useStrictTypesForBuiltins = word == "1";
+  as.ue->m_useStrictTypesForBuiltins = word == "1";
 
-  if (!as.ue->m_useStrictTypes && word != "0") {
+  if (!as.ue->m_useStrictTypesForBuiltins && word != "0") {
     as.error("Strict types must be either 1 or 0");
   }
+
+  if (as.ue->m_useStrictTypesForBuiltins
+    || as.ue->m_isHHFile
+    || RuntimeOption::EnableHipHopSyntax
+  ) {
+    as.ue->m_useStrictTypes = true;
+  }
+
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-symbols : '{' identifier identifier* '}'
+ */
+void parse_symbol_refs(AsmState& as, SymbolRef symbol_kind) {
+  as.in.expectWs('{');
+
+  if (as.wants_symbol_refs) {
+    while (true) {
+      as.in.skipWhitespace();
+      std::string symbol;
+      as.in.consumePred(!boost::is_any_of(" \t\r\n#}"),
+                        std::back_inserter(symbol));
+      if (symbol.empty()) {
+        break;
+      }
+      as.symbol_refs[symbol_kind].push_back(symbol);
+    }
+  } else {
+    while (as.in.peek() != '}') {
+      as.in.skipWhitespace();
+      if (!as.in.skipPred(!boost::is_any_of("#}"))) break;
+    }
+  }
+
+  as.in.expect('}');
+}
+
+/*
+ * directive-filepaths : '{' string string* '}'
+ */
+void parse_includes(AsmState& as) {
+  parse_symbol_refs(as, SymbolRef::Include);
+}
+
+void parse_constant_refs(AsmState& as) {
+  parse_symbol_refs(as, SymbolRef::Constant);
+}
+
+void parse_function_refs(AsmState& as) {
+  parse_symbol_refs(as, SymbolRef::Function);
+}
+
+void parse_class_refs(AsmState& as) {
+  parse_symbol_refs(as, SymbolRef::Class);
+}
+
+/*
+ * directive-metadata : identifier = identifier ';'
+ *                    | identifier = quoted-string-literal ';'
+ *                    | identifier = long-string-literal ';'
+ *                    ;
+ */
+void parse_metadata(AsmState& as) {
+  std::string key;
+  if (as.in.readname(key)) {
+    as.in.expectWs('=');
+    as.in.skipWhitespace();
+    auto const value = [&] () -> const StringData* {
+      auto ret = parse_maybe_long_string(as);
+      if (!ret.empty()) return makeStaticString(ret);
+      std::string tmp;
+      if (as.in.readQuotedStr(tmp) || as.in.readword(tmp)) {
+        return makeStaticString(tmp);
+      }
+      return nullptr;
+    }();
+    if (value) {
+      as.in.expect(';');
+      as.ue->m_metaData.emplace(
+        makeStaticString(key),
+        make_tv<KindOfPersistentString>(value)
+      );
+      return;
+    }
+  }
+  as.error(".metadata expects a key = value pair");
+}
+
+/*
+ * directive-file-attributes : attribute-list ';'
+ *                           ;
+ */
+void parse_file_attributes(AsmState& as) {
+  as.in.skipWhitespace();
+
+  parse_attribute_list(as, AttrContext::Func, &(as.ue->m_fileAttributes));
 
   as.in.expectWs(';');
 }
@@ -2746,46 +3508,62 @@ void parse_strict(AsmState& as) {
  * asm-file : asm-tld* <EOF>
  *          ;
  *
- * asm-tld :    ".filepath"    directive-filepath
- *         |    ".main"        directive-main
- *         |    ".function"    directive-function
- *         |    ".adata"       directive-adata
- *         |    ".class"       directive-class
- *         |    ".alias"       directive-alias
- *         |    ".strict"      directive-strict
+ * asm-tld :    ".filepath"         directive-filepath
+ *         |    ".main"             directive-main
+ *         |    ".function"         directive-function
+ *         |    ".adata"            directive-adata
+ *         |    ".class"            directive-class
+ *         |    ".alias"            directive-alias
+ *         |    ".strict"           directive-strict
+ *         |    ".hh_file"          directive-hh-file
+ *         |    ".includes"         directive-filepaths
+ *         |    ".constant_refs"    directive-symbols
+ *         |    ".function_refs"    directive-symbols
+ *         |    ".class_refs"       directive-symbols
+ *         |    ".metadata"         directive-meta-data
+ *         |    ".file_attributes"  directive-file-attributes
  *         ;
  */
 void parse(AsmState& as) {
   as.in.skipWhitespace();
   std::string directive;
-  if (!SystemLib::s_inited) {
-    /*
-     * The SystemLib::s_hhas_unit is required to be merge-only,
-     * and we create the source by concatenating separate .hhas files
-     * Rather than choosing one to have the .main directive, we just
-     * generate a trivial pseudoMain automatically.
-     */
-    as.ue->addTrivialPseudoMain();
-    as.emittedPseudoMain = true;
-  }
 
   while (as.in.readword(directive)) {
-    if (directive == ".filepath")    { parse_filepath(as); continue; }
-    if (directive == ".main")        { parse_main(as);     continue; }
-    if (directive == ".function")    { parse_function(as); continue; }
-    if (directive == ".adata")       { parse_adata(as);    continue; }
-    if (directive == ".class")       { parse_class(as);    continue; }
-    if (directive == ".alias")       { parse_alias(as);    continue; }
-    if (directive == ".strict")      { parse_strict(as);   continue; }
+    if (directive == ".filepath")      { parse_filepath(as)      ; continue; }
+    if (directive == ".main")          { parse_main(as)          ; continue; }
+    if (directive == ".function")      { parse_function(as)      ; continue; }
+    if (directive == ".adata")         { parse_adata(as)         ; continue; }
+    if (directive == ".class")         { parse_class(as)         ; continue; }
+    if (directive == ".record")        { parse_record(as)        ; continue; }
+    if (directive == ".alias")         { parse_alias(as)         ; continue; }
+    if (directive == ".strict")        { parse_strict(as)        ; continue; }
+    if (directive == ".hh_file")       { parse_hh_file(as)       ; continue; }
+    if (directive == ".includes")      { parse_includes(as)      ; continue; }
+    if (directive == ".constant_refs") { parse_constant_refs(as) ; continue; }
+    if (directive == ".function_refs") { parse_function_refs(as) ; continue; }
+    if (directive == ".class_refs")    { parse_class_refs(as)    ; continue; }
+    if (directive == ".metadata")      { parse_metadata(as)      ; continue; }
+    if (directive == ".file_attributes") { parse_file_attributes(as); continue;}
 
     as.error("unrecognized top-level directive `" + directive + "'");
   }
 
-  if (!as.emittedPseudoMain) {
+  if (!ensure_pseudomain(as)) {
     as.error("no .main found in hhas unit");
   }
 
-  as.resolveDynCallWrappers();
+  if (as.symbol_refs.size()) {
+    for (auto& ent : as.symbol_refs) {
+      as.ue->m_symbol_refs.push_back(std::move(ent));
+    }
+  }
+
+  if (RuntimeOption::EvalAssemblerFoldDefaultValues) {
+    for (auto& fe : as.ue->fevec()) fixup_default_values(as, fe.get());
+    for (size_t n = 0; n < as.ue->numPreClasses(); ++n) {
+      for (auto fe : as.ue->pce(n)->methods()) fixup_default_values(as, fe);
+    }
+  }
 }
 
 }
@@ -2796,10 +3574,15 @@ std::unique_ptr<UnitEmitter> assemble_string(
   const char* code,
   int codeLen,
   const char* filename,
-  const MD5& md5,
-  bool swallowErrors
+  const SHA1& sha1,
+  const Native::FuncTable& nativeFuncs,
+  bool swallowErrors,
+  bool wantsSymbolRefs
 ) {
-  auto ue = std::make_unique<UnitEmitter>(md5);
+  auto ue = std::make_unique<UnitEmitter>(sha1, nativeFuncs, false);
+  if (!SystemLib::s_inited) {
+    ue->m_mergeOnly = true;
+  }
   StringData* sd = makeStaticString(filename);
   ue->m_filepath = sd;
   ue->m_useStrictTypes = RuntimeOption::EnableHipHopSyntax ||
@@ -2808,49 +3591,32 @@ std::unique_ptr<UnitEmitter> assemble_string(
   try {
     auto const mode = std::istringstream::binary | std::istringstream::in;
     std::istringstream instr(std::string(code, codeLen), mode);
-    AsmState as(instr);
+    AsmState as(instr, wantsSymbolRefs);
     as.ue = ue.get();
     parse(as);
-  } catch (const std::exception& e) {
+    if (ue->m_isHHFile) {
+      ue->m_useStrictTypes = true;
+    }
+  } catch (const FatalErrorException& e) {
     if (!swallowErrors) throw;
-    ue = createFatalUnit(sd, md5, FatalOp::Runtime, makeStaticString(e.what()));
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime,
+                         makeStaticString(e.what()));
+  } catch (const AssemblerError& e) {
+    if (!swallowErrors) throw;
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, makeStaticString(e.what()));
+  } catch (const AssemblerFatal& e) {
+    if (!swallowErrors) throw;
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, makeStaticString(e.what()));
+  } catch (const std::exception& e) {
+    if (!swallowErrors) {
+      // assembler should throw only AssemblerErrors and FatalErrorExceptions
+      throw AssemblerError(folly::sformat("AssemblerError: {}", e.what()));
+    }
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime,
+                         makeStaticString(e.what()));
   }
 
   return ue;
-}
-
-AsmResult assemble_expression(UnitEmitter& ue, FuncEmitter* fe,
-                         int incomingStackDepth,
-                         const std::string& expr) {
-  auto const mode = std::istringstream::binary | std::istringstream::in;
-  std::stringstream sstr(expr + '}', mode);
-  AsmState as(sstr);
-  as.ue = &ue;
-  as.fe = fe;
-  as.initStackDepth.adjust(as, incomingStackDepth);
-  parse_function_body(as, 1);
-  as.finishSection();
-  if (as.maxUnnamed >= 0) {
-    as.error("Unnamed locals are not allowed in inline assembly");
-  }
-
-  if (!as.currentStackDepth) return AsmResult::Unreachable;
-
-  // If we fall off the end of the inline assembly, we're expected to
-  // leave a single value on the stack, or leave the stack unchanged.
-  if (!as.currentStackDepth->baseValue) {
-    as.error("Unknown stack offset on exit from inline assembly");
-  }
-  auto curStackDepth = as.currentStackDepth->absoluteDepth();
-  if (curStackDepth == incomingStackDepth + 1) {
-    return AsmResult::ValuePushed;
-  }
-  if (curStackDepth != incomingStackDepth) {
-    as.error("Inline assembly expressions should leave the stack unchanged, "
-             "or push exactly one cell onto the stack.");
-  }
-
-  return AsmResult::NoResult;
 }
 
 //////////////////////////////////////////////////////////////////////

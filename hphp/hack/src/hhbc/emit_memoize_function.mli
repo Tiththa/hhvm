@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -14,6 +13,8 @@ val emit_wrapper_function :
   original_id: Hhbc_id.Function.t ->
   (* Renamed identifier, used for the wrapped function *)
   renamed_id: Hhbc_id.Function.t ->
+  is_method: bool ->
+  deprecation_info: (Typed_value.t list) option ->
   (* Function definition in AST *)
   Ast.fun_ ->
   Hhas_function.t

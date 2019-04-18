@@ -13,21 +13,20 @@ open ServerEnv
 
 module Test = Integration_test_base
 
-let foo_contents = "<?hh
-class Foo {
-  public function f() {}
-  public final function g() {}
+let foo_contents = "<?hh // partial
+interface I {}
+class Foo extends I {
+
 }
 "
 
-let baz_contents = "<?hh
+let baz_contents = "<?hh // partial
 class Baz extends Foo {
-  <<__Override>>
-  public function g() {}
+
 }
 "
 
-let qux_contents = "<?hh
+let qux_contents = "<?hh // partial
 class Qux {
 
 }
@@ -45,10 +44,10 @@ let () =
   if not loop_output.did_read_disk_changes then
     Test.fail "Expected the server to process disk updates";
   let expected_error =
-    "File \"/baz.php\", line 4, characters 19-19:\n" ^
-    "You cannot override this method (Typing[4070])\n" ^
-    "File \"/foo.php\", line 4, characters 25-25:\n" ^
-    "It was declared as final\n" in
+    "File \"/foo.php\", line 3, characters 7-9:\n\
+     a class cannot extend an interface (Typing[4115])\n\
+     File \"/foo.php\", line 3, characters 19-19:\n\
+     This is an interface" in
   Test.assertSingleError expected_error (Errors.get_error_list env.errorl);
 
   (* Now let's edit a wholly unrelated file *)
@@ -59,6 +58,7 @@ let () =
   }) in
   if not loop_output.did_read_disk_changes then
     Test.fail "Expected the server to process disk updates";
-  let path = Relative_path.create Relative_path.Root "/baz.php" in
-  if Relative_path.Set.mem env.failed_decl path then ()
-    else Test.fail "Baz should still have failed declaration"
+  let path = Relative_path.create Relative_path.Root "/foo.php" in
+  let failed_decl = Errors.(get_failed_files env.errorl Decl) in
+  if Relative_path.Set.mem failed_decl path then ()
+    else Test.fail "Foo should still have failed declaration"

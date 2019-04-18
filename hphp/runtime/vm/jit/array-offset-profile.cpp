@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <sstream>
 
 namespace HPHP { namespace jit {
 
@@ -102,25 +103,11 @@ void ArrayOffsetProfile::update(const ArrayData* ad, int64_t i) {
   update(pos, 1);
 }
 
-void ArrayOffsetProfile::update(const ArrayData* ad,
-                                const StringData* sd,
-                                bool checkForInt) {
-  auto const pos = [&]() -> int32_t {
-    if (ad->hasMixedLayout()) {
-      auto const a = MixedArray::asMixed(ad);
-
-      int64_t i;
-      if (checkForInt && ad->convertKey(sd, i, false)) {
-        return !RuntimeOption::EvalHackArrCompatNotices ?
-          a->find(i, hash_int64(i)) : -1;
-      }
-      return a->find(sd, sd->hash());
-    } else if (ad->isKeyset()) {
-      return SetArray::asSet(ad)->find(sd, sd->hash());
-    } else {
-      return -1;
-    }
-  }();
+void ArrayOffsetProfile::update(const ArrayData* ad, const StringData* sd) {
+  auto const pos =
+    ad->hasMixedLayout() ? MixedArray::asMixed(ad)->find(sd, sd->hash()) :
+    ad->isKeyset() ? SetArray::asSet(ad)->find(sd, sd->hash()) :
+    -1;
   update(pos, 1);
 }
 

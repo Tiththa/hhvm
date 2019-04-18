@@ -1,10 +1,10 @@
-<?php
+<?hh // partial
 
 namespace __SystemLib {
 
-/* Special function used by FPushCuf* when its argument
- * is not callable.
+/* Special function used by nullsafe FPushObjMethodD.
  */
+<<__Rx>>
 function __86null() {}
 
 }

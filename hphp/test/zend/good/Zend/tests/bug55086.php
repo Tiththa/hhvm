@@ -20,11 +20,10 @@ namespace N2 {
         }
     }
     $a = new A;
-    echo $a->hello(), PHP_EOL;
-    echo $a->foo(), PHP_EOL;
+    echo $a->hello(), \PHP_EOL;
+    echo $a->foo(), \PHP_EOL;
     try {
     } catch(namespace \Foo $e)
     {
     }
 }
-?>

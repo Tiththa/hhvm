@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 
 function id($x) { return $x; }
@@ -12,8 +12,5 @@ function main() {
 
   $x = $GLOBALS[$name]['foo'];
   $x = $GLOBALS[id($name)]['foo'];
-
-  $x = ($$name)['foo'];
-  $x = (${id('varname')})['foo'];
 }
 main();

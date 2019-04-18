@@ -1,0 +1,6 @@
+Linearization for class \I:
+[\I]
+Linearization for class \T:
+[\T(copy_private_members), \I(consts_only), \I]
+Linearization for class \C:
+[\C, \T(copy_private_members), \I(consts_only), \I]

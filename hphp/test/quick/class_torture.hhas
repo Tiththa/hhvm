@@ -4,43 +4,58 @@
   .declvars $x;
 
   DefCls 0
-  FPushCtorD 1 "A"
+  NewObjD "A"
+  Dup
+  NullUninit
+  NullUninit
   String "foo"
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushCtor 1
+  FCall <> 1 1 "" - "" ""
+  PopC
   PopC
 
   DefCls 0
-  FPushCtorD 1 "B"
+  NewObjD "B"
+  Dup
+  NullUninit
+  NullUninit
   String "foo"
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushCtor 1
+  FCall <> 1 1 "" - "" ""
+  PopC
   PopC
 
   DefCls 0
-  FPushCtorD 1 "C"
+  NewObjD "C"
+  Dup
+  NullUninit
+  NullUninit
   String "foo"
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushCtor 1
+  FCall <> 1 1 "" - "" ""
+  PopC
   PopC
 
   DefCls 0
-  FPushCtorD 1 "E"
+  NewObjD "E"
+  Dup
+  NullUninit
+  NullUninit
   String "foo"
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushCtor 1
+  FCall <> 1 1 "" - "" ""
+  PopC
   PopC
 
   DefCls 0
-  FPushCtorD 1 "G"
+  NewObjD "G"
+  Dup
+  NullUninit
+  NullUninit
   String "foo"
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushCtor 1
+  FCall <> 1 1 "" - "" ""
+  PopC
   PopC
 
   Int 1
@@ -52,10 +67,6 @@
 }
 
 .class A extends A {
-  .method [public no_injection] 86ctor() {
-    Null
-    RetC
-  }
 }
 
 .class B {
@@ -63,10 +74,6 @@
 }
 
 .class C {
-  .method [public abstract no_injection] 86ctor() {
-    Null
-    RetC
-  }
 }
 
 
@@ -82,10 +89,6 @@
 }
 
 .class [abstract] F {
-  .method [public abstract final no_injection] 86ctor() {
-    Null
-    RetC
-  }
 }
 
 .class G extends F{

@@ -20,6 +20,7 @@
 #include "hphp/runtime/base/static-string-table.h"
 
 #include "hphp/runtime/vm/jit/extra-data.h"
+#include "hphp/runtime/vm/jit/guard-constraint.h"
 #include "hphp/runtime/vm/jit/ir-builder.h"
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
@@ -60,14 +61,15 @@ SSATmp* profiledArrayAccess(IRGS& env, SSATmp* arr, SSATmp* key,
   // optimize it away completely.
   if (arr->hasConstVal() && key->hasConstVal()) return generic(key);
 
+  static const StaticString s_DictOffset{"DictOffset"};
+  static const StaticString s_KeysetOffset{"KeysetOffset"};
+  static const StaticString s_MixedArrayOffset{"MixedArrayOffset"};
   auto const profile = TargetProfile<ArrayOffsetProfile> {
     env.context,
     env.irb->curMarker(),
-    makeStaticString(
-      is_dict ? "DictOffset" :
-        is_keyset ? "KeysetOffset" :
-        "MixedArrayOffset"
-    )
+    is_dict ? s_DictOffset.get() :
+    is_keyset ? s_KeysetOffset.get() :
+    s_MixedArrayOffset.get()
   };
 
   if (profile.profiling()) {
@@ -84,7 +86,7 @@ SSATmp* profiledArrayAccess(IRGS& env, SSATmp* arr, SSATmp* key,
   }
 
   if (profile.optimizing()) {
-    auto const data = profile.data(ArrayOffsetProfile::reduce);
+    auto const data = profile.data();
 
     if (auto const pos = data.choose()) {
       return cond(
@@ -94,7 +96,7 @@ SSATmp* profiledArrayAccess(IRGS& env, SSATmp* arr, SSATmp* key,
           if (!is_dict && !is_keyset) {
             env.irb->constrainValue(
               arr,
-              TypeConstraint(DataTypeSpecialized).setWantArrayKind()
+              GuardConstraint(DataTypeSpecialized).setWantArrayKind()
             );
             auto const TMixedArr = Type::Array(ArrayData::kMixedKind);
             marr = gen(env, CheckType, TMixedArr, taken, arr);
@@ -145,8 +147,9 @@ SSATmp* profiledType(IRGS& env, SSATmp* tmp, Finish finish) {
     return tmp;
   }
 
+  static const StaticString s_TypeProfile{"TypeProfile"};
   TargetProfile<TypeProfile> prof(env.context, env.irb->curMarker(),
-                                  makeStaticString("TypeProfile"));
+                                  s_TypeProfile.get());
 
   if (prof.profiling()) {
     gen(env, ProfileType, RDSHandleData{ prof.handle() }, tmp);
@@ -154,7 +157,7 @@ SSATmp* profiledType(IRGS& env, SSATmp* tmp, Finish finish) {
 
   if (!prof.optimizing()) return tmp;
 
-  auto const reducedType = prof.data(TypeProfile::reduce).type;
+  auto const reducedType = prof.data().type;
 
   if (reducedType == TBottom) {
     // We got no samples

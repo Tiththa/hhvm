@@ -29,7 +29,7 @@ class Big {
   }
   function finish() {
     $x = 10;
-    $this->wacky = array(&$x, &$x);
+    $this->wacky = array($x, $x);
     $s = new Small();
     $this->unrelated[] = $s;
     $this->unrelated[] = $s;
@@ -50,4 +50,8 @@ function t() {
   $us = unserialize($s);
   var_dump($us);
 }
+
+<<__EntryPoint>>
+function main_1541() {
 t();
+}

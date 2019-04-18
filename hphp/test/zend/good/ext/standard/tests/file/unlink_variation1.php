@@ -8,7 +8,7 @@
 */
 
 
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 // temp dir name used here
 $dirname = "$file_path/unlink_variation1";
@@ -51,4 +51,3 @@ var_dump( file_exists($filename) );  // expected: false
 var_dump( rmdir($dirname) );
 
 echo "Done\n";
-?>

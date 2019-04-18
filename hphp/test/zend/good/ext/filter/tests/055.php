@@ -1,5 +1,5 @@
 <?php
-$values = Array(
+$values = array(
 	array("01-23-45-67-89-ab", null),
 	array("01-23-45-67-89-ab", array("options" => array("separator" => "-"))),
 	array("01-23-45-67-89-ab", array("options" => array("separator" => "."))),
@@ -20,4 +20,3 @@ foreach ($values as $value) {
 }
 
 echo "Done\n";
-?>

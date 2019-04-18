@@ -6,7 +6,7 @@
 echo "\n*** Testing basic functions of realpath() with files ***\n";
 
 /* creating directories and files */
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 mkdir("$file_path/realpath_basic3/home/test/", 0777, true);
 
 $file_handle1 = fopen("$file_path/realpath_basic3/home/test/realpath_basic3.tmp", "w");
@@ -44,14 +44,12 @@ foreach($filenames as $file) {
 }
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
-$name_prefix = dirname(__FILE__)."/realpath_basic3";
+error_reporting(0);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+$name_prefix = $file_path."/realpath_basic3";
 unlink("$name_prefix/home/test/realpath_basic3.tmp");
 unlink("$name_prefix/home/realpath_basic3.tmp");
 unlink("$name_prefix/realpath_basic3.tmp");
 rmdir("$name_prefix/home/test/");
 rmdir("$name_prefix/home/");
 rmdir("$name_prefix/");
-?>

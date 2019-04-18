@@ -15,7 +15,7 @@ class myHeap extends SplHeap {
 $h = new myHeap;
 
 $in = range(0,10);
-shuffle($in);
+shuffle(&$in);
 foreach ($in as $i) {
     $h->insert($i);
 }
@@ -23,6 +23,4 @@ foreach ($in as $i) {
 foreach ($h as $out) {
     echo $out."\n";
 }
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";

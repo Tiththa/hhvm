@@ -6,7 +6,7 @@ var_dump((array) new stdclass);
 var_dump($h = (array) function () { return 2; });
 var_dump($h[0]());
 
-$i = function () use (&$h) {
+$i = function () use ($h) {
 	return $h;
 };
 
@@ -17,7 +17,6 @@ var_dump($y());
 $items = range(1, 5);
 $func = function(){ return 'just a test'; };
 
-array_splice($items, 0 , 4, $func);
+array_splice(&$items, 0 , 4, $func);
 var_dump($items);
 
-?>

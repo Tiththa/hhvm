@@ -1,10 +1,10 @@
 <?hh // strict
 
-enum IntSubtype : int as int {
+enum IntSubtype: int as int {
   ZERO = 0;
 }
 
-enum StringSubtype : string as string {
+enum StringSubtype: string as string {
   FOO = 'foo';
 }
 
@@ -32,13 +32,9 @@ function immutableMapTest(ImmMap<string, I> $map, StringSubtype $key): void {
   echo $map[$key];
 }
 
-function indexishTest(Indexish<I, string> $indexish, IDerived $key): void {
-  echo $indexish[$key];
-}
-
 function keyedContainerTest(
-  KeyedContainer<I, string> $container,
-  IDerived $key,
+  KeyedContainer<string, string> $container,
+  StringSubtype $key,
 ): void {
   echo $container[$key];
 }

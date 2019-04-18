@@ -26,13 +26,17 @@
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/type-string.h"
+#include "hphp/runtime/vm/as-shared.h"
 #include "hphp/runtime/vm/class.h"
+#include "hphp/runtime/vm/reified-generics.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/reverse-data-map.h"
+#include "hphp/runtime/vm/rx.h"
 #include "hphp/runtime/vm/treadmill.h"
 #include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/runtime/vm/unit.h"
+#include "hphp/runtime/vm/unit-util.h"
 
 #include "hphp/runtime/vm/jit/func-guard.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
@@ -93,17 +97,16 @@ inline int numProloguesForNumParams(int numParams) {
 
 Func::Func(Unit& unit, const StringData* name, Attr attrs)
   : m_name(name)
+  , m_isPreFunc(false)
+  , m_hasPrivateAncestor(false)
+  , m_shouldSampleJit(StructuredLog::coinflip(RuntimeOption::EvalJitSampleRate))
+  , m_hot(false)
+  , m_serialized(false)
+  , m_hasForeignThis(false)
   , m_unit(&unit)
+  , m_shared(nullptr)
   , m_attrs(attrs)
 {
-  m_isPreFunc = false;
-  m_hasPrivateAncestor = false;
-  m_shared = nullptr;
-  m_shouldSampleJit = StructuredLog::coinflip(
-      RuntimeOption::EvalJitSampleRate
-  );
-
- assertx(IMPLIES(accessesCallerFrame(), isBuiltin() && !isMethod()));
 }
 
 Func::~Func() {
@@ -115,7 +118,7 @@ Func::~Func() {
     // and the memory may now be in use by another function.
     jit::clobberFuncGuards(this);
   }
-#ifdef DEBUG
+#ifndef NDEBUG
   validate();
   m_magic = ~m_magic;
 #endif
@@ -128,7 +131,7 @@ void* Func::allocFuncMem(int numParams) {
     sizeof(Func) + numPrologues * sizeof(m_prologueTable[0])
     - sizeof(m_prologueTable);
 
-  return low_malloc_data(funcSize);
+  return low_malloc(funcSize);
 }
 
 void Func::destroy(Func* func) {
@@ -139,7 +142,7 @@ void Func::destroy(Func* func) {
     }
 
     DEBUG_ONLY auto oldVal = s_funcVec.exchange(func->m_funcId, nullptr);
-    assert(oldVal == func);
+    assertx(oldVal == func);
     func->m_funcId = InvalidFuncId;
 
     if (RuntimeOption::EvalEnableReverseDataMap) {
@@ -154,12 +157,12 @@ void Func::destroy(Func* func) {
     }
   }
   func->~Func();
-  low_free_data(func);
+  low_free(func);
 }
 
 void Func::freeClone() {
-  assert(isPreFunc());
-  assert(m_cloned.flag.test_and_set());
+  assertx(isPreFunc());
+  assertx(m_cloned.flag.test_and_set());
 
   if (jit::mcgen::initialized() && RuntimeOption::EvalEnableReusableTC) {
     // Free TC-space associated with func
@@ -170,7 +173,7 @@ void Func::freeClone() {
 
   if (m_funcId != InvalidFuncId) {
     DEBUG_ONLY auto oldVal = s_funcVec.exchange(m_funcId, nullptr);
-    assert(oldVal == this);
+    assertx(oldVal == this);
     m_funcId = InvalidFuncId;
   }
 
@@ -203,7 +206,7 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   }
 
   if (f != this) {
-    f->m_cachedFunc = rds::Link<LowPtr<Func>>{rds::kInvalidHandle};
+    f->m_cachedFunc = rds::Link<LowPtr<Func>, rds::Mode::NonLocal>{};
     f->m_maybeIntercepted = -1;
     f->m_isPreFunc = false;
   }
@@ -211,27 +214,18 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   return f;
 }
 
-void Func::rescope(Class* ctx, Attr attrs) {
+void Func::rescope(Class* ctx) {
   m_cls = ctx;
-  if (attrs != AttrNone) {
-    m_attrs = attrs;
-    assertx(IMPLIES(accessesCallerFrame(), isBuiltin() && !isMethod()));
-  }
   setFullName(numParams());
 }
-
-void Func::rename(const StringData* name) {
-  m_name = name;
-  setFullName(numParams());
-  // load the renamed function
-  Unit::loadFunc(this);
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Initialization.
 
 void Func::init(int numParams) {
+#ifndef NDEBUG
+  m_magic = kMagic;
+#endif
   // For methods, we defer setting the full name until m_cls is initialized
   m_maybeIntercepted = -1;
   if (!preClass()) {
@@ -251,10 +245,7 @@ void Func::init(int numParams) {
      */
     m_attrs = m_attrs | AttrNoInjection;
   }
-#ifdef DEBUG
-  m_magic = kMagic;
-#endif
-  assert(m_name);
+  assertx(m_name);
   initPrologues(numParams);
 }
 
@@ -280,7 +271,7 @@ void Func::initPrologues(int numParams) {
 }
 
 void Func::setFullName(int /*numParams*/) {
-  assert(m_name->isStatic());
+  assertx(m_name->isStatic());
   if (m_cls) {
     m_fullName = makeStaticString(
       std::string(m_cls->name()->data()) + "::" + m_name->data());
@@ -310,7 +301,7 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
   // used
   int qword = numParams / kBitsPerQword;
   int bit   = numParams % kBitsPerQword;
-  assert(!info.isVariadic() || (m_attrs & AttrVariadicParam));
+  assertx(!info.isVariadic() || (m_attrs & AttrVariadicParam));
   uint64_t* refBits = &m_refBitVal;
   // Grow args, if necessary.
   if (qword) {
@@ -328,7 +319,7 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
     *refBits = (m_attrs & AttrVariadicByRef) ? -1ull : 0;
   }
 
-  assert(!(*refBits & (uint64_t(1) << bit)) == !(m_attrs & AttrVariadicByRef));
+  assertx(!(*refBits & (uint64_t(1) << bit)) == !(m_attrs & AttrVariadicByRef));
   *refBits &= ~(1ull << bit);
   *refBits |= uint64_t(ref) << bit;
   pBuilder.push_back(info);
@@ -340,9 +331,9 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
  * is (non)variadic; and the rest of the bits are the number of params.
  */
 void Func::finishedEmittingParams(std::vector<ParamInfo>& fParams) {
-  assert(m_paramCounts == 0);
+  assertx(m_paramCounts == 0);
   if (!fParams.size()) {
-    assert(!m_refBitVal && !shared()->m_refBitPtr);
+    assertx(!m_refBitVal && !shared()->m_refBitPtr);
     m_refBitVal = attrs() & AttrVariadicByRef ? -1uLL : 0uLL;
   }
 
@@ -351,7 +342,7 @@ void Func::finishedEmittingParams(std::vector<ParamInfo>& fParams) {
   if (!(m_attrs & AttrVariadicParam)) {
     m_paramCounts |= 1;
   }
-  assert(numParams() == fParams.size());
+  assertx(numParams() == fParams.size());
 }
 
 bool Func::isMemoizeImplName(const StringData* name) {
@@ -363,16 +354,25 @@ const StringData* Func::genMemoizeImplName(const StringData* origName) {
   return makeStaticString(folly::sformat("{}$memoize_impl", origName->data()));
 }
 
+bool Func::isMethCallerName(const StringData* name) {
+  return (name->size() > 11) && !memcmp(name->data(), "MethCaller$", 11);
+}
+
+size_t Func::methCallerOffset(const StringData* name) {
+  if (isMethCallerName(name)) return 11;
+  return 0;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // FuncId manipulation.
 
 void Func::setNewFuncId() {
-  assert(m_funcId == InvalidFuncId);
+  assertx(m_funcId == InvalidFuncId);
   m_funcId = s_nextFuncId.fetch_add(1, std::memory_order_relaxed);
 
   s_funcVec.ensureSize(m_funcId + 1);
   DEBUG_ONLY auto oldVal = s_funcVec.exchange(m_funcId, this);
-  assert(oldVal == nullptr);
+  assertx(oldVal == nullptr);
 }
 
 FuncId Func::nextFuncId() {
@@ -380,7 +380,7 @@ FuncId Func::nextFuncId() {
 }
 
 const Func* Func::fromFuncId(FuncId id) {
-  assert(id < s_nextFuncId);
+  assertx(id < s_nextFuncId);
   auto func = s_funcVec.get(id);
   func->validate();
   return func;
@@ -435,7 +435,7 @@ int Func::getDVEntryNumParams(Offset offset) const {
 }
 
 Offset Func::getEntryForNumArgs(int numArgsPassed) const {
-  assert(numArgsPassed >= 0);
+  assertx(numArgsPassed >= 0);
   auto const nparams = numNonVariadicParams();
   for (unsigned i = numArgsPassed; i < nparams; i++) {
     const Func::ParamInfo& pi = params()[i];
@@ -468,7 +468,7 @@ bool Func::anyByRef() const {
 
 bool Func::byRef(int32_t arg) const {
   const uint64_t* ref = &m_refBitVal;
-  assert(arg >= 0);
+  assertx(arg >= 0);
   if (UNLIKELY(arg >= kBitsPerQword)) {
     // Super special case. A handful of builtins are varargs functions where the
     // (not formally declared) varargs are pass-by-reference. psychedelic-kitten
@@ -481,44 +481,12 @@ bool Func::byRef(int32_t arg) const {
   return *ref & (1ull << bit);
 }
 
-const StaticString s_extract("extract");
-const StaticString s_current("current");
-const StaticString s_key("key");
-const StaticString s_array_multisort("array_multisort");
-
-bool Func::mustBeRef(int32_t arg) const {
-  if (!byRef(arg)) return false;
-  if (arg == 0) {
-    if (UNLIKELY(m_attrs & AttrBuiltin)) {
-      // This hacks mustBeRef() to return false for the first parameter of
-      // extract(), current(), key(), and array_multisort(). These functions
-      // try to take their first parameter by reference but they also allow
-      // expressions that cannot be taken by reference (ex. an array literal).
-      // TODO Task #4442937: Come up with a cleaner way to do this.
-      if (cls()) return true;
-      auto const name = displayName();
-      if (name == s_extract.get()) return false;
-      if (name == s_current.get()) return false;
-      if (name == s_key.get()) return false;
-      if (name == s_array_multisort.get()) return false;
-    }
-  }
-
-  // We force mustBeRef() to return false for array_multisort(). It tries to
-  // pass all variadic arguments by reference, but it also allow expressions
-  // that cannot be taken by reference (ex. SORT_REGULAR flag).
-  return
-    arg < numParams() ||
-    !(m_attrs & AttrVariadicByRef) ||
-    !(name() == s_array_multisort.get() && !cls());
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Locals, iterators, and stack.
 
 Id Func::lookupVarId(const StringData* name) const {
-  assert(name != nullptr);
+  assertx(name != nullptr);
   return shared()->m_localNames.findIndex(name);
 }
 
@@ -527,11 +495,9 @@ Id Func::lookupVarId(const StringData* name) const {
 
 bool Func::isImmutableFrom(const Class* cls) const {
   if (!RuntimeOption::RepoAuthoritative) return false;
-  assert(cls && cls->lookupMethod(name()) == this);
+  assertx(cls && cls->lookupMethod(name()) == this);
   if (attrs() & AttrNoOverride) {
-    // Even if the func isn't overridden, we clone it into
-    // any derived classes if it has static locals
-    if (!hasStaticLocals()) return true;
+    return true;
   }
   if (cls->preClass()->attrs() & AttrNoOverride) {
     return true;
@@ -576,22 +542,6 @@ const FPIEnt* Func::findFPI(const FPIEnt* b, const FPIEnt* e, Offset o) {
   }
 }
 
-const FPIEnt* Func::findPrecedingFPI(Offset o) const {
-  assert(o >= base() && o < past());
-  const FPIEntVec& fpitab = shared()->m_fpitab;
-  assert(fpitab.size());
-  const FPIEnt* fe = 0;
-  for (unsigned i = 0; i < fpitab.size(); i++) {
-    const FPIEnt* cur = &fpitab[i];
-    if (o > cur->m_fpiEndOff &&
-        (!fe || fe->m_fpiEndOff < cur->m_fpiEndOff)) {
-      fe = cur;
-    }
-  }
-  assert(fe);
-  return fe;
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // JIT data.
@@ -605,30 +555,48 @@ void Func::resetPrologue(int numParams) {
   m_prologueTable[numParams] = stubs.fcallHelperThunk;
 }
 
+void Func::resetFuncBody() {
+  auto const& stubs = jit::tc::ustubs();
+  m_funcBody = stubs.funcBodyHelperThunk;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Reified Generics
+
+namespace {
+const ReifiedGenericsInfo k_defaultReifiedGenericsInfo{0, {}};
+} // namespace
+
+const ReifiedGenericsInfo& Func::getReifiedGenericsInfo() const {
+  if (!shared()->m_hasReifiedGenerics) return k_defaultReifiedGenericsInfo;
+  auto const ex = extShared();
+  assertx(ex);
+  return ex->m_reifiedGenericsInfo;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Pretty printer.
 
-static void print_attrs(std::ostream& out, Attr attrs) {
+void Func::print_attrs(std::ostream& out, Attr attrs) {
   if (attrs & AttrStatic)    { out << " static"; }
   if (attrs & AttrPublic)    { out << " public"; }
   if (attrs & AttrProtected) { out << " protected"; }
   if (attrs & AttrPrivate)   { out << " private"; }
   if (attrs & AttrAbstract)  { out << " abstract"; }
   if (attrs & AttrFinal)     { out << " final"; }
-  if (attrs & AttrPhpLeafFn) { out << " (leaf)"; }
-  if (attrs & AttrHot)       { out << " (hot)"; }
   if (attrs & AttrNoOverride){ out << " (nooverride)"; }
   if (attrs & AttrInterceptable) { out << " (interceptable)"; }
   if (attrs & AttrPersistent) { out << " (persistent)"; }
   if (attrs & AttrMayUseVV) { out << " (mayusevv)"; }
   if (attrs & AttrRequiresThis) { out << " (requiresthis)"; }
   if (attrs & AttrBuiltin) { out << " (builtin)"; }
-  if (attrs & AttrReadsCallerFrame) { out << " (reads_caller_frame)"; }
-  if (attrs & AttrWritesCallerFrame) { out << " (writes_caller_frame)"; }
   if (attrs & AttrSkipFrame) { out << " (skip_frame)"; }
   if (attrs & AttrIsFoldable) { out << " (foldable)"; }
   if (attrs & AttrNoInjection) { out << " (no_injection)"; }
+  if (attrs & AttrSupportsAsyncEagerReturn) { out << " (can_async_eager_ret)"; }
+  if (attrs & AttrDynamicallyCallable) { out << " (dyn_callable)"; }
+  auto rxAttrString = rxAttrsToAttrString(attrs);
+  if (rxAttrString) out << " (" << rxAttrString << ")";
 }
 
 void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
@@ -637,7 +605,10 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
   } else if (preClass() != nullptr) {
     out << "Method";
     print_attrs(out, m_attrs);
+    if (isPhpLeafFn()) out << " (leaf)";
     if (isMemoizeWrapper()) out << " (memoize_wrapper)";
+    if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
+    if (isHot()) out << " (hot)";
     if (cls() != nullptr) {
       out << ' ' << fullName()->data();
     } else {
@@ -646,7 +617,10 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
   } else {
     out << "Function";
     print_attrs(out, m_attrs);
+    if (isPhpLeafFn()) out << " (leaf)";
     if (isMemoizeWrapper()) out << " (memoize_wrapper)";
+    if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
+    if (isHot()) out << " (hot)";
     out << ' ' << m_name->data();
   }
 
@@ -660,7 +634,7 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     auto const& param = params[i];
     out << " Param: " << localVarName(i)->data();
     if (param.typeConstraint.hasConstraint()) {
-      out << " " << param.typeConstraint.displayName(this, true);
+      out << " " << param.typeConstraint.displayName(cls(), true);
     }
     if (param.userType) {
       out << " (" << param.userType->data() << ")";
@@ -678,7 +652,7 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
       (returnUserType() && !returnUserType()->empty())) {
     out << " Ret: ";
     if (returnTypeConstraint().hasConstraint()) {
-      out << " " << returnTypeConstraint().displayName(this, true);
+      out << " " << returnTypeConstraint().displayName(cls(), true);
     }
     if (returnUserType() && !returnUserType()->empty()) {
       out << " (" << returnUserType()->data() << ")";
@@ -697,25 +671,16 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
       << "numIterators: " << numIterators() << '\n'
       << "numClsRefSlots: " << numClsRefSlots() << '\n';
 
-  if (auto const f = dynCallWrapper()) {
-    out << "dynCallWrapper: " << f->fullName()->data() << '\n';
-  }
-  if (auto const f = dynCallTarget()) {
-    out << "dynCallTarget: " << f->fullName()->data() << '\n';
-  }
-
   const EHEntVec& ehtab = shared()->m_ehtab;
   size_t ehId = 0;
   for (auto it = ehtab.begin(); it != ehtab.end(); ++it, ++ehId) {
-    bool catcher = it->m_type == EHEnt::Type::Catch;
-    out << " EH " << ehId << " " << (catcher ? "Catch" : "Fault") << " for " <<
+    out << " EH " << ehId << " Catch for " <<
       it->m_base << ":" << it->m_past;
     if (it->m_parentIndex != -1) {
       out << " outer EH " << it->m_parentIndex;
     }
     if (it->m_iterId != -1) {
       out << " iterId " << it->m_iterId;
-      out << " itRef " << (it->m_itRef ? "true" : "false");
     }
     out << " handle at " << it->m_handler;
     if (it->m_end != kInvalidOffset) {
@@ -745,7 +710,7 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
 // SharedData.
 
 Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
-                             int line1, int line2, bool top,
+                             int line1, int line2, bool top, bool isPhpLeafFn,
                              const StringData* docComment)
   : m_base(base)
   , m_preClass(preClass)
@@ -763,6 +728,11 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
   , m_hasExtendedSharedData(false)
   , m_returnByValue(false)
   , m_isMemoizeWrapper(false)
+  , m_isMemoizeWrapperLSB(false)
+  , m_isPhpLeafFn(isPhpLeafFn)
+  , m_takesNumArgs(false)
+  , m_hasReifiedGenerics(false)
+  , m_isRxDisabled(false)
   , m_numClsRefSlots(0)
   , m_originalFilename(nullptr)
 {
@@ -848,6 +818,10 @@ FuncSet s_ignores_frame = {
   "fb_get_last_flush_size",
   "fb_lazy_lstat",
   "fb_lazy_realpath",
+  "HH\\non_crypto_md5_upper",
+  "HH\\non_crypto_md5_lower",
+  "HH\\int_mul_overflow",
+  "HH\\int_mul_add_overflow",
   "hash",
   "hash_algos",
   "hash_file",
@@ -956,7 +930,8 @@ FuncSet s_ignores_frame = {
   "HH\\is_vec",
   "HH\\is_dict",
   "HH\\is_keyset",
-  "HH\\is_varray_or_darray",
+  "HH\\is_varray",
+  "HH\\is_darray",
   "is_object",
   "is_resource",
   "boolval",
@@ -965,7 +940,6 @@ FuncSet s_ignores_frame = {
   "strval",
   "gettype",
   "get_resource_type",
-  "settype",
   "serialize",
   "unserialize",
   "addcslashes",
@@ -1072,72 +1046,6 @@ FuncSet s_ignores_frame = {
   "HH\\array_key_cast"
 };
 
-const StaticString s_assert("assert");
-
-}
-
-bool disallowDynamicVarEnvFuncs() {
-  return (RuntimeOption::RepoAuthoritative &&
-          Repo::global().DisallowDynamicVarEnvFuncs) ||
-    RuntimeOption::DisallowDynamicVarEnvFuncs == HackStrictOption::ON;
-}
-
-bool funcWritesLocals(const Func* callee) {
-  assertx(callee != nullptr);
-
-  // A skip-frame function can dynamically call a function which writes to the
-  // caller's frame. If we don't forbid such dynamic calls, we have to be
-  // pessimistic.
-  if (callee->isSkipFrame() && !disallowDynamicVarEnvFuncs()) {
-    return true;
-  }
-
-  if (!callee->writesCallerFrame()) return false;
-
-  if (callee->fullName()->isame(s_assert.get())) {
-    /*
-     * Assert is somewhat special.  If RepoAuthoritative isn't set and the
-     * first parameter is a string, it will be evaled and can have arbitrary
-     * effects.  If the assert fails, it may execute an arbitrary
-     * pre-registered callback which still might try to write to the assert
-     * caller's frame.
-     *
-     * This can't happen if calling such frame accessing functions dynamically
-     * is forbidden.
-     */
-    return !RuntimeOption::RepoAuthoritative || !disallowDynamicVarEnvFuncs();
-  }
-  return true;
-}
-
-bool funcReadsLocals(const Func* callee) {
-  assertx(callee != nullptr);
-
-  // Any function which can write locals is assumed to read them as well.
-  if (funcWritesLocals(callee)) return true;
-
-  // A skip-frame function can dynamically call a function which reads from the
-  // caller's frame. If we don't forbid such dynamic calls, we have to be
-  // pessimistic.
-  if (callee->isSkipFrame() && !disallowDynamicVarEnvFuncs()) {
-    return true;
-  }
-
-  if (!callee->readsCallerFrame()) return false;
-
-  if (callee->fullName()->isame(s_assert.get())) {
-    /*
-     * Assert is somewhat special.  If RepoAuthoritative isn't set and the first
-     * parameter is a string, it will be evaled and can have arbitrary effects.
-     * If the assert fails, it may execute an arbitrary pre-registered callback
-     * which still might try to read from the assert caller's frame.
-     *
-     * This can't happen if calling such frame accessing functions dynamically
-     * is forbidden.
-     */
-    return !RuntimeOption::RepoAuthoritative || !disallowDynamicVarEnvFuncs();
-  }
-  return true;
 }
 
 bool funcNeedsCallerFrame(const Func* callee) {
@@ -1145,9 +1053,36 @@ bool funcNeedsCallerFrame(const Func* callee) {
 
   return
     (callee->isCPPBuiltin() &&
-      s_ignores_frame.count(callee->name()->data()) == 0) ||
-    funcReadsLocals(callee) ||
-    funcWritesLocals(callee);
+      s_ignores_frame.count(callee->name()->data()) == 0);
+}
+
+void logFunc(const Func* func, StructuredLogEntry& ent) {
+  auto const attrs = attrs_to_vec(AttrContext::Func, func->attrs());
+  std::set<folly::StringPiece> attrSet(attrs.begin(), attrs.end());
+
+  if (func->isMemoizeWrapper()) attrSet.emplace("memoize_wrapper");
+  if (func->isMemoizeWrapperLSB()) attrSet.emplace("memoize_wrapper_lsb");
+  if (func->isMemoizeImpl()) attrSet.emplace("memoize_impl");
+  if (func->isAsync()) attrSet.emplace("async");
+  if (func->isGenerator()) attrSet.emplace("generator");
+  if (func->isClosureBody()) attrSet.emplace("closure_body");
+  if (func->isPairGenerator()) attrSet.emplace("pair_generator");
+  if (func->hasVariadicCaptureParam()) attrSet.emplace("variadic_param");
+  if (func->isHot()) attrSet.emplace("hot");
+  if (func->attrs() & AttrMayUseVV) attrSet.emplace("may_use_vv");
+  if (func->attrs() & AttrRequiresThis) attrSet.emplace("must_have_this");
+  if (func->isPhpLeafFn()) attrSet.emplace("leaf_function");
+  if (func->cls() && func->cls()->isPersistent()) attrSet.emplace("persistent");
+
+  ent.setSet("func_attributes", attrSet);
+
+  ent.setInt("num_params", func->numNonVariadicParams());
+  ent.setInt("num_locals", func->numLocals());
+  ent.setInt("num_named_locals", func->numNamedLocals());
+  ent.setInt("num_class_refs", func->numClsRefSlots());
+  ent.setInt("num_iterators", func->numIterators());
+  ent.setInt("frame_cells", func->numSlotsInFrame());
+  ent.setInt("max_stack_cells", func->maxStackCells());
 }
 
 ///////////////////////////////////////////////////////////////////////////////

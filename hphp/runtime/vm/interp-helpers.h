@@ -17,43 +17,110 @@
 #ifndef incl_HPHP_VM_INTERP_HELPERS_H_
 #define incl_HPHP_VM_INTERP_HELPERS_H_
 
-#include "hphp/runtime/vm/act-rec.h"
-#include "hphp/runtime/vm/func.h"
-#include "hphp/runtime/vm/bytecode.h"
-#include "hphp/runtime/base/thread-info.h"
-#include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/runtime-error.h"
+#include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/request-info.h"
+#include "hphp/runtime/vm/act-rec.h"
+#include "hphp/runtime/vm/bytecode.h"
+#include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/runtime.h"
+#include "hphp/runtime/vm/rx.h"
+#include "hphp/util/text-util.h"
 #include "hphp/util/trace.h"
 
 namespace HPHP {
 
-// In PHP7 the caller specifies if parameter type-checking is strict in the
-// callee. NB: HH files ignore this preference and always use strict checking,
-// except in systemlib. Calls originating in systemlib are never strict.
-inline bool callUsesStrictTypes(ActRec* caller) {
-  if (!caller) {
-    // eg when being called from hhbbc
-    return true;
+inline void callerReffinessChecks(const Func* func, const FCallArgs& fca) {
+  for (auto i = 0; i < fca.numArgs; ++i) {
+    auto const byRef = func->byRef(i);
+    if (byRef != fca.byRef(i)) {
+      SystemLib::throwInvalidArgumentExceptionObject(
+        formatParamRefMismatch(func->fullDisplayName()->data(), i, byRef));
+    }
   }
-  auto func = caller->func();
-  if (func->isBuiltin()) {
-    return false;
-  }
-  if (RuntimeOption::EnableHipHopSyntax || !RuntimeOption::PHP7_ScalarTypes) {
-    return true;
-  }
-  return func->unit()->useStrictTypes();
 }
 
-inline bool builtinCallUsesStrictTypes(const Unit* caller) {
-  if (!RuntimeOption::PHP7_ScalarTypes || RuntimeOption::EnableHipHopSyntax) {
-    return false;
+inline void callerDynamicCallChecks(const Func* func) {
+  if (RuntimeOption::EvalForbidDynamicCalls <= 0) return;
+  if (func->isDynamicallyCallable()) return;
+
+  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+    std::string msg;
+    string_printf(
+      msg,
+      Strings::FUNCTION_CALLED_DYNAMICALLY,
+      func->fullDisplayName()->data()
+    );
+    throw_invalid_operation_exception(makeStaticString(msg));
+  } else {
+    raise_notice(
+      Strings::FUNCTION_CALLED_DYNAMICALLY,
+      func->fullDisplayName()->data()
+    );
   }
-  return caller->useStrictTypesForBuiltins();
 }
 
-inline void setTypesFlag(ActRec* fp, ActRec* ar) {
-  if (!callUsesStrictTypes(fp)) ar->setUseWeakTypes();
+inline void callerDynamicConstructChecks(const Class* cls) {
+  if (RuntimeOption::EvalForbidDynamicCalls <= 0) return;
+  if (cls->isDynamicallyConstructible()) return;
+
+  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+    std::string msg;
+    string_printf(
+      msg,
+      Strings::CLASS_CONSTRUCTED_DYNAMICALLY,
+      cls->name()->data()
+    );
+    throw_invalid_operation_exception(makeStaticString(msg));
+  } else {
+    raise_notice(
+      Strings::CLASS_CONSTRUCTED_DYNAMICALLY,
+      cls->name()->data()
+    );
+  }
+}
+
+inline void calleeDynamicCallChecks(const ActRec* ar) {
+  if (!ar->isDynamicCall()) return;
+  auto const func = ar->func();
+
+  if (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin()) {
+    raise_notice(
+      Strings::FUNCTION_CALLED_DYNAMICALLY,
+      func->fullDisplayName()->data()
+    );
+  }
+}
+
+inline void callerRxChecks(const ActRec* caller, const Func* callee) {
+  if (RuntimeOption::EvalRxEnforceCalls <= 0) return;
+  // Conditional reactivity is not tracked yet, so assume the callee has maximum
+  // possible level of reactivity.
+  if (callee->rxLevel() >= rxRequiredCalleeLevel(caller->rxMinLevel())) return;
+
+  auto const errMsg = folly::sformat(
+    "Call to {} '{}' from {} '{}' violates reactivity constraints.",
+    rxLevelToString(callee->rxLevel()),
+    callee->fullName()->data(),
+    rxLevelToString(caller->rxMinLevel()),
+    caller->func()->fullName()->data()
+  );
+
+  if (RuntimeOption::EvalRxEnforceCalls >= 2) {
+    SystemLib::throwBadMethodCallExceptionObject(errMsg);
+  } else {
+    raise_warning(errMsg);
+  }
+}
+
+inline void checkForRequiredCallM(const ActRec* ar) {
+  if (!ar->func()->takesInOutParams()) return;
+
+  if (!ar->isFCallM()) {
+    raise_error("In/out function called dynamically without inout annotations");
+  }
 }
 
 /*

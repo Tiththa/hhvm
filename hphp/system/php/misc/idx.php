@@ -1,4 +1,4 @@
-<?php
+<?hh // partial
 
 namespace HH {
 
@@ -62,24 +62,21 @@ namespace HH {
  *                         default, this is null.
  * @return mixed Value at array index if it exists, or the default value if not.
  */
+<<__Rx>>
 function idx($arr, $idx, $default=null) {
-  if (\is_array($arr) || \is_vec($arr) || \is_dict($arr) || \is_keyset($arr)) {
+  if (\HH\is_any_array($arr)) {
     return \hphp_array_idx($arr, $idx, $default);
   }
 
   if ($idx !== null) {
     if (\is_object($arr)) {
-      if ($arr instanceof \ConstIndexAccess) {
+      if ($arr is \ConstIndexAccess) {
         if ($arr->containsKey($idx)) {
           return $arr[$idx];
         }
-      } else if ($arr instanceof \ConstSet) {
+      } else if ($arr is \ConstSet) {
         if ($arr->contains($idx)) {
           return $idx;
-        }
-      } else if ($arr instanceof \ArrayAccess) {
-        if ($arr->offsetExists($idx)) {
-          return $arr->offsetGet($idx);
         }
       }
     } else if (\is_string($arr)) {

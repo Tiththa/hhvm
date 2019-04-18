@@ -17,12 +17,12 @@ $controls = array(
 );
 
 // Too few parameters
-var_dump(ldap_set_option());
-var_dump(ldap_set_option($link));
-var_dump(ldap_set_option($link, LDAP_OPT_PROTOCOL_VERSION));
+try { var_dump(ldap_set_option()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+try { var_dump(ldap_set_option($link)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+try { var_dump(ldap_set_option($link, LDAP_OPT_PROTOCOL_VERSION)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 // Too many parameters
-var_dump(ldap_set_option($link, LDAP_OPT_PROTOCOL_VERSION, 3, "Additional data"));
+try { var_dump(ldap_set_option($link, LDAP_OPT_PROTOCOL_VERSION, 3, "Additional data")); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 var_dump(ldap_set_option($link, LDAP_OPT_PROTOCOL_VERSION, 10));
 
@@ -30,5 +30,4 @@ foreach ($controls as $control)
 	var_dump(ldap_set_option($link, LDAP_OPT_SERVER_CONTROLS, $control));
 
 var_dump(ldap_set_option($link, 999999, 999999));
-?>
-===DONE===
+echo "===DONE===\n";

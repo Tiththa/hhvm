@@ -7,74 +7,103 @@
   DefTypeAlias 2
   DefTypeAlias 3
 
-  FPushFuncD 1 "foo"
+  NullUninit
+  NullUninit
+  NullUninit
   Int 0
-  FPassCE 0
-  FCall 1
-  PopR
-
   FPushFuncD 1 "foo"
-  String "hi"
-  FPassCE 0
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
-  FPushCtorD 0 "C"
-  FCall 0
-  PopR
+  NullUninit
+  NullUninit
+  NullUninit
+  String "hi"
+  FPushFuncD 1 "foo"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NewObjD "C"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $x
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $x
   FPushFuncD 1 "bar"
-  FPassL 0 $x
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  String "hi"
   FPushFuncD 1 "bar"
-  String "hi"
-  FPassCE 0
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  Null
   FPushFuncD 1 "bar"
-  Null
-  FPassCE 0
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $x
   FPushFuncD 1 "baz"
-  FPassL 0 $x
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
-  FPushFuncD 1 "baz"
+  NullUninit
+  NullUninit
+  NullUninit
   String "hi"
-  FPassCE 0
-  FCall 1
-  PopR
-
   FPushFuncD 1 "baz"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   Null
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushFuncD 1 "baz"
+  FCall <> 1 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $x
   FPushFuncD 1 "quux"
-  FPassL 0 $x
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
-  FPushFuncD 1 "quux"
+  NullUninit
+  NullUninit
+  NullUninit
   String "hi"
-  FPassCE 0
-  FCall 1
-  PopR
-
   FPushFuncD 1 "quux"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   Null
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushFuncD 1 "quux"
+  FCall <> 1 1 "" - "" ""
+  PopC
 
   Int 1
   RetC
@@ -105,10 +134,6 @@
 }
 
 .class C {
-  .method [public] 86ctor() {
-    Null
-    RetC
-  }
 }
 
 .alias Foo = <"HH\\int">;

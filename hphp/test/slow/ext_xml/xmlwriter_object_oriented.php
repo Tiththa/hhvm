@@ -9,6 +9,9 @@ function VERIFY($x) {
   VS($x, true);
 }
 
+
+<<__EntryPoint>>
+function main_xmlwriter_object_oriented() {
 $xml = new XMLWriter();
 $xml->openMemory();
 var_dump($xml);
@@ -31,7 +34,7 @@ VERIFY($xml->startAttributeNS("fb", "attr2",
                                     "http://www.facebook.com/"));
 VERIFY($xml->endAttribute());
 VERIFY($xml->writeElementNS("prefix", "name",
-                                  "http://some.url/", 1337));
+                                  "http://some.url/", '1337'));
 VERIFY($xml->startElement("node"));
 VERIFY($xml->fullEndElement());
 VERIFY($xml->endElement());
@@ -79,3 +82,4 @@ VERIFY($xml->endDocument());
 
 var_dump($xml->flush());
 var_dump($xml->outputMemory());
+}

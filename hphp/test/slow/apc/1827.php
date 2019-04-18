@@ -8,6 +8,7 @@ class X implements Serializable {
   }
 }
 function test() {
+  $a = array();
   $a[] = $x = new X;
   $a[] = $x;
   $a[] = $x;
@@ -17,4 +18,8 @@ function test() {
   $a = apc_fetch('foo');
   var_dump($a);
 }
+
+<<__EntryPoint>>
+function main_1827() {
 test();
+}

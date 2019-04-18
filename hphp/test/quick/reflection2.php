@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 trait my_trait {
   function my_trait_method() {}
@@ -43,7 +43,7 @@ foreach ($rc->getMethods() as $ix => $meth) {
 
 function __autoload($cls) {
   if ($cls == "MyClass") {
-    class MyClass {}
+    include 'reflection2-1.inc';
   }
 }
 

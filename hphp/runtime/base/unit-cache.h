@@ -18,6 +18,7 @@
 #define incl_HPHP_UNIT_CACHE_H_
 
 #include <string>
+#include <vector>
 
 struct stat;
 
@@ -26,6 +27,11 @@ namespace HPHP {
 struct Unit;
 struct String;
 struct StringData;
+struct RepoOptions;
+
+namespace Native {
+struct FuncTable;
+}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -54,19 +60,33 @@ struct StringData;
  * May return nullptr if the Unit can't be loaded, and may throw exceptions or
  * fatal errors.
  */
-Unit* lookupUnit(StringData* path, const char* currentDir, bool* initial_opt);
+Unit* lookupUnit(StringData* path, const char* currentDir, bool* initial_opt,
+                 const Native::FuncTable&);
 
 /*
- * Mangle a file's md5sum with runtime options that affect the Unit output.
+ * As above, but for system units.
+ */
+Unit* lookupSyslibUnit(StringData* path, const Native::FuncTable&);
+
+/*
+ * Mangle a file's sha1sum with runtime options that affect the Unit output.
  * The parser and this module need to agree on how this is done.
  */
-std::string mangleUnitMd5(const std::string& fileMd5);
+std::string mangleUnitSha1(const std::string& fileSha1, const RepoOptions&);
 
 /*
  * Return the number of php files that are currently loaded in this process.
  * Exported for the admin request handler.
  */
 size_t numLoadedUnits();
+
+/*
+ * Return a std::vector of all the units currently loaded. Must be
+ * called from a single threaded context (wrt other unit-cache functions).
+ *
+ * Precondition: RepoAuthoritative
+ */
+std::vector<Unit*> loadedUnitsRepoAuth();
 
 /*
  * Resolve an include path, for the supplied path and directory, using the same
@@ -82,9 +102,16 @@ size_t numLoadedUnits();
 String resolveVmInclude(StringData* path,
                         const char* currentDir,
                         struct stat* s,  // out
+                        const Native::FuncTable&,
                         bool allow_dir = false);
 
-void preloadRepo();
+/*
+ * Needed to avoid order of destruction issues. Destroying the unit
+ * caches destroys the units, which destroys the classes, which tries
+ * to grab global mutexes, which can fail if the mutexes have already
+ * been destroyed.
+ */
+void clearUnitCacheForExit();
 
 //////////////////////////////////////////////////////////////////////
 

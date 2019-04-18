@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 
 module Reason = Typing_reason
 module SN = Naming_special_names
@@ -16,7 +15,11 @@ module SN = Naming_special_names
 type visibility =
   | Vpublic
   | Vprivate of string
-  | Vprotected of string
+  | Vprotected of string [@@deriving show]
+
+type exact =
+  | Exact
+  | Nonexact
 
 (* All the possible types, reason is a trace of why a type
    was inferred in a certain way.
@@ -29,7 +32,10 @@ type visibility =
 type decl = private DeclPhase
 type locl = private LoclPhase
 
-type 'phase ty = Reason.t * 'phase ty_
+let show_phase_ty _ = "<phase_ty>"
+let pp_phase_ty _ _ = Printf.printf "%s\n" "<phase_ty>"
+
+type 'phase ty = ( Reason.t * 'phase ty_ )
 
 (* A shape may specify whether or not fields are required. For example, consider
    this typedef:
@@ -76,10 +82,9 @@ and _ ty_ =
   (* Tvarray (ty) => "varray<ty>" *)
   | Tvarray : decl ty -> decl ty_
 
-  (* Tdarray_or_varray (ty) => "darray_or_varray<ty>" *)
-  | Tdarray_or_varray : decl ty -> decl ty_
+  (* Tvarray_or_darray (ty) => "varray_or_darray<ty>" *)
+  | Tvarray_or_darray : decl ty -> decl ty_
 
-  (*========== Following Types Exist in Both Phases ==========*)
   (* "Any" is the type of a variable with a missing annotation, and "mixed" is
    * the type of a variable annotated as "mixed". THESE TWO ARE VERY DIFFERENT!
    * Any unifies with anything, i.e., it is both a supertype and subtype of any
@@ -101,10 +106,30 @@ and _ ty_ =
    * of int to take part in addition. (The converse is true though -- int is a
    * subtype of mixed.) A case analysis would need to be done on $x, via
    * is_int or similar.
+   *
+   * mixed exists only in the decl phase because it is desugared into ?nonnull
+   * during the localization phase.
    *)
-  | Tany
-  | Tmixed
+  | Tmixed : decl ty_
 
+  | Tnothing : decl ty_
+
+  | Tlike : decl ty -> decl ty_
+
+  (*========== Following Types Exist in Both Phases ==========*)
+  | Tany
+  | Tnonnull
+  (* A dynamic type is a special type which sometimes behaves as if it were a
+   * top type; roughly speaking, where a specific value of a particular type is
+   * expected and that type is dynamic, anything can be given. We call this
+   * behaviour "coercion", in that the types "coerce" to dynamic. In other ways it
+   * behaves like a bottom type; it can be used in any sort of binary expression
+   * or even have object methods called from it. However, it is in fact neither.
+   *
+   * it captures dynamicism within function scope.
+   * See tests in typecheck/dynamic/ for more examples.
+   *)
+  | Tdynamic
   | Terr
 
   (* Nullable, called "option" in the ML parlance. *)
@@ -229,8 +254,11 @@ and _ ty_ =
    *)
   | Tobject : locl ty_
 
-  (* An instance of a class or interface, ty list are the arguments *)
-  | Tclass : Nast.sid * locl ty list -> locl ty_
+  (* An instance of a class or interface, ty list are the arguments
+   * If exact=Exact, then this represents instances of *exactly* this class
+   * If exact=Nonexact, this also includes subclasses
+   *)
+  | Tclass : Nast.sid * exact * locl ty list -> locl ty_
 
   (* Localized version of Tarray *)
   | Tarraykind : array_kind -> locl ty_
@@ -241,20 +269,20 @@ and array_kind =
   | AKany
   (* An array declared as a varray. *)
   | AKvarray of locl ty
-  | AKvec of locl ty
   (* An array declared as a darray. *)
   | AKdarray of locl ty * locl ty
-  (* An array annotated as a darray_or_varray. *)
-  | AKdarray_or_varray of locl ty
+  (* An array annotated as a varray_or_darray. *)
+  | AKvarray_or_darray of locl ty
+  (* An array "used like a vec".
+   * /!\ An actual `vec` is represented as a `Tclass ("\\vec", [...])`
+   *)
+  | AKvec of locl ty
+  (* An array "used like a map or dict".
+   * /!\ An actual `dict` is represented as a `Tclass ("\\dict", [...])`
+   *)
   | AKmap of locl ty * locl ty
   (* This is a type created when we see array() literal *)
   | AKempty
-  (* Array "used like a shape" - initialized and indexed with keys that are
-   * only string/class constants *)
-  | AKshape of (locl ty * locl ty) Nast.ShapeMap.t
-  (* Array "used like a tuple" - initialized without keys and indexed with
-   * integers that are within initialized range *)
-  | AKtuple of (locl ty) IMap.t
 
 (* An abstract type derived from either a newtype, a type parameter, or some
  * dependent type
@@ -272,7 +300,6 @@ and abstract_kind =
 (* A dependent type consists of a base kind which indicates what the type is
  * dependent on. It is either dependent on:
  *  - The type 'this'
- *  - The class context (what 'static' is resolved to in a class)
  *  - A class
  *  - An expression
  *
@@ -284,14 +311,6 @@ and abstract_kind =
 and dependent_type =
   (* Type that is the subtype of the late bound type within a class. *)
   [ `this
-  (* The late bound type within a class. It is the type of 'new static()' and
-   * '$this'. This is different from the 'this' type. The 'this' type isn't
-   * quite strong enough in some cases. It means you are a subtype of the late
-   * bound class, but there are instances where you need the exact type.
-   * We may not need both since the only way to make something of type 'this'
-   * that is not 'static' is with 'instanceof static'.
-   *)
-  | `static
   (* A class name, new type, or generic, i.e.
    *
    * abstract class C { abstract const type T }
@@ -341,17 +360,62 @@ and shape_fields_known =
   | FieldsFullyKnown
   | FieldsPartiallyKnown of Pos.t Nast.ShapeMap.t
 
+(* represents reactivity of function
+   - None corresponds to non-reactive function
+   - Some reactivity - to reactive function with specified reactivity flavor
+
+ Nonreactive <: Local -t <: Shallow -t <: Reactive -t
+
+ MaybeReactive represents conditional reactivity of function that depends on
+   reactivity of function arguments
+   <<__Rx>>
+   function f(<<__MaybeRx>> $g) { ... }
+   call to function f will be treated as reactive only if $g is reactive
+  *)
+and reactivity =
+  | Nonreactive
+  | Local of decl ty option
+  | Shallow of decl ty option
+  | Reactive of decl ty option
+  | MaybeReactive of reactivity
+  | RxVar of reactivity option
+
+and param_mutability =
+  | Param_owned_mutable
+  | Param_borrowed_mutable
+  | Param_maybe_mutable
+
+and fun_tparams_kind =
+  | FTKtparams
+  (** If ft_tparams is empty, the containing fun_type is a concrete function type.
+      Otherwise, it is a generic function and ft_tparams specifies its type parameters. *)
+  | FTKinstantiated_targs
+  (** The containing fun_type is a concrete function type which is an
+      instantiation of a generic function with at least one reified type
+      parameter. This means that the function requires explicit type arguments
+      at every invocation, and ft_tparams specifies the type arguments with
+      which the generic function was instantiated, as well as whether each
+      explicit type argument must be reified. *)
+
 (* The type of a function AND a method.
  * A function has a min and max arity because of optional arguments *)
 and 'phase fun_type = {
   ft_pos        : Pos.t               ;
   ft_deprecated : string option       ;
   ft_abstract   : bool                ;
+  ft_is_coroutine : bool              ;
   ft_arity      : 'phase fun_arity    ;
-  ft_tparams    : 'phase tparam list  ;
+  ft_tparams    : ('phase tparam) list * fun_tparams_kind;
   ft_where_constraints : 'phase where_constraint list  ;
   ft_params     : 'phase fun_params   ;
   ft_ret        : 'phase ty           ;
+  ft_reactive   : reactivity          ;
+  ft_return_disposable : bool         ;
+  (* mutability of the receiver *)
+  ft_mutability : param_mutability option   ;
+  ft_returns_mutable : bool           ;
+  ft_decl_errors : Errors.t option    ;
+  ft_returns_void_to_rx: bool         ;
 }
 
 (* Arity information for a fun_type; indicating the minimum number of
@@ -362,17 +426,38 @@ and 'phase fun_arity =
   (* PHP5.6-style ...$args finishes the func declaration *)
   | Fvariadic of int * 'phase fun_param (* min ; variadic param type *)
   (* HH-style ... anonymous variadic arg; body presumably uses func_get_args *)
-  | Fellipsis of int       (* min *)
+  | Fellipsis of int * Pos.t  (* min ; position of ... *)
 
+and param_mode =
+  | FPnormal
+  | FPref
+  | FPinout
 
-and 'phase fun_param = (string option * 'phase ty)
+and param_rx_annotation =
+  | Param_rx_var
+  | Param_rx_if_impl of decl ty
+
+and 'phase fun_param = {
+  fp_pos  : Pos.t;
+  fp_name : string option;
+  fp_type : 'phase ty;
+  fp_kind : param_mode;
+  fp_accept_disposable : bool;
+  fp_mutability           : param_mutability option;
+  fp_rx_annotation: param_rx_annotation option;
+}
 
 and 'phase fun_params = 'phase fun_param list
 
 and class_elt = {
+  ce_abstract    : bool;
   ce_final       : bool;
   ce_is_xhp_attr : bool;
   ce_override    : bool;
+  (* true if this static property has attribute __LSB *)
+  ce_lsb         : bool;
+  (* true if this method has attribute __MemoizeLSB *)
+  ce_memoizelsb  : bool;
   (* true if this elt arose from require-extends or other mechanisms
      of hack "synthesizing" methods that were not written by the
      programmer. The eventual purpose of this is to make sure that
@@ -380,6 +465,8 @@ and class_elt = {
      synthesized elts. *)
   ce_synthesized : bool;
   ce_visibility  : visibility;
+  ce_const       : bool;
+  ce_lateinit    : bool;
   ce_type        : decl ty Lazy.t;
   (* identifies the class from which this elt originates *)
   ce_origin      : string;
@@ -409,6 +496,16 @@ and class_const = {
  *)
 and requirement = Pos.t * decl ty
 
+(* In the default case, we use Inconsistent. If a class has <<__ConsistentConstruct>>,
+ * or if it inherits a class that has <<__ConsistentConstruct>>, we use inherited.
+ * If we have a new final class that doesn't extend from <<__ConsistentConstruct>>,
+ * then we use Final. Only classes that are Inconsistent or Final can have reified
+ * generics. *)
+and consistent_kind =
+  | Inconsistent
+  | ConsistentConstruct
+  | FinalClass
+
 and class_type = {
   tc_need_init           : bool;
   (* Whether the typechecker knows of all (non-interface) ancestors
@@ -416,10 +513,15 @@ and class_type = {
   tc_members_fully_known : bool;
   tc_abstract            : bool;
   tc_final               : bool;
+  tc_const               : bool;
+  (* True when the class is annotated with the __PPL attribute. *)
+  tc_ppl                 : bool;
   (* When a class is abstract (or in a trait) the initialization of
    * a protected member can be delayed *)
   tc_deferred_init_members : SSet.t;
   tc_kind                : Ast.class_kind;
+  tc_is_xhp              : bool;
+  tc_is_disposable       : bool;
   tc_name                : string ;
   tc_pos                 : Pos.t ;
   tc_tparams             : decl tparam list ;
@@ -429,7 +531,8 @@ and class_type = {
   tc_sprops              : class_elt SMap.t;
   tc_methods             : class_elt SMap.t;
   tc_smethods            : class_elt SMap.t;
-  tc_construct           : class_elt option * bool;
+  (* the bool represents final constructor or __ConsistentConstruct *)
+  tc_construct           : class_elt option * consistent_kind;
   (* This includes all the classes, interfaces and traits this class is
    * using. *)
   tc_ancestors           : decl ty SMap.t ;
@@ -437,13 +540,16 @@ and class_type = {
   tc_req_ancestors_extends : SSet.t; (* the extends of req_ancestors *)
   tc_extends             : SSet.t;
   tc_enum_type           : enum_type option;
+  tc_decl_errors         : Errors.t option;
 }
 
 and typeconst_type = {
+  ttc_abstract    : Nast.typeconst_abstract_kind;
   ttc_name        : Nast.sid;
   ttc_constraint  : decl ty option;
   ttc_type        : decl ty option;
   ttc_origin      : string;
+  ttc_enforceable : Pos.t * bool;
 }
 
 and enum_type = {
@@ -457,10 +563,16 @@ and typedef_type = {
   td_tparams: decl tparam list;
   td_constraint: decl ty option;
   td_type: decl ty;
+  td_decl_errors: Errors.t option;
 }
 
-and 'phase tparam =
-  Ast.variance * Ast.id * (Ast.constraint_kind * 'phase ty) list
+and 'phase tparam = {
+  tp_variance: Ast.variance;
+  tp_name: Ast.id;
+  tp_constraints: (Ast.constraint_kind * 'phase ty) list;
+  tp_reified: Nast.reify_kind;
+  tp_user_attributes: Nast.user_attribute list;
+}
 
 and 'phase where_constraint =
   'phase ty * Ast.constraint_kind * 'phase ty
@@ -468,6 +580,20 @@ and 'phase where_constraint =
 type phase_ty =
   | DeclTy of decl ty
   | LoclTy of locl ty
+
+type deserialization_error =
+  (* The type was valid, but some component thereof was a decl ty when we
+  expected a locl ty, or vice versa. *)
+  | Wrong_phase of string
+
+  (* The specific type or some component thereof is not one that we support
+  deserializing, usually because not enough information was serialized to be
+  able to deserialize it again. For example, lambda types (`Tanon`) contain a
+  reference to an identifier (`Ident.t`), which is not serialized. *)
+  | Not_supported of string
+
+  (* The input JSON was invalid for some reason. *)
+  | Deserialization_error of string
 
 (* Tracks information about how a type was expanded *)
 type expand_env = {
@@ -480,7 +606,8 @@ type expand_env = {
   (* The class that the type is extracted from. Used for creating expression
    * dependent types for type constants.
    *)
-  from_class : Nast.class_id option;
+  from_class : Nast.class_id_ option;
+  validate_dty : (decl ty -> unit) option;
 }
 
 type ety = expand_env * locl ty
@@ -492,26 +619,34 @@ let has_expanded {type_expansions; _} x =
   end
 
 (* The identifier for this *)
-let this = Local_id.make "$this"
+let this = Local_id.make_scoped "$this"
 
 let arity_min ft_arity : int = match ft_arity with
-  | Fstandard (min, _) | Fvariadic (min, _) | Fellipsis min -> min
+  | Fstandard (min, _) | Fvariadic (min, _) | Fellipsis (min, _) -> min
+
+let get_param_mode ~is_ref callconv =
+  (* If a param has both & and inout, this should have errored in parsing. *)
+  match callconv with
+  | Some Ast.Pinout -> FPinout
+  | None when is_ref -> FPref
+  | None -> FPnormal
 
 module AbstractKind = struct
   let to_string = function
     | AKnewtype (name, _) -> name
     | AKgeneric name -> name
-    | AKenum name -> "enum "^(Utils.strip_ns name)
+    | AKenum name -> Utils.strip_ns name
     | AKdependent (dt, ids) ->
        let dt =
          match dt with
          | `this -> SN.Typehints.this
-         | `static -> "<"^SN.Classes.cStatic^">"
          | `cls c -> c
          | `expr i ->
              let display_id = Reason.get_expr_display_id i in
              "<expr#"^string_of_int display_id^">" in
-       String.concat "::" (dt::ids)
+       String.concat ~sep:"::" (dt::ids)
+
+  let is_generic_dep_ty s = String_utils.is_substring "::" s
 end
 
 module ShapeFieldMap = struct
@@ -526,7 +661,7 @@ module ShapeFieldMap = struct
       f_over_shape_field_type
 
   let map_env f env shape_map =
-    let f_over_shape_field_type env ({ sft_ty; _ } as shape_field_type) =
+    let f_over_shape_field_type env _key ({ sft_ty; _ } as shape_field_type) =
       let env, sft_ty = f env sft_ty in
       env, { shape_field_type with sft_ty } in
     Nast.ShapeMap.map_env f_over_shape_field_type env shape_map
@@ -542,13 +677,13 @@ module ShapeFieldMap = struct
 end
 
 module ShapeFieldList = struct
-  include Core.List
+  include Hh_core.List
 
   let map_env env xs ~f =
     let f_over_shape_field_type env ({ sft_ty; _ } as shape_field_type) =
       let env, sft_ty = f env sft_ty in
       env, { shape_field_type with sft_ty } in
-    Core.List.map_env env xs ~f:f_over_shape_field_type
+    Hh_core.List.map_env env xs ~f:f_over_shape_field_type
 end
 
 (*****************************************************************************)
@@ -558,40 +693,205 @@ end
 (* Set to true when we are trying to infer the missing type hints. *)
 let is_suggest_mode = ref false
 
+(* Ordinal value for type constructor, for localized types *)
+let ty_con_ordinal ty =
+  match snd ty with
+  | Tany | Terr -> 0
+  | Toption (_, Tnonnull) -> 1
+  | Tnonnull -> 2
+  | Tdynamic -> 3
+  | Toption _ -> 4
+  | Tprim _ -> 5
+  | Tfun _ -> 6
+  | Ttuple _ -> 7
+  | Tshape _ -> 8
+  | Tvar _ -> 9
+  | Tabstract _ -> 10
+  | Tanon _ -> 11
+  | Tunresolved _ -> 12
+  | Tobject -> 13
+  | Tclass _ -> 14
+  | Tarraykind _ -> 15
 
-let rec ty_equal ty1 ty2 =
-  let ty_1, ty_2 = (snd ty1, snd ty2) in
-  match  ty_1, ty_2 with
-    | Toption ty, Toption ty2 -> ty_equal ty ty2
-    | Tfun fty, Tfun fty2 -> fty.ft_pos = fty2.ft_pos
-    | Tunresolved tyl1, Tunresolved tyl2
-    | Ttuple tyl1, Ttuple tyl2 ->
-      tyl_equal tyl1 tyl2
-    | Tabstract (ak1, opt_cstr1), Tabstract (ak2, opt_cstr2) ->
-      abstract_kind_eq ak1 ak2 && Option.equal ty_equal opt_cstr1 opt_cstr2
-    (* An instance of a class or interface, ty list are the arguments *)
-    | Tclass (id, tyl), Tclass(id2, tyl2) ->
-      id = id2 && (tyl_equal tyl tyl2)
-    (* Localized version of Tarray *)
-    | Tarraykind ak1, Tarraykind ak2 ->
-      array_kind_eq ak1 ak2
-    | _ -> ty_1 = ty_2
-  and tyl_equal tyl1 tyl2 =
-    match tyl1, tyl2 with
-    | [], [] -> true
-    | x::xs, y::ys -> ty_equal x y && (tyl_equal xs ys)
-    | _ -> false
-  and array_kind_eq ak1 ak2 =
-    match ak1, ak2 with
-    | AKmap (ty1, ty2), AKmap (ty3, ty4)
-    | AKdarray (ty1, ty2), AKdarray (ty3, ty4) ->
-      ty_equal ty1 ty3 && ty_equal ty2 ty4
-    | AKvarray ty1, AKvarray ty2
-    | AKvec ty1, AKvec ty2 ->
-      ty_equal ty1 ty2
-    | _ -> ak1 = ak2
-  and abstract_kind_eq t1 t2 =
-    match t1, t2 with
-    | AKnewtype (id, tyl), AKnewtype (id2, tyl2) ->
-      id = id2 && tyl_equal tyl tyl2
-    | _ -> t1 = t2
+let array_kind_con_ordinal ak =
+  match ak with
+  | AKany -> 0
+  | AKvarray _ -> 1
+  | AKvec _ -> 2
+  | AKdarray _ -> 3
+  | AKvarray_or_darray _ -> 4
+  | AKmap _ -> 5
+  | AKempty -> 6
+
+let abstract_kind_con_ordinal ak =
+  match ak with
+  | AKnewtype _ -> 0
+  | AKenum _ -> 1
+  | AKgeneric _ -> 2
+  | AKdependent _ -> 3
+
+(* Compare two types syntactically, ignoring reason information and other
+ * small differences that do not affect type inference behaviour. This
+ * comparison function can be used to construct tree-based sets of types,
+ * or to compare two types for "exact" equality.
+ * Note that this function does *not* expand type variables, or type
+ * aliases.
+ * But if ty_compare ty1 ty2 = 0, then the types must not be distinguishable
+ * by any typing rules.
+ *)
+let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
+  let rec ty_compare ty1 ty2 =
+    let ty_1, ty_2 = (snd ty1, snd ty2) in
+    match  ty_1, ty_2 with
+      | Tprim ty1, Tprim ty2 ->
+        compare ty1 ty2
+      | Toption ty, Toption ty2 ->
+        ty_compare ty ty2
+      | Tfun fty, Tfun fty2 ->
+        tfun_compare fty fty2
+      | Tunresolved tyl1, Tunresolved tyl2 ->
+        let (tyl1, tyl2) = if normalize_unresolved
+          then (List.sort ty_compare tyl1, List.sort ty_compare tyl2)
+          else (tyl1, tyl2) in
+        tyl_compare tyl1 tyl2
+      | Ttuple tyl1, Ttuple tyl2 ->
+        tyl_compare tyl1 tyl2
+      | Tabstract (ak1, opt_cstr1), Tabstract (ak2, opt_cstr2) ->
+        begin match abstract_kind_compare ak1 ak2 with
+        | 0 -> opt_ty_compare opt_cstr1 opt_cstr2
+        | n -> n
+        end
+      (* An instance of a class or interface, ty list are the arguments *)
+      | Tclass (id, exact, tyl), Tclass(id2, exact2, tyl2) ->
+        begin match String.compare (snd id) (snd id2) with
+        | 0 ->
+          begin match tyl_compare tyl tyl2 with
+          | 0 ->
+            begin match exact, exact2 with
+            | Exact, Exact -> 0
+            | Nonexact, Nonexact -> 0
+            | Nonexact, Exact -> -1
+            | Exact, Nonexact -> 1
+            end
+          | n -> n
+          end
+        | n -> n
+        end
+      | Tarraykind ak1, Tarraykind ak2 ->
+        array_kind_compare ak1 ak2
+      | Tshape (known1, fields1), Tshape (known2, fields2) ->
+        begin match shape_fields_known_compare known1 known2 with
+        | 0 ->
+          List.compare (fun (k1,v1) (k2,v2) ->
+            match Ast.ShapeField.compare k1 k2 with
+            | 0 -> shape_field_type_compare v1 v2
+            | n -> n)
+            (Nast.ShapeMap.elements fields1) (Nast.ShapeMap.elements fields2)
+        | n -> n
+        end
+      | Tvar v1, Tvar v2 ->
+        compare v1 v2
+      | Tanon (_, id1), Tanon (_, id2) ->
+        compare id1 id2
+      | _ ->
+        ty_con_ordinal ty1 - ty_con_ordinal ty2
+
+    and shape_fields_known_compare sfk1 sfk2 =
+      match sfk1, sfk2 with
+      | FieldsFullyKnown, FieldsFullyKnown -> 0
+      | FieldsFullyKnown, FieldsPartiallyKnown _ -> -1
+      | FieldsPartiallyKnown _, FieldsFullyKnown -> 1
+      | FieldsPartiallyKnown f1, FieldsPartiallyKnown f2 ->
+        List.compare Ast.ShapeField.compare
+          (Nast.ShapeMap.keys f1) (Nast.ShapeMap.keys f2)
+
+    and shape_field_type_compare sft1 sft2 =
+      match ty_compare sft1.sft_ty sft2.sft_ty with
+      | 0 -> compare sft1.sft_optional sft2.sft_optional
+      | n -> n
+
+    and tfun_compare fty1 fty2 =
+      begin match ty_compare fty1.ft_ret fty2.ft_ret with
+      | 0 ->
+        begin match ft_params_compare fty1.ft_params fty2.ft_params with
+        | 0 ->
+          compare
+            (fty1.ft_is_coroutine, fty1.ft_arity, fty1.ft_reactive,
+            fty1.ft_return_disposable, fty1.ft_mutability, fty1.ft_returns_mutable)
+            (fty2.ft_is_coroutine, fty2.ft_arity, fty2.ft_reactive,
+            fty2.ft_return_disposable, fty2.ft_mutability, fty2.ft_returns_mutable)
+        | n -> n
+        end
+      | n -> n
+      end
+
+    and opt_ty_compare opt_ty1 opt_ty2 =
+      match opt_ty1, opt_ty2 with
+      | None, None -> 0
+      | Some _, None -> 1
+      | None, Some _ -> -1
+      | Some ty1, Some ty2 -> ty_compare ty1 ty2
+
+    and array_kind_compare ak1 ak2 =
+      match ak1, ak2 with
+      | AKmap (ty1, ty2), AKmap (ty3, ty4)
+      | AKdarray (ty1, ty2), AKdarray (ty3, ty4) ->
+        tyl_compare [ty1; ty2] [ty3; ty4]
+      | AKvarray ty1, AKvarray ty2
+      | AKvarray_or_darray ty1, AKvarray_or_darray ty2
+      | AKvec ty1, AKvec ty2 ->
+        ty_compare ty1 ty2
+      | _ ->
+        array_kind_con_ordinal ak1 - array_kind_con_ordinal ak2
+
+    in
+    ty_compare ty1 ty2
+
+and tyl_compare ?(normalize_unresolved = false) tyl1 tyl2 =
+  let ty_compare = ty_compare ~normalize_unresolved in
+  List.compare ty_compare tyl1 tyl2
+
+and ft_params_compare ?(normalize_unresolved = false) params1 params2 =
+  let ty_compare = ty_compare ~normalize_unresolved in
+
+  let rec ft_params_compare params1 params2 =
+    List.compare ft_param_compare params1 params2
+
+  and ft_param_compare param1 param2 =
+    match ty_compare param1.fp_type param2.fp_type with
+    | 0 ->
+      compare
+        (param1.fp_kind, param1.fp_accept_disposable, param1.fp_mutability)
+        (param2.fp_kind, param2.fp_accept_disposable, param2.fp_mutability)
+    | n -> n
+
+  in
+  ft_params_compare params1 params2
+
+and abstract_kind_compare ?(normalize_unresolved = false) t1 t2 =
+  let tyl_compare = tyl_compare ~normalize_unresolved in
+  match t1, t2 with
+  | AKnewtype (id, tyl), AKnewtype (id2, tyl2) ->
+    begin match String.compare id id2 with
+    | 0 -> tyl_compare tyl tyl2
+    | n -> n
+    end
+  | AKgeneric id1, AKgeneric id2
+  | AKenum id1, AKenum id2 ->
+    String.compare id1 id2
+  | AKdependent d1, AKdependent d2 ->
+    compare d1 d2
+  | _ ->
+    abstract_kind_con_ordinal t1 - abstract_kind_con_ordinal t2
+
+let ty_equal ?(normalize_unresolved = false) ty1 ty2 =
+  ty_compare ~normalize_unresolved ty1 ty2 = 0
+
+let make_function_type_rxvar param_ty =
+  match param_ty with
+  | (r, Tfun tfun) ->
+    r, Tfun { tfun with ft_reactive = RxVar None }
+  | (r, Toption (r1, Tfun tfun)) ->
+    r, Toption (r1, Tfun { tfun with ft_reactive = RxVar None })
+  | _ ->
+    param_ty

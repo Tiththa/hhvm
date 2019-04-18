@@ -1,13 +1,9 @@
-<?hh
+<?php
 
 // lambdas in class bodies
 
 class bar {
   private $x = "asd";
-
-  public function __destruct() {
-    echo "~bar()\n";
-  }
 
   public function foo() {
     return array_map(

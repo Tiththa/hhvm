@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/base/packed-array.h"
+#include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/base/set-array.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/type-array.h"
@@ -34,7 +35,6 @@
 #include "hphp/runtime/vm/jit/call-spec.h"
 #include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
-#include "hphp/runtime/vm/jit/code-gen-internal.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
@@ -43,6 +43,8 @@
 #include "hphp/runtime/vm/jit/vasm-gen.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-reg.h"
+
+#include "hphp/runtime/ext/std/ext_std_closure.h"
 
 #include "hphp/util/asm-x64.h"
 #include "hphp/util/trace.h"
@@ -59,6 +61,7 @@ void profileArrayKindHelper(ArrayKindProfile* profile, ArrayData* arr) {
 
 void cgProfileArrayKind(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<RDSHandleData>();
+  assertx(!rds::isPersistentHandle(extra->handle));
   auto& v = vmain(env);
 
   auto const profile = v.makeReg();
@@ -77,11 +80,23 @@ void cgCheckPackedArrayDataBounds(IRLS& env, const IRInstruction* inst) {
   auto idx = srcLoc(env, inst, 1).reg();
   auto& v = vmain(env);
 
-  // ArrayData::m_size is a uint32_t but we need to do a 64-bit comparison
-  // since idx is KindOfInt64.
-  auto const size = v.makeReg();
+  auto const size = [&]{
+    auto const arrTmp = inst->src(0);
+    if (arrTmp->hasConstVal(TArr)) return v.cns(arrTmp->arrVal()->size());
+    if (arrTmp->hasConstVal(TVec)) return v.cns(arrTmp->vecVal()->size());
+    auto const at = arrTmp->type().arrSpec().type();
+    using A = RepoAuthType::Array;
+    if (at && at->tag() == A::Tag::Packed && at->emptiness() == A::Empty::No) {
+      return v.cns(at->size());
+    }
+    // ArrayData::m_size is a uint32_t but we need to do a 64-bit comparison
+    // since idx is KindOfInt64.
+    auto const size = v.makeReg();
+    v << loadzlq{arr[ArrayData::offsetofSize()], size};
+    return size;
+  }();
+
   auto const sf = v.makeReg();
-  v << loadzlq{arr[ArrayData::offsetofSize()], size};
   v << cmpq{idx, size, sf};
   v << jcc{CC_BE, sf, {label(env, inst->next()), label(env, inst->taken())}};
 }
@@ -137,6 +152,10 @@ void cgCountDict(IRLS& env, const IRInstruction* inst) {
   implCountArrayLike(env, inst);
 }
 
+void cgCountShape(IRLS& env, const IRInstruction* inst) {
+  implCountArrayLike(env, inst);
+}
+
 void cgCountKeyset(IRLS& env, const IRInstruction* inst) {
   implCountArrayLike(env, inst);
 }
@@ -144,68 +163,40 @@ void cgCountKeyset(IRLS& env, const IRInstruction* inst) {
 ///////////////////////////////////////////////////////////////////////////////
 // AKExists.
 
-namespace {
-
-template <bool intishWarn>
-ALWAYS_INLINE
-bool ak_exist_string_impl(const ArrayData* arr, const StringData* key) {
-  int64_t n;
-  if (arr->convertKey(key, n, intishWarn)) {
-    return arr->exists(n);
-  }
-  return arr->exists(key);
-}
-
-}
-
-template <bool intishWarn>
-bool ak_exist_string(const ArrayData* arr, const StringData* key) {
-  return ak_exist_string_impl<intishWarn>(arr, key);
-}
-
 bool ak_exist_int_obj(ObjectData* obj, int64_t key) {
   if (obj->isCollection()) {
     return collections::contains(obj, key);
+  } else if (obj->instanceof(c_Closure::classof())) {
+    return false;
   }
-  auto const arr = obj->toArray();
+  auto const arr = obj->toArray(false, true);
   return arr.get()->exists(key);
 }
 
 bool ak_exist_string_obj(ObjectData* obj, StringData* key) {
   if (obj->isCollection()) {
     return collections::contains(obj, Variant{key});
+  } else if (obj->instanceof(c_Closure::classof())) {
+    return false;
   }
-  auto const arr = obj->toArray();
-  return ak_exist_string_impl<false>(arr.get(), key);
+  auto const arr = obj->toArray(false, true);
+  return arr.get()->exists(key);
 }
 
 void cgAKExistsArr(IRLS& env, const IRInstruction* inst) {
-  auto const arrTy = inst->src(0)->type();
   auto const keyTy = inst->src(1)->type();
   auto& v = vmain(env);
 
-  auto const keyInfo = checkStrictlyInteger(arrTy, keyTy);
-  auto const target =
-    keyInfo.checkForInt
-      ? (RuntimeOption::EvalHackArrCompatNotices
-         ? CallSpec::direct(ak_exist_string<true>)
-         : CallSpec::direct(ak_exist_string<false>))
-      : (keyInfo.type == KeyType::Int
-         ? CallSpec::array(&g_array_funcs.existsInt)
-         : CallSpec::array(&g_array_funcs.existsStr));
-
-  auto args = argGroup(env, inst).ssa(0);
-  if (keyInfo.converted) {
-    args.imm(keyInfo.convertedInt);
-  } else {
-    args.ssa(1);
-  }
+  auto const target = keyTy <= TInt
+    ? CallSpec::array(&g_array_funcs.existsInt)
+    : (assertx(keyTy <= TStr),
+       CallSpec::array(&g_array_funcs.existsStr));
 
   cgCallHelper(
     v, env, target, callDest(env, inst),
     RuntimeOption::EvalHackArrCompatNotices
       ? SyncOptions::Sync : SyncOptions::None,
-    args
+    argGroup(env, inst).ssa(0).ssa(1)
   );
 }
 
@@ -255,16 +246,43 @@ IMPL_OPCODE_CALL(NewDictArray)
 IMPL_OPCODE_CALL(AllocPackedArray)
 IMPL_OPCODE_CALL(AllocVecArray)
 
-void cgNewStructArray(IRLS& env, const IRInstruction* inst) {
+void cgNewDArray(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(MixedArray::MakeReserveDArray),
+    callDest(env, inst),
+    SyncOptions::None,
+    argGroup(env, inst).ssa(0)
+  );
+}
+
+void cgAllocVArray(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<PackedArrayData>();
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(PackedArray::MakeUninitializedVArray),
+    callDest(env, inst),
+    SyncOptions::None,
+    argGroup(env, inst).imm(extra->size)
+  );
+}
+
+namespace {
+
+void newStructImpl(IRLS& env,
+                   const IRInstruction* inst,
+                   MixedArray* (*f)(uint32_t,
+                                    const StringData* const*,
+                                    const TypedValue*)
+                  ) {
   auto const sp = srcLoc(env, inst, 0).reg();
   auto const extra = inst->extra<NewStructData>();
   auto& v = vmain(env);
 
   auto table = v.allocData<const StringData*>(extra->numKeys);
   memcpy(table, extra->keys, extra->numKeys * sizeof(*extra->keys));
-
-  MixedArray* (*f)(uint32_t, const StringData* const*, const TypedValue*) =
-    &MixedArray::MakeStruct;
 
   auto const args = argGroup(env, inst)
     .imm(extra->numKeys)
@@ -273,6 +291,40 @@ void cgNewStructArray(IRLS& env, const IRInstruction* inst) {
 
   cgCallHelper(v, env, CallSpec::direct(f), callDest(env, inst),
                SyncOptions::None, args);
+}
+
+}
+
+void cgNewRecord(IRLS& env, const IRInstruction* inst) {
+  auto const rec = srcLoc(env, inst, 0).reg();
+  auto const sp = srcLoc(env, inst, 1).reg();
+  auto const extra = inst->extra<NewStructData>();
+  auto& v = vmain(env);
+
+  auto table = v.allocData<const StringData*>(extra->numKeys);
+  memcpy(table, extra->keys, extra->numKeys * sizeof(*extra->keys));
+
+  auto const args = argGroup(env, inst)
+    .reg(rec)
+    .imm(extra->numKeys)
+    .dataPtr(table)
+    .addr(sp, cellsToBytes(extra->offset.offset));
+
+  cgCallHelper(v, env, CallSpec::direct(RecordData::newRecord),
+               callDest(env, inst),
+               SyncOptions::Sync, args);
+}
+
+void cgNewStructArray(IRLS& env, const IRInstruction* inst) {
+  newStructImpl(env, inst, MixedArray::MakeStruct);
+}
+
+void cgNewStructDArray(IRLS& env, const IRInstruction* inst) {
+  newStructImpl(env, inst, MixedArray::MakeStructDArray);
+}
+
+void cgNewStructDict(IRLS& env, const IRInstruction* inst) {
+  newStructImpl(env, inst, MixedArray::MakeStructDict);
 }
 
 void cgNewKeysetArray(IRLS& env, const IRInstruction* inst) {

@@ -35,19 +35,19 @@
 #include "hphp/util/hdf.h"
 #include "hphp/util/logger.h"
 
+#include "hphp/runtime/base/apc-file-storage.h"
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/comparisons.h"
+#include "hphp/runtime/base/concurrent-shared-store.h"
+#include "hphp/runtime/base/config.h"
+#include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/ini-setting.h"
+#include "hphp/runtime/base/program-functions.h"
+#include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/ext/apc/snapshot-builder.h"
 #include "hphp/runtime/ext/fb/ext_fb.h"
-#include "hphp/runtime/base/array-init.h"
-#include "hphp/runtime/base/comparisons.h"
-#include "hphp/runtime/base/execution-context.h"
-#include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/program-functions.h"
-#include "hphp/runtime/base/builtin-functions.h"
-#include "hphp/runtime/base/variable-serializer.h"
-#include "hphp/runtime/base/concurrent-shared-store.h"
-#include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/config.h"
-#include "hphp/runtime/base/apc-file-storage.h"
 #include "hphp/runtime/server/cli-server.h"
 
 using HPHP::ScopedMem;
@@ -197,6 +197,8 @@ void apcExtension::moduleLoad(const IniSetting::Map& ini, Hdf config) {
   Config::Bind(UseUncounted, ini, config, "Server.APC.MemModelTreadmill",
                RuntimeOption::ServerExecutionMode());
 #endif
+  Config::Bind(ShareUncounted, ini, config, "Server.APC.ShareUncounted", true);
+  if (!UseUncounted && ShareUncounted) ShareUncounted = false;
 
   IniSetting::Bind(this, IniSetting::PHP_INI_SYSTEM, "apc.enabled", &Enable);
   IniSetting::Bind(this, IniSetting::PHP_INI_SYSTEM, "apc.stat",
@@ -254,6 +256,7 @@ void apcExtension::moduleInit() {
   HHVM_FE(apc_dec);
   HHVM_FE(apc_cas);
   HHVM_FE(apc_exists);
+  HHVM_FE(apc_size);
   HHVM_FE(apc_cache_info);
   HHVM_FE(apc_sma_info);
   loadSystemlib();
@@ -302,6 +305,7 @@ bool apcExtension::UseUncounted = true;
 #else
 bool apcExtension::UseUncounted = false;
 #endif
+bool apcExtension::ShareUncounted = true;
 bool apcExtension::Stat = true;
 // Different from zend default but matches what we've been returning for years
 bool apcExtension::EnableCLI = true;
@@ -518,6 +522,14 @@ Variant HHVM_FUNCTION(apc_exists,
   return apc_store().exists(key.toString());
 }
 
+TypedValue HHVM_FUNCTION(apc_size, const String& key) {
+  if (!apcExtension::Enable) return make_tv<KindOfNull>();
+
+  bool found = false;
+  int64_t size = apc_store().size(key, found);
+
+  return found ? make_tv<KindOfInt64>(size) : make_tv<KindOfNull>();
+}
 
 const StaticString s_user("user");
 const StaticString s_start_time("start_time");
@@ -575,7 +587,7 @@ Variant HHVM_FUNCTION(apc_cache_info,
 }
 
 Array HHVM_FUNCTION(apc_sma_info, bool /*limited*/ /* = false */) {
-  return empty_array();
+  return empty_darray();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -615,7 +627,7 @@ struct ApcLoadWorker {
   }
   void doJob(std::shared_ptr<ApcLoadJob> job) {
     char func_name[128];
-    MemoryManager::SuppressOOM so(MM());
+    MemoryManager::SuppressOOM so(*tl_heap);
     snprintf(func_name, sizeof(func_name), "_apc_load_%d", job->m_index);
     apc_load_func(job->m_handle, func_name)();
   }
@@ -636,7 +648,8 @@ void apc_load(int thread) {
       !apcExtension::Enable) {
     return;
   }
-  BootStats::Block timer("loading APC data");
+  BootStats::Block timer("loading APC data",
+                         RuntimeOption::ServerExecutionMode());
   if (apc_store().primeFromSnapshot(apcExtension::PrimeLibrary.c_str())) {
     return;
   }
@@ -668,7 +681,6 @@ void apc_load(int thread) {
 
   apc_store().primeDone();
   if (!upgradeDest.empty()) {
-    BootStats::Block block("SnapshotBuilder::writeToFile");
     s_snapshotBuilder.writeToFile(upgradeDest);
   }
 
@@ -731,7 +743,7 @@ void apc_load_impl_compressed
         k += int_lens[i + 2] + 1; // skip \0
       }
       s.prime(std::move(vars));
-      assert((k - keys) == len);
+      assertx((k - keys) == len);
     }
   }
   {
@@ -767,7 +779,7 @@ void apc_load_impl_compressed
         k += char_lens[i + 2] + 1; // skip \0
       }
       s.prime(std::move(vars));
-      assert((k - keys) == len);
+      assertx((k - keys) == len);
     }
   }
   {
@@ -792,7 +804,7 @@ void apc_load_impl_compressed
         p += string_lens[i + i + 3] + 1; // skip \0
       }
       s.prime(std::move(vars));
-      assert((p - decoded) == len);
+      assertx((p - decoded) == len);
     }
   }
   {
@@ -815,7 +827,7 @@ void apc_load_impl_compressed
         p += object_lens[i + i + 3] + 1; // skip \0
       }
       s.prime(std::move(vars));
-      assert((p - decoded) == len);
+      assertx((p - decoded) == len);
     }
   }
   {
@@ -843,7 +855,7 @@ void apc_load_impl_compressed
         p += thrift_lens[i + i + 3] + 1; // skip \0
       }
       s.prime(std::move(vars));
-      assert((p - decoded) == len);
+      assertx((p - decoded) == len);
     }
   }
   {
@@ -861,7 +873,8 @@ void apc_load_impl_compressed
         item.readOnly = readOnly;
         p += other_lens[i + i + 2] + 1; // skip \0
         String value(p, other_lens[i + i + 3], CopyString);
-        Variant v = unserialize_from_string(value);
+        Variant v =
+          unserialize_from_string(value, VariableUnserializer::Type::Internal);
         if (same(v, false)) {
           // we can't possibly get here if it was a boolean "false" that's
           // supposed to be serialized as a char
@@ -872,7 +885,7 @@ void apc_load_impl_compressed
         p += other_lens[i + i + 3] + 1; // skip \0
       }
       s.prime(std::move(vars));
-      assert((p - decoded) == len);
+      assertx((p - decoded) == len);
     }
   }
 }
@@ -918,7 +931,7 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
     rfc1867ApcData->update_freq = RuntimeOption::Rfc1867Freq;
 
     if (rfc1867ApcData->update_freq < 0) {
-      assert(false); // TODO: support percentage
+      assertx(false); // TODO: support percentage
       // frequency is a percentage, not bytes
       rfc1867ApcData->update_freq =
         rfc1867ApcData->content_length * RuntimeOption::Rfc1867Freq / 100;
@@ -1060,11 +1073,11 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
 ///////////////////////////////////////////////////////////////////////////////
 // apc serialization
 
-String apc_serialize(const Variant& value) {
+String apc_serialize(const_variant_ref value) {
   VariableSerializer::Type sType =
     apcExtension::EnableApcSerialize ?
       VariableSerializer::Type::APCSerialize :
-      VariableSerializer::Type::Serialize;
+      VariableSerializer::Type::Internal;
   VariableSerializer vs(sType);
   return vs.serialize(value, true);
 }
@@ -1073,7 +1086,7 @@ Variant apc_unserialize(const char* data, int len) {
   VariableUnserializer::Type sType =
     apcExtension::EnableApcSerialize ?
       VariableUnserializer::Type::APCSerialize :
-      VariableUnserializer::Type::Serialize;
+      VariableUnserializer::Type::Internal;
   return unserialize_ex(data, len, sType);
 }
 
@@ -1115,6 +1128,19 @@ bool apc_dump(const char *filename, bool keyOnly, bool metaDump) {
 
   apc_store().dump(out, mode);
   out.close();
+  return true;
+}
+
+bool apc_dump_prefix(const char *filename,
+                     const std::string &prefix,
+                     uint32_t count) {
+  std::ofstream out(filename);
+  if (out.fail()) {
+    return false;
+  }
+  SCOPE_EXIT { out.close(); };
+
+  apc_store().dumpPrefix(out, prefix, count);
   return true;
 }
 

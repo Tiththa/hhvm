@@ -26,6 +26,7 @@
 #include <folly/Format.h>
 #include <folly/portability/SysMman.h>
 
+#include "hphp/util/arch.h"
 #include "hphp/util/assertions.h"
 
 namespace HPHP {
@@ -211,8 +212,9 @@ struct DataBlock {
     alloc<uint8_t>(1, nbytes);
   }
 
-  Address base() const { return m_base; }
+  Address     base() const { return m_base; }
   Address frontier() const { return m_frontier; }
+  size_t      size() const { return m_size; }
   std::string name() const { return m_name; }
 
   /*
@@ -231,6 +233,10 @@ struct DataBlock {
     m_frontier = addr;
   }
 
+  void moveFrontier(int64_t offset) {
+    setFrontier(m_frontier + offset);
+  }
+
   size_t capacity() const {
     return m_size;
   }
@@ -245,6 +251,11 @@ struct DataBlock {
 
   bool contains(ConstCodeAddress addr) const {
     return addr >= m_base && addr < (m_base + m_size);
+  }
+
+  bool contains(ConstCodeAddress start, ConstCodeAddress end) const {
+    return start <= end &&
+           start >= m_base && end <= (m_base + m_size);
   }
 
   bool empty() const {
@@ -270,6 +281,20 @@ struct DataBlock {
   size_t numAllocs()  const { return m_nalloc; }
   size_t bytesFree()  const { return m_bytesFree; }
   size_t blocksFree() const { return m_freeRanges.size(); }
+
+  void sync(Address begin = nullptr,  Address end = nullptr) {
+    if (!begin) begin = m_base;
+    if (!end) end = m_frontier;
+    syncDirect(toDestAddress(begin), toDestAddress(end));
+  }
+
+  static void syncDirect(Address begin,  Address end) {
+    if (arch() == Arch::ARM && begin < end) {
+      __builtin___clear_cache(reinterpret_cast<char*>(begin),
+                              reinterpret_cast<char*>(end));
+
+    }
+  }
 
 private:
 

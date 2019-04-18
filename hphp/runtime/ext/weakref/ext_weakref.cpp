@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_EXT_WEAKREF_H_
-#define incl_HPHP_EXT_WEAKREF_H_
+#include "hphp/runtime/ext/weakref/weakref-data-handle.h"
 
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/type-variant.h"
@@ -24,41 +23,34 @@
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/system/systemlib.h"
+#include "hphp/util/type-scan.h"
 
 namespace HPHP {
 
 const StaticString s_WeakRefDataHandle("WeakRefDataHandle");
-struct WeakRefDataHandle final {
-  // We share the general validity and pointer between WeakRefHandles.
-  req::shared_ptr<WeakRefData> wr_data;
-  int32_t acquire_count;
 
-  WeakRefDataHandle(const WeakRefDataHandle&) = delete;
+WeakRefDataHandle& WeakRefDataHandle::operator=(
+    const WeakRefDataHandle& other) {
+  auto old_wr_data = wr_data;
+  auto old_acquire_count = acquire_count;
+  wr_data = other.wr_data;
+  acquire_count = other.acquire_count;
 
-  WeakRefDataHandle(): wr_data(nullptr), acquire_count(0) {}
-  WeakRefDataHandle& operator=(const WeakRefDataHandle& other) {
-    auto old_wr_data = wr_data;
-    auto old_acquire_count = acquire_count;
-    wr_data = other.wr_data;
-    acquire_count = other.acquire_count;
-
-    if (acquire_count > 0 && wr_data->pointee.m_type != KindOfUninit) {
-      tvIncRefCountable(&(wr_data->pointee));
-    }
-    if (old_acquire_count > 0 && old_wr_data->pointee.m_type != KindOfUninit) {
-      tvDecRefCountable(&(old_wr_data->pointee));
-    }
-    return *this;
+  if (acquire_count > 0 && wr_data->isValid()) {
+    tvIncRefCountable(wr_data->pointee);
   }
-
-  void sweep() {}
-
-  ~WeakRefDataHandle() {
-    if (acquire_count > 0 && wr_data->pointee.m_type != KindOfUninit) {
-      tvDecRefCountable(&(wr_data->pointee));
-    }
+  if (old_acquire_count > 0 && old_wr_data->isValid()) {
+    tvDecRefCountable(&(old_wr_data->pointee));
   }
-};
+  return *this;
+}
+
+
+WeakRefDataHandle::~WeakRefDataHandle() {
+  if (acquire_count > 0 && wr_data->isValid()) {
+    tvDecRefCountable(&(wr_data->pointee));
+  }
+}
 
 namespace {
 
@@ -77,12 +69,12 @@ void HHVM_METHOD(WeakRef, __construct, const Variant& pointee) {
 
 bool HHVM_METHOD(WeakRef, acquire) {
   auto wr_data_handle = Native::data<WeakRefDataHandle>(this_);
-  if (LIKELY(wr_data_handle->wr_data->pointee.m_type != KindOfUninit)) {
+  if (LIKELY(wr_data_handle->wr_data->isValid())) {
     wr_data_handle->acquire_count++;
     if (wr_data_handle->acquire_count == 1) {
-      tvIncRefCountable(&(wr_data_handle->wr_data->pointee));
+      tvIncRefCountable(wr_data_handle->wr_data->pointee);
     }
-    assert(wr_data_handle->acquire_count > 0);
+    assertx(wr_data_handle->acquire_count > 0);
     return true;
   }
   return false;
@@ -90,8 +82,8 @@ bool HHVM_METHOD(WeakRef, acquire) {
 
 TypedValue HHVM_METHOD(WeakRef, get) {
   auto wr_data_handle = Native::data<WeakRefDataHandle>(this_);
-  if (wr_data_handle->wr_data->pointee.m_type != KindOfUninit) {
-    tvIncRefCountable(&(wr_data_handle->wr_data->pointee));
+  if (wr_data_handle->wr_data->isValid()) {
+    tvIncRefCountable(wr_data_handle->wr_data->pointee);
     return (wr_data_handle->wr_data->pointee);
   } else {
     return make_tv<KindOfNull>();
@@ -100,7 +92,7 @@ TypedValue HHVM_METHOD(WeakRef, get) {
 
 bool HHVM_METHOD(WeakRef, release) {
   auto wr_data_handle = Native::data<WeakRefDataHandle>(this_);
-  if (LIKELY(wr_data_handle->wr_data->pointee.m_type != KindOfUninit
+  if (LIKELY(wr_data_handle->wr_data->isValid()
         && wr_data_handle->acquire_count > 0)) {
     wr_data_handle->acquire_count--;
     if (wr_data_handle->acquire_count == 0) {
@@ -113,7 +105,7 @@ bool HHVM_METHOD(WeakRef, release) {
 
 bool HHVM_METHOD(WeakRef, valid) {
   auto wr_data_handle = Native::data<WeakRefDataHandle>(this_);
-  return wr_data_handle->wr_data->pointee.m_type != KindOfUninit;
+  return wr_data_handle->wr_data->isValid();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -136,4 +128,3 @@ struct WeakRefExtension final : Extension {
 
 } // anonymous namespace
 } // namespace HPHP
-#endif // incl_HPHP_EXT_WEAKREF_H_

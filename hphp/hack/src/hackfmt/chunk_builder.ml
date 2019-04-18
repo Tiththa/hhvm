@@ -2,16 +2,12 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
-
-(* TODO: move this to a config file *)
-let __INDENT_WIDTH = 2
+open Core_kernel
 
 type open_span = {
   open_span_start: int;
@@ -29,11 +25,12 @@ let open_span start = {
 type string_type =
   | DocStringClose
   | Number
-  | Concat
+  | ConcatOp
+  | LineComment
   | Other
 
 let builder = object (this)
-  val open_spans = Stack.create ();
+  val open_spans = Caml.Stack.create ();
   val mutable rules = [];
   val mutable lazy_rules = ISet.empty;
 
@@ -57,15 +54,17 @@ let builder = object (this)
 
   val mutable last_string_type = Other;
 
+  val mutable after_next_string = None;
+
   (* TODO: Make builder into an instantiable class instead of
    * having this reset method
    *)
   method private reset () =
-    Stack.clear open_spans;
+    Caml.Stack.clear open_spans;
     rules <- [];
     lazy_rules <- ISet.empty;
     chunks <- [];
-    next_split_rule <- NoRule;
+    next_split_rule <- RuleKind Rule.Always;
     next_lazy_rules <- ISet.empty;
     num_pending_spans <- 0;
     space_if_not_split <- false;
@@ -89,14 +88,11 @@ let builder = object (this)
 
     chunks <- (match chunks with
       | hd :: tl when hd.Chunk.is_appendable ->
-        let text = hd.Chunk.text ^ (if pending_space then " " else "") in
+        let leading_space = pending_space in
         pending_space <- false;
         let indentable = hd.Chunk.indentable && not multiline in
-        let hd = {hd with Chunk.text = text; Chunk.indentable = indentable} in
-        let hd =
-          if is_trivia
-          then {hd with Chunk.text = text ^ s}
-          else Chunk.add_token hd s width seen_chars in
+        let hd = Chunk.{hd with indentable} in
+        let hd = Chunk.add_atom hd ~leading_space s width seen_chars in
         hd :: tl
       | _ -> begin
           space_if_not_split <- pending_space;
@@ -104,10 +100,7 @@ let builder = object (this)
           let nesting = nesting_alloc.Nesting_allocator.current_nesting in
           let handle_started_next_split_rule () =
             let chunk = Chunk.make (List.hd rules) nesting last_chunk_end in
-            let chunk =
-              if is_trivia
-              then {chunk with Chunk.text = s}
-              else Chunk.add_token chunk s width seen_chars in
+            let chunk = Chunk.add_atom chunk s width seen_chars in
             let chunk = {chunk with Chunk.indentable = not multiline} in
             let cs = chunk :: chunks in
             this#end_rule ();
@@ -117,10 +110,7 @@ let builder = object (this)
           match next_split_rule with
             | NoRule ->
               let chunk = Chunk.make (List.hd rules) nesting last_chunk_end in
-              let chunk =
-                if is_trivia
-                then {chunk with Chunk.text = s}
-                else Chunk.add_token chunk s width seen_chars in
+              let chunk = Chunk.add_atom chunk s width seen_chars in
               let chunk = {chunk with Chunk.indentable = not multiline} in
               chunk :: chunks
             | LazyRuleID rule_id ->
@@ -139,7 +129,7 @@ let builder = object (this)
       next_lazy_rules <- ISet.empty;
 
       for _ = 1 to num_pending_spans do
-        Stack.push (open_span (List.length chunks - 1)) open_spans
+        Caml.Stack.push (open_span (List.length chunks - 1)) open_spans
       done;
       num_pending_spans <- 0;
 
@@ -156,12 +146,20 @@ let builder = object (this)
 
     last_string_type <- Other;
 
-  method private set_pending_comma () =
+    Option.call ~f:after_next_string ();
+    after_next_string <- None;
+
+  method private set_pending_comma present_in_original_source =
     if last_string_type <> DocStringClose then
+      let range =
+        if not present_in_original_source
+        then None
+        else Some (seen_chars, seen_chars + 1)
+      in
       chunks <- (match chunks with
         | hd :: tl when not hd.Chunk.is_appendable ->
-          {hd with Chunk.comma_rule = Some (List.hd_exn rules)} :: tl;
-        | _ -> pending_comma <- Some (List.hd_exn rules); chunks;
+          {hd with Chunk.comma = Some (List.hd_exn rules, range)} :: tl;
+        | _ -> pending_comma <- Some (List.hd_exn rules, range); chunks;
       );
 
   method private add_space () =
@@ -209,6 +207,7 @@ let builder = object (this)
     let create_empty_chunk () =
       let rule = this#create_rule Rule.Always in
       let chunk = Chunk.make (Some rule) nesting last_chunk_end in
+      let chunk = Chunk.add_atom chunk "" 0 last_chunk_end in
       last_chunk_end <- seen_chars;
       Chunk.finalize chunk rule rule_alloc false None seen_chars
     in
@@ -246,8 +245,8 @@ let builder = object (this)
       | _ -> rule_type
     )
 
-  method private nest ?(amount=__INDENT_WIDTH) ?(skip_parent=false) () =
-    nesting_alloc <- Nesting_allocator.nest nesting_alloc amount skip_parent
+  method private nest ?(skip_parent=false) () =
+    nesting_alloc <- Nesting_allocator.nest nesting_alloc skip_parent
 
   method private unnest () =
     nesting_alloc <- Nesting_allocator.unnest nesting_alloc
@@ -278,7 +277,7 @@ let builder = object (this)
 
   method private end_rule () =
     rules <- match rules with
-      | hd :: tl -> tl
+      | _ :: tl -> tl
       | [] -> [] (*TODO: error *)
 
   method private has_rule_kind kind =
@@ -292,7 +291,7 @@ let builder = object (this)
   method private end_span () =
     num_pending_spans <- match num_pending_spans with
       | 0 ->
-        let os = Stack.pop open_spans in
+        let os = Caml.Stack.pop open_spans in
         let sa, span = Span_allocator.make_span span_alloc in
         span_alloc <- sa;
         let r_chunks = List.rev chunks in
@@ -311,12 +310,12 @@ let builder = object (this)
   *)
   method private start_block_nest () =
     if this#is_at_chunk_group_boundry ()
-    then block_indent <- block_indent + 2
+    then block_indent <- block_indent + 1
     else this#nest ()
 
   method private end_block_nest () =
     if this#is_at_chunk_group_boundry ()
-    then block_indent <- block_indent - 2
+    then block_indent <- block_indent - 1
     else this#unnest ()
 
   method private push_chunk_group () =
@@ -334,19 +333,9 @@ let builder = object (this)
 
   method private _end () =
     this#hard_split ();
-    let last_chunk_empty = match chunks with
-      | hd :: tl -> hd.Chunk.text = ""
-      | [] ->
-        match chunk_groups with
-        | [] -> true
-        | hd :: tl ->
-          match List.rev hd.Chunk_group.chunks with
-          | [] -> true
-          | hd :: tl -> hd.Chunk.text = ""
-    in
-    if not last_chunk_empty then
-      this#add_always_empty_chunk ();
-    this#push_chunk_group ();
+    if not (List.is_empty chunks)
+    then failwith ("The impossible happened: Chunk_builder attempted to end " ^
+                   "when not at a chunk group boundary");
     List.rev chunk_groups
 
   method private advance n =
@@ -354,20 +343,23 @@ let builder = object (this)
 
   method build_chunk_groups node =
     this#reset ();
-    this#consume_fmt_node node;
+    this#consume_doc node;
     this#_end ()
 
-  method private consume_fmt_node node =
-    let open Fmt_node in
+  method private consume_doc node =
+    let open Doc in
     match node with
     | Nothing ->
       ()
-    | Fmt nodes ->
-      List.iter nodes this#consume_fmt_node
+    | Concat nodes ->
+      List.iter nodes this#consume_doc
     | Text (text, width) ->
       this#add_string text width;
     | Comment (text, width) ->
       this#add_string ~is_trivia:true text width;
+    | SingleLineComment (text, width) ->
+      this#add_string ~is_trivia:true text width;
+      last_string_type <- LineComment;
     | Ignore (_, width) ->
       this#advance width;
     | MultilineString (strings, width) ->
@@ -385,16 +377,16 @@ let builder = object (this)
       seen_chars <- prev_seen + width;
     | DocLiteral node ->
       this#set_next_split_rule (RuleKind (Rule.Simple Cost.Base));
-      this#consume_fmt_node node;
+      this#consume_doc node;
       last_string_type <- DocStringClose;
     | NumericLiteral node ->
-      if last_string_type = Concat then this#add_space ();
-      this#consume_fmt_node node;
+      if last_string_type = ConcatOp then this#add_space ();
+      this#consume_doc node;
       last_string_type <- Number;
     | ConcatOperator node ->
       if last_string_type = Number then this#add_space ();
-      this#consume_fmt_node node;
-      last_string_type <- Concat;
+      this#consume_doc node;
+      last_string_type <- ConcatOp;
     | Split ->
       this#split ()
     | SplitWith cost ->
@@ -408,45 +400,57 @@ let builder = object (this)
       this#add_space ()
     | Span nodes ->
       this#start_span ();
-      List.iter nodes this#consume_fmt_node;
+      List.iter nodes this#consume_doc;
       this#end_span ();
     | Nest nodes ->
       this#nest ();
-      List.iter nodes this#consume_fmt_node;
+      List.iter nodes this#consume_doc;
       this#unnest ();
     | ConditionalNest nodes ->
       this#nest ~skip_parent:true ();
-      List.iter nodes this#consume_fmt_node;
+      List.iter nodes this#consume_doc;
       this#unnest ();
     | BlockNest nodes ->
       this#start_block_nest ();
-      List.iter nodes this#consume_fmt_node;
+      List.iter nodes this#consume_doc;
       this#end_block_nest ();
-    | WithRule (rule_kind, action) ->
+    | WithRule (rule_kind, body) ->
       this#start_rule_kind ~rule_kind ();
-      this#consume_fmt_node action;
+      this#consume_doc body;
       this#end_rule ();
-    | WithLazyRule (rule_kind, before, action) ->
+    | WithLazyRule (rule_kind, before, body) ->
       let rule = this#create_lazy_rule ~rule_kind () in
-      this#consume_fmt_node before;
+      this#consume_doc before;
       this#start_lazy_rule rule;
-      this#consume_fmt_node action;
+      this#consume_doc body;
       this#end_rule ();
-    | WithPossibleLazyRule (rule_kind, before, action) ->
-      if this#has_rule_kind rule_kind then begin
-        let rule = this#create_lazy_rule ~rule_kind () in
-        this#consume_fmt_node before;
-        this#start_lazy_rule rule;
-        this#consume_fmt_node action;
-        this#end_rule ();
-      end else begin
-        this#start_rule_kind ~rule_kind ();
-        this#consume_fmt_node before;
-        this#consume_fmt_node action;
-        this#end_rule ();
-      end
-    | TrailingComma ->
-      this#set_pending_comma ()
+    | WithOverridingParentalRule body ->
+      let start_parental_rule = this#start_rule_kind ~rule_kind:Rule.Parental in
+      (* If we have a pending split which is not a hard split, replace it with a
+         Parental rule, which will break if the body breaks. *)
+      let override_independent_split =
+        match next_split_rule with
+        | RuleKind Rule.Always -> false
+        | RuleKind _ -> true
+        | _ -> false
+      in
+      (* Starting a new rule will override the independent split, controlling
+         that split with the new Parental rule instead. *)
+      if override_independent_split then start_parental_rule ();
+      (* Regardless of whether we intend to override the preceding split, start
+         a new Parental rule to govern the contents of the body. *)
+      after_next_string <- Some start_parental_rule;
+      this#consume_doc body;
+      this#end_rule ();
+      if override_independent_split then this#end_rule ();
+    | TrailingComma present_in_original_source ->
+      if last_string_type <> LineComment
+      then this#set_pending_comma present_in_original_source
+      else begin
+        this#add_string "," 1;
+        this#advance (-1);
+      end;
+      last_string_type <- Other;
 end
 
 let build node =

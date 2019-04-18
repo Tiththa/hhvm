@@ -42,8 +42,19 @@ inline Transport* ExecutionContext::getTransport() {
   return m_transport;
 }
 
+inline rqtrace::Trace* ExecutionContext::getRequestTrace() {
+  return m_requestTrace;
+}
+
 inline void ExecutionContext::setTransport(Transport* transport) {
   m_transport = transport;
+  if (transport && !m_requestTrace) {
+    if (auto trace = m_transport->getRequestTrace()) m_requestTrace = trace;
+  }
+}
+
+inline void ExecutionContext::setRequestTrace(rqtrace::Trace* trace) {
+  m_requestTrace = trace;
 }
 
 inline String ExecutionContext::getCwd() const {
@@ -187,6 +198,18 @@ inline bool ExecutionContext::hasRequestEventHandlers() const {
   return !m_requestEventHandlers.empty();
 }
 
+inline const Variant& ExecutionContext::getSoftLateInitDefault() const {
+  return m_softLateInitDefault;
+}
+
+inline void ExecutionContext::setSoftLateInitDefault(Variant d) {
+  m_softLateInitDefault = std::move(d);
+}
+
+inline const RepoOptions* ExecutionContext::getRepoOptionsForRequest() const {
+  return m_requestOptions.get_pointer();
+}
+
 inline const Func* ExecutionContext::getPrevFunc(const ActRec* fp) {
   auto state = getPrevVMState(fp, nullptr, nullptr, nullptr);
   return state ? state->func() : nullptr;
@@ -194,10 +217,10 @@ inline const Func* ExecutionContext::getPrevFunc(const ActRec* fp) {
 
 inline TypedValue ExecutionContext::invokeFunc(
   const CallCtx& ctx,
-  const Variant& args_,
-  VarEnv* varEnv
+  const Variant& args_
 ) {
-  return invokeFunc(ctx.func, args_, ctx.this_, ctx.cls, varEnv, ctx.invName);
+  return invokeFunc(ctx.func, args_, ctx.this_, ctx.cls, nullptr,
+                    ctx.invName, InvokeNormal, ctx.dynamic);
 }
 
 inline TypedValue ExecutionContext::invokeFuncFew(
@@ -224,31 +247,35 @@ inline TypedValue ExecutionContext::invokeFuncFew(
     thisOrCls,
     ctx.invName,
     argc,
-    argv
+    argv,
+    ctx.dynamic
   );
 }
 
 inline TypedValue ExecutionContext::invokeMethod(
   ObjectData* obj,
   const Func* meth,
-  InvokeArgs args
+  InvokeArgs args,
+  bool dynamic
 ) {
   return invokeFuncFew(
     meth,
     ActRec::encodeThis(obj),
     nullptr /* invName */,
     args.size(),
-    args.start()
+    args.start(),
+    dynamic
   );
 }
 
 inline Variant ExecutionContext::invokeMethodV(
   ObjectData* obj,
   const Func* meth,
-  InvokeArgs args
+  InvokeArgs args,
+  bool dynamic
 ) {
   // Construct variant without triggering incref.
-  return Variant::attach(invokeMethod(obj, meth, args));
+  return Variant::attach(invokeMethod(obj, meth, args, dynamic));
 }
 
 inline ActRec* ExecutionContext::getOuterVMFrame(const ActRec* ar) {

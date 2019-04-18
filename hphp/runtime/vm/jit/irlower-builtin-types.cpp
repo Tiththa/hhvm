@@ -43,21 +43,37 @@ TRACE_SET_MOD(irlower);
 
 /*
  * Attempt to convert `tv' to a given type, raising a warning and throwing a
- * TVCoercionException on failure.
+ * Exception on failure.
  */
 #define XX(kind, expkind)                                             \
 void tvCoerceParamTo##kind##OrThrow(TypedValue* tv,                   \
                                     const Func* callee,               \
                                     unsigned int arg_num) {           \
   tvCoerceIfStrict(*tv, arg_num, callee);                             \
+  auto ty = tv->m_type;                                               \
   if (LIKELY(tvCoerceParamTo##kind##InPlace(tv,                       \
                                             callee->isBuiltin()))) {  \
+    if (RuntimeOption::EvalWarnOnCoerceBuiltinParams &&               \
+        tv->m_type != KindOfNull &&                                   \
+        !equivDataTypes(ty, KindOf##expkind)) {                       \
+      raise_warning(                                                  \
+        "Argument %i of type %s was passed to %s, "                   \
+        "it was coerced to %s",                                       \
+        arg_num,                                                      \
+        getDataTypeString(ty).data(),                                 \
+        callee->fullDisplayName()->data(),                            \
+        getDataTypeString(KindOf##expkind).data()                     \
+      );                                                              \
+    }                                                                 \
     return;                                                           \
   }                                                                   \
-  raise_param_type_warning(callee->displayName()->data(),             \
-                           arg_num, KindOf##expkind, tv->m_type);     \
-  throw TVCoercionException(callee, arg_num, tv->m_type,              \
-                            KindOf##expkind);                         \
+  auto msg = param_type_error_message(callee->displayName()->data(),  \
+                                      arg_num, KindOf##expkind,       \
+                                      tv->m_type);                    \
+  if (RuntimeOption::PHP7_EngineExceptions) {                         \
+    SystemLib::throwTypeErrorObject(msg);                             \
+  }                                                                   \
+  SystemLib::throwRuntimeExceptionObject(msg);                        \
 }
 #define X(kind) XX(kind, kind)
 X(Boolean)
@@ -77,49 +93,6 @@ X(Resource)
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace {
-
-void implCast(IRLS& env, const IRInstruction* inst, Vreg base, int offset) {
-  auto type = inst->typeParam();
-  auto nullable = false;
-
-  if (!type.isKnownDataType()) {
-    assertx(TNull <= type);
-    type -= TNull;
-    assertx(type.isKnownDataType());
-    nullable = true;
-  }
-  assertx(IMPLIES(nullable, type <= TObj));
-
-  auto const args = argGroup(env, inst).addr(base, offset);
-
-  auto const helper = [&]() -> void (*)(TypedValue*) {
-    if (type <= TBool) {
-      return tvCastToBooleanInPlace;
-    } else if (type <= TInt) {
-      return tvCastToInt64InPlace;
-    } else if (type <= TDbl) {
-      return tvCastToDoubleInPlace;
-    } else if (type <= TArr) {
-      return tvCastToArrayInPlace;
-    } else if (type <= TVec) {
-      return tvCastToVecInPlace;
-    } else if (type <= TDict) {
-      return tvCastToDictInPlace;
-    } else if (type <= TKeyset) {
-      return tvCastToKeysetInPlace;
-    } else if (type <= TStr) {
-      return tvCastToStringInPlace;
-    } else if (type <= TObj) {
-      return nullable ? tvCastToNullableObjectInPlace : tvCastToObjectInPlace;
-    } else if (type <= TRes) {
-      return tvCastToResourceInPlace;
-    } else {
-      not_reached();
-    }
-  }();
-  cgCallHelper(vmain(env), env, CallSpec::direct(helper),
-               kVoidDest, SyncOptions::Sync, args);
-}
 
 void implCoerce(IRLS& env, const IRInstruction* inst,
                 Vreg base, int offset, Func const* callee, int argNum) {
@@ -165,19 +138,6 @@ void implCoerce(IRLS& env, const IRInstruction* inst,
 
 }
 
-void cgCastStk(IRLS& env, const IRInstruction *inst) {
-  auto const sp = srcLoc(env, inst, 0).reg();
-  auto const offset = inst->extra<CastStk>()->offset;
-
-  implCast(env, inst, sp, cellsToBytes(offset.offset));
-}
-
-void cgCastMem(IRLS& env, const IRInstruction *inst) {
-  auto const ptr = srcLoc(env, inst, 0).reg();
-
-  implCast(env, inst, ptr, 0);
-}
-
 void cgCoerceStk(IRLS& env, const IRInstruction *inst) {
   auto const extra = inst->extra<CoerceStk>();
   auto const sp = srcLoc(env, inst, 0).reg();
@@ -219,16 +179,7 @@ void implVerifyCls(IRLS& env, const IRInstruction* inst) {
   auto const rconstraint = srcLoc(env, inst, 1).reg();
   auto const sf = v.makeReg();
 
-  if (!constraint->hasConstVal(TCls) && cls->hasConstVal()) {
-    // This is an arch-agnostic API bleed.  On x64, cmpq can only have an
-    // immediate in the first operand, and the imm-folder currently doesn't do
-    // any liveness analysis on the flags dst for cmpq to determine whether the
-    // arguments can commute (nor does it, e.g., try to invert the condition
-    // code at all uses of the flag).
-    v << cmpq{rcls, rconstraint, sf};
-  } else {
-    v << cmpq{rconstraint, rcls, sf};
-  }
+  v << cmpq{rconstraint, rcls, sf};
 
   // The native call for this instruction is the slow path that does proper
   // subtype checking.  The comparisons above are just to short-circuit the
@@ -244,12 +195,252 @@ IMPL_OPCODE_CALL(VerifyParamFail)
 IMPL_OPCODE_CALL(VerifyParamFailHard)
 IMPL_OPCODE_CALL(VerifyRetFail)
 IMPL_OPCODE_CALL(VerifyRetFailHard)
+IMPL_OPCODE_CALL(VerifyReifiedLocalType)
+IMPL_OPCODE_CALL(VerifyReifiedReturnType)
 
 void cgVerifyParamCls(IRLS& env, const IRInstruction* inst) {
   implVerifyCls(env, inst);
 }
 void cgVerifyRetCls(IRLS& env, const IRInstruction* inst) {
   implVerifyCls(env, inst);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+static void verifyPropFailImpl(const Class* objCls, Cell val, Slot slot) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(cellIsPlausible(val));
+  assertx(slot < objCls->numDeclProperties());
+  auto const& prop = objCls->declProperties()[slot];
+  assertx(prop.typeConstraint.isCheckable());
+  prop.typeConstraint.verifyPropFail(
+    objCls,
+    prop.cls,
+    &val,
+    prop.name,
+    false
+  );
+}
+
+static void verifyStaticPropFailImpl(const Class* objCls, Cell val, Slot slot) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(cellIsPlausible(val));
+  assertx(slot < objCls->numStaticProperties());
+  auto const& sprop = objCls->staticProperties()[slot];
+  assertx(sprop.typeConstraint.isCheckable());
+  sprop.typeConstraint.verifyPropFail(
+    objCls,
+    sprop.cls,
+    &val,
+    sprop.name,
+    true
+  );
+}
+
+static void verifyPropClsImpl(const Class* objCls,
+                              const Class* constraint,
+                              ObjectData* val,
+                              Slot slot) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(slot < objCls->numDeclProperties());
+  auto const& tc = objCls->declProperties()[slot].typeConstraint;
+  assertx(tc.isObject());
+  auto const success = [&]{
+    auto const valCls = val->getVMClass();
+    if (LIKELY(constraint != nullptr)) return valCls->classof(constraint);
+    return tc.checkTypeAliasObj(valCls);
+  }();
+  if (!success) verifyPropFailImpl(objCls, make_tv<KindOfObject>(val), slot);
+}
+
+static void verifyStaticPropClsImpl(const Class* objCls,
+                                    const Class* constraint,
+                                    ObjectData* val,
+                                    Slot slot) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(slot < objCls->numStaticProperties());
+  auto const& tc = objCls->staticProperties()[slot].typeConstraint;
+  assertx(tc.isObject());
+  auto const success = [&]{
+    auto const valCls = val->getVMClass();
+    if (LIKELY(constraint != nullptr)) return valCls->classof(constraint);
+    return tc.checkTypeAliasObj(valCls);
+  }();
+  if (!success) {
+    verifyStaticPropFailImpl(objCls, make_tv<KindOfObject>(val), slot);
+  }
+}
+
+static void verifyPropImpl(const Class* cls,
+                            Slot slot,
+                            Cell val) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(slot < cls->numDeclProperties());
+  assertx(cellIsPlausible(val));
+  auto const& prop = cls->declProperties()[slot];
+  auto const& tc = prop.typeConstraint;
+  if (tc.isCheckable()) tc.verifyProperty(&val, cls, prop.cls, prop.name);
+}
+
+static void verifySPropImpl(const Class* cls,
+                            Slot slot,
+                            Cell val) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(slot < cls->numStaticProperties());
+  assertx(cellIsPlausible(val));
+  auto const& prop = cls->staticProperties()[slot];
+  auto const& tc = prop.typeConstraint;
+  if (tc.isCheckable()) tc.verifyStaticProperty(&val, cls, prop.cls, prop.name);
+}
+
+void cgVerifyPropFail(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    inst->src(3)->boolVal()
+      ? CallSpec::direct(verifyStaticPropFailImpl)
+      : CallSpec::direct(verifyPropFailImpl),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .ssa(0)
+      .typedValue(2)
+      .ssa(1)
+  );
+}
+
+void cgVerifyPropFailHard(IRLS& env, const IRInstruction* inst) {
+  cgVerifyPropFail(env, inst);
+}
+
+void cgVerifyPropCls(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    inst->src(4)->boolVal()
+      ? CallSpec::direct(verifyStaticPropClsImpl)
+      : CallSpec::direct(verifyPropClsImpl),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .ssa(0)
+      .ssa(2)
+      .ssa(3)
+      .ssa(1)
+  );
+}
+
+void cgVerifyProp(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    inst->src(3)->boolVal()
+      ? CallSpec::direct(verifySPropImpl)
+      : CallSpec::direct(verifyPropImpl),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .ssa(0)
+      .ssa(1)
+      .typedValue(2)
+  );
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+static void hackArrParamNoticeImpl(const Func* f, const ArrayData* a,
+                                   int64_t type, int64_t param) {
+  raise_hackarr_compat_type_hint_param_notice(f, a, AnnotType(type), param);
+}
+
+static void hackArrOutParamNoticeImpl(const Func* f, const ArrayData* a,
+                                      int64_t type, int64_t param) {
+  raise_hackarr_compat_type_hint_outparam_notice(f, a, AnnotType(type), param);
+}
+
+static void hackArrRetNoticeImpl(const Func* f, const ArrayData* a,
+                                 int64_t type) {
+  raise_hackarr_compat_type_hint_ret_notice(f, a, AnnotType(type));
+}
+
+template <bool IsStatic>
+static void hackArrPropNoticeImpl(const Class* cls, const ArrayData* ad,
+                                  Slot slot, int64_t type) {
+  const Class* declCls;
+  const StringData* name;
+  if (IsStatic) {
+    assertx(slot < cls->numStaticProperties());
+    declCls = cls;
+    name = cls->staticProperties()[slot].name;
+  } else {
+    assertx(slot < cls->numDeclProperties());
+    auto const& prop = cls->declProperties()[slot];
+    declCls = prop.cls;
+    name = prop.name;
+  }
+  raise_hackarr_compat_type_hint_property_notice(
+    declCls,
+    ad,
+    AnnotType(type),
+    name,
+    IsStatic
+  );
+}
+
+void cgRaiseHackArrParamNotice(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<RaiseHackArrParamNotice>();
+
+  auto args = argGroup(env, inst).ssa(1).ssa(0).imm(int64_t(extra->type));
+  auto const target = [&] {
+    if (extra->isReturn) {
+      if (extra->id == TypeConstraint::ReturnId) {
+        return CallSpec::direct(hackArrRetNoticeImpl);
+      }
+      args.imm(extra->id);
+      return CallSpec::direct(hackArrOutParamNoticeImpl);
+    } else {
+      args.imm(extra->id);
+      return CallSpec::direct(hackArrParamNoticeImpl);
+    }
+  }();
+
+  cgCallHelper(
+    vmain(env),
+    env,
+    target,
+    kVoidDest,
+    SyncOptions::Sync,
+    args
+  );
+}
+
+void cgRaiseHackArrPropNotice(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<RaiseHackArrPropNotice>();
+  cgCallHelper(
+    vmain(env),
+    env,
+    inst->src(3)->boolVal()
+      ? CallSpec::direct(hackArrPropNoticeImpl<true>)
+      : CallSpec::direct(hackArrPropNoticeImpl<false>),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .ssa(0)
+      .ssa(1)
+      .ssa(2)
+      .imm(int64_t(extra->type))
+  );
+}
+
+void cgRaiseStrToClassNotice(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(raise_str_to_class_notice),
+    callDest(env, inst),
+    SyncOptions::Sync,
+    argGroup(env, inst).ssa(0)
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -19,6 +19,9 @@
 
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/req-root.h"
+#include "hphp/runtime/base/type-array.h"
+#include "hphp/runtime/base/type-object.h"
+#include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/base/typed-value.h"
 
 namespace HPHP {
@@ -30,7 +33,8 @@ struct StringData;
  * TypedValue conversions that update `tv' in place (decrefing the old value,
  * if necessary).
  *
- * We have two kinds of type conversions:
+ * We have two kinds of type conversions, both of which unbox their argument
+ * before doing anything:
  *
  * - Cast forcibly changes the value to the new type and will not fail (though
  *   the result may be silly).
@@ -38,26 +42,38 @@ struct StringData;
  */
 
 #define X(kind) \
-void tvCastTo##kind##InPlace(TypedValue* tv); \
-bool tvCoerceParamTo##kind##InPlace(TypedValue* tv, \
-                                    bool builtin);
+template<typename T> \
+enable_if_lval_t<T, void> tvCastTo##kind##InPlace(T tv); \
+template<typename T> \
+enable_if_lval_t<T, bool> tvCoerceParamTo##kind##InPlace(T tv, bool builtin);
+#define Y(kind) \
+template<typename T, IntishCast IC = IntishCast::None> \
+enable_if_lval_t<T, void> tvCastTo##kind##InPlace(T tv); \
+template<typename T, IntishCast IC = IntishCast::None> \
+enable_if_lval_t<T, bool> tvCoerceParamTo##kind##InPlace(T tv, bool builtin);
 X(Boolean)
 X(Int64)
 X(Double)
 X(String)
+Y(Array)
 X(Vec)
 X(Dict)
 X(Keyset)
-X(Array)
+X(Shape)
 X(Object)
 X(NullableObject)
 X(Resource)
+#undef Y
 #undef X
 
-void tvCastToVArrayInPlace(TypedValue* tv);
-void tvCastToDArrayInPlace(TypedValue* tv);
+template<typename T>
+enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv);
+template<typename T>
+enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv);
+void cellCastToStringInPlace(tv_lval tv);
 
-ALWAYS_INLINE void tvCastInPlace(TypedValue* tv, DataType DType) {
+template<typename T> ALWAYS_INLINE
+enable_if_lval_t<T, void> tvCastInPlace(T tv, DataType DType) {
 #define X(kind) \
   if (DType == KindOf##kind) { tvCastTo##kind##InPlace(tv); return; }
   X(Boolean)
@@ -74,8 +90,9 @@ ALWAYS_INLINE void tvCastInPlace(TypedValue* tv, DataType DType) {
   not_reached();
 }
 
-ALWAYS_INLINE bool tvCoerceParamInPlace(TypedValue* tv, DataType DType,
-                                        bool builtin) {
+template<typename T> ALWAYS_INLINE
+enable_if_lval_t<T, bool> tvCoerceParamInPlace(T tv, DataType DType,
+                                               bool builtin) {
 #define X(kind) \
   if (DType == KindOf##kind) \
     return tvCoerceParamTo##kind##InPlace(tv, \
@@ -87,6 +104,7 @@ ALWAYS_INLINE bool tvCoerceParamInPlace(TypedValue* tv, DataType DType,
   X(Vec)
   X(Dict)
   X(Keyset)
+  X(Shape)
   X(Array)
   X(Object)
   X(Resource)
@@ -97,10 +115,19 @@ ALWAYS_INLINE bool tvCoerceParamInPlace(TypedValue* tv, DataType DType,
 /*
  * Non-in-place casts.
  */
+bool tvCastToBoolean(TypedValue tv);
+int64_t tvCastToInt64(TypedValue tv);
 double tvCastToDouble(TypedValue tv);
-StringData* tvCastToString(TypedValue tv);
-ArrayData* tvCastToArrayLike(TypedValue tv);
-ObjectData* tvCastToObject(TypedValue tv);
+String tvCastToString(TypedValue tv);
+template <IntishCast IC = IntishCast::None>
+Array tvCastToArrayLike(TypedValue tv);
+Object tvCastToObject(TypedValue tv);
+
+StringData* tvCastToStringData(TypedValue tv);
+StringData* cellCastToStringData(Cell c);
+template <IntishCast IC /* = IntishCast::None */>
+ArrayData* tvCastToArrayLikeData(TypedValue tv);
+ObjectData* tvCastToObjectData(TypedValue tv);
 
 /*
  * Convert a cell to various raw data types, without changing the Cell.
@@ -112,7 +139,9 @@ double cellToDouble(Cell);
 /*
  * Convert `tv' or `cell' to a valid array key for `ad', or throw an exception.
  */
+template <IntishCast IC = IntishCast::None>
 Cell cellToKey(Cell cell, const ArrayData* ad);
+template <IntishCast IC = IntishCast::None>
 Cell tvToKey(TypedValue tv, const ArrayData* ad);
 
 /*

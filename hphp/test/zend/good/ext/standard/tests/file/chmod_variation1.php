@@ -1,8 +1,9 @@
 <?php
 
-define("PERMISSIONS_MASK", 0777);
+const PERMISSIONS_MASK = 0777;
 
-$dirname = dirname(__FILE__) . "/" . basename(__FILE__, ".php") . "testdir";
+$test_dir = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+$dirname = $test_dir . "/" . basename(__FILE__, ".php") . "testdir";
 mkdir($dirname);
 
 for ($perms_to_set = 0777; $perms_to_set >= 0; $perms_to_set--) {
@@ -19,4 +20,3 @@ rmdir($dirname);
 
 echo "done";
 
-?>

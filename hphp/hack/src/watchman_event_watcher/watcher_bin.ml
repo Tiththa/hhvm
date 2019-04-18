@@ -1,6 +1,8 @@
 module WEW = WatchmanEventWatcher
 module Config = WatchmanEventWatcherConfig
 
+let () = Random.self_init ()
+
 module Args = struct
 
   type t = {
@@ -32,8 +34,6 @@ module Args = struct
         daemonize = !daemonize;
         get_sockname = !get_sockname;
       }
-
-  let root args = args.root
 
 end;;
 

@@ -118,6 +118,7 @@ struct DebuggerProxy : Synchronizable,
   ExecutePHP(const std::string &php, String &output, int frame, int flags);
 
   std::string requestAuthToken();
+  std::string requestSessionAuth();
 
 private:
   bool blockUntilOwn(CmdInterrupt &cmd, bool check);
@@ -164,6 +165,9 @@ private:
   // m_signum, m_okayToPoll.
   Mutex m_signalMutex;
   int m_signum;
+
+  // Last output hook for nested PHP evaluations.
+  ExecutionContext::StdoutHook* m_evalOutputHook{};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

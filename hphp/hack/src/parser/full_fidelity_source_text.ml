@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -22,35 +21,56 @@
  * abstraction when we need some of them.
  *)
 
-module OffsetMap = Line_break_map
+[@@@warning "-32"] (* unused variables *)
+module OffsetMap = struct
+  (* placeholder definitions to placate open source build.
+   * These definitions will be mercilessly shadowed if deriving show fires
+   * like it's supposed to *)
+  let pp _ _ = ()
+  let show _ = ""
+  include Line_break_map
+end
+[@@@warning "+32"]
 
 type t = {
-  text : string;
+  file_path : Relative_path.t;
+  length : int;
+  text : string[@opaque];
   offset_map : OffsetMap.t
-}
+} [@@deriving show]
 
-let make content =
-  { text = content; offset_map = OffsetMap.make content }
+type pos = t * int
+
+let make file_path content =
+  { file_path; text = content; offset_map = OffsetMap.make content;
+    length = String.length content; }
+
+let empty =
+  make Relative_path.default ""
 
 let from_file file =
   let content =
     try Sys_utils.cat (Relative_path.to_absolute file) with _ -> "" in
-  make content
+  make file content
 
 let text source_text =
   source_text.text
 
+let file_path source_text =
+  source_text.file_path
+
 let length source_text =
-  String.length source_text.text
+  source_text.length
 
 let get_text t =
   t.text
 
 let get source_text index =
-  String.get source_text.text index
-
+  if index < source_text.length
+  then String.unsafe_get source_text.text index
+  else '\x00'
 let sub source_text start length =
-  let len = String.length source_text.text in
+  let len = source_text.length in
   if start >= len then
     ""
   else if start + length > len then
@@ -68,41 +88,10 @@ let position_to_offset source_text position =
 
 (* Create a Pos.t from two offsets in a source_text (given a path) *)
 let relative_pos pos_file source_text start_offset end_offset =
-  let offset_to_file_pos offset =
-    let line, column = offset_to_position source_text offset in
-    File_pos.of_line_column_offset ~line ~column ~offset
+  let offset_to_lnum_bol_cnum offset =
+    OffsetMap.offset_to_file_pos_triple source_text.offset_map offset
   in
-  Pos.make_from_file_pos
-    ~pos_file
-    ~pos_start:(offset_to_file_pos start_offset)
-    ~pos_end:(  offset_to_file_pos   end_offset)
+  let pos_start = offset_to_lnum_bol_cnum start_offset in
+  let pos_end   = offset_to_lnum_bol_cnum end_offset in
 
-let is_newline source_text offset =
-  let c = get source_text offset in
-  c = '\r' || c = '\n'
-
-(* Takes an offset, returns the offset of the first character in this line. *)
-let start_of_line source_text offset =
-  OffsetMap.offset_to_line_start_offset source_text.offset_map offset
-
-(* Takes an offset, returns the offset of the last non-newline character
-   in this line, if there is one, or the first newline character in a blank
-   line. Note that if we are on a newline, the last non-newline character in
-   this file could be before the given offset. *)
-let end_of_line source_text offset =
-  let len = length source_text in
-  if len = 0 then
-    0
-  else
-    let sol = start_of_line source_text offset in
-    if is_newline source_text sol then
-      sol
-    else
-      let rec aux i =
-        if i >= len then
-          len - 1
-        else if is_newline source_text i then
-          i - 1
-        else
-          aux i + 1 in
-      aux sol + 1
+  Pos.make_from_lnum_bol_cnum ~pos_file ~pos_start ~pos_end

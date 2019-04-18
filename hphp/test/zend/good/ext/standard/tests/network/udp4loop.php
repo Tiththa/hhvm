@@ -2,7 +2,7 @@
 	/* Setup socket server */
 	for ($port = 31338; $port < 31500; ++$port) {
 	  $uri = "udp://127.0.0.1:$port";
-	  $server = @stream_socket_server($uri, $errno, $errstr, STREAM_SERVER_BIND);
+	  $server = @stream_socket_server($uri, &$errno, &$errstr, STREAM_SERVER_BIND);
 	  if ($server) break;
 	}
 	if (!$server) {
@@ -22,4 +22,3 @@
 
 	fclose($client);
 	fclose($server);
-?>

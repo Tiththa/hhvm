@@ -63,12 +63,15 @@ class ChildClass extends ParentClass{
   public array $packedArr = array();
 }
 
+
+<<__EntryPoint>>
+function main_objprof_paths() {
 $childClass = new ChildClass();
 $childClass->parentNested = new NestedClass();
 $childClass->childNested = new NestedClass();
-$childClass->mixed["MyStringKey"] = $childClass->parentNested;
+$childClass->mixed = ["MyStringKey" => $childClass->parentNested];
 $childClass->mixed[123] = $childClass->parentNested;
-$childClass->packed[] = $childClass->parentNested;
+$childClass->packed = [$childClass->parentNested];
 
 $childClass2 = new ChildClass();
 $childClass2->parentNested = new NestedClass();
@@ -90,5 +93,6 @@ foreach ($objs as $name => $metrics) {
     $pathstrs[] = $path.' '.idx($path_metrics,'refs',-1);
   }
 }
-sort($pathstrs);
+sort(&$pathstrs);
 echo implode("\n", $pathstrs)."\n";
+}

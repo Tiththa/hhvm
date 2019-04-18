@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
   public $x;
@@ -13,6 +13,9 @@ class A {
   }
 };
 
+class C {}
+function box(&$what) {}
+
 function main() {
   $a = new A;
   $a->y = "foo";
@@ -21,11 +24,9 @@ function main() {
   var_dump($b);
 
 
-  class C {}
-  $ten = 10;
   $d = new C();
-  $d->thing = &$ten;
-  unset($ten);  // now the property is the only reference
+  $d->thing = 10;
+  box(&$d->thing);  // now the property is the only reference
 
   var_dump($d);
   $e = clone $d;

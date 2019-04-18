@@ -1,13 +1,9 @@
 <?php
 class A
 {
-	public function __destruct()
-	{
-		gc_collect_cycles();
-	}
-	
 	public function getB()
 	{
+		$this->data = array();
 		$this->data['foo'] = new B($this);
 		$this->data['bar'] = new B($this);
 		// Return either of the above
@@ -21,10 +17,6 @@ class B
 	{
 		$this->A = $A;
 	}
-
-	public function __destruct()
-	{
-	}
 }
 
 for ($i = 0; $i < 2; $i++)
@@ -36,4 +28,3 @@ for ($i = 0; $i < 2; $i++)
 }
 
 echo "DONE\n";
-?>

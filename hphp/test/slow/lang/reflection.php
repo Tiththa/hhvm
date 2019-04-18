@@ -2,20 +2,20 @@
 
 print "Test begin\n";
 
-define('SOME_CONSTANT', "some string");
+const SOME_CONSTANT = "some string";
 
 #===============================================================================
 # ReflectionFunction.
 
+class State { static $staticX = 4; }
+
 /**
  * This is f's doc comment.
  */
-function &f($a, &$b, $c=null, $d=array(1, 2, SOME_CONSTANT)) {
-  static $staticX = 4;
-  static $staticY;
+function f($a, &$b, $c=null, $d=array(1, 2, SOME_CONSTANT)) {
   print "In f()\n";
-  $staticX++;
-  $x = $staticX;
+  State::$staticX++;
+  $x = State::$staticX;
   return $x;
 }
 
@@ -53,9 +53,9 @@ print "--- getParameters(\"f\") ---\n";
 var_dump($rf->getParameters());
 print "\n";
 
-print "--- getStaticVariables(\"f\") ---\n";
-var_dump($rf->getStaticVariables());
-print "\n";
+
+
+
 
 print "--- isInternal(\"f\") ---\n";
 var_dump($rf->isInternal());
@@ -65,26 +65,22 @@ print "--- isUserDefined(\"f\") ---\n";
 var_dump($rf->isUserDefined());
 print "\n";
 
-print "--- returnsReference(\"f\") ---\n";
-var_dump($rf->returnsReference());
-print "\n";
-
 print "--- export(\"f\") ---\n";
 var_dump($rf->export('f', true));
 print "\n";
 
-# invoke() can't be used because $b is pass-by-reference.
 
-print "--- invokeArgs(\"f\") ---\n";
-$b = "b";
-var_dump($rf->invokeArgs(array("a", &$b, "c")));
-var_dump($rf->invokeArgs(array("a", &$b, "c")));
-print "\n";
 
-print "--- getStaticVariables(\"f\") ---\n";
-$rf = new ReflectionFunction("f");
-var_dump($rf->getStaticVariables());
-print "\n";
+
+
+
+
+
+
+
+
+
+
 
 /**
  * This is g's doc comment.
@@ -319,7 +315,7 @@ print "\n";
 
 print "--- get_defined_functions() ---\n";
 $a = get_defined_functions()["user"];
-sort($a);
+sort(&$a);
 var_dump($a);
 
 print "--- get_defined_constants() ---\n";
@@ -328,7 +324,7 @@ print "SOME_CONSTANT: " . $a["SOME_CONSTANT"] . "\n";
 if (isset($a["ANOTHER_CONSTANT"])) {
   print "ANOTHER_CONSTANT: ".$a["ANOTHER_CONSTANT"]."\n";
 }
-define('ANOTHER_CONSTANT', "some other string");
+const ANOTHER_CONSTANT ="some other string";
 $a = get_defined_constants();
 print "SOME_CONSTANT: " . $a["SOME_CONSTANT"] . "\n";
 print "ANOTHER_CONSTANT: ".$a["ANOTHER_CONSTANT"]."\n";

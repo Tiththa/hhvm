@@ -16,7 +16,7 @@
 #ifndef incl_HPHP_OPTIMIZE_H_
 #define incl_HPHP_OPTIMIZE_H_
 
-#include "hphp/runtime/base/typed-value.h"
+#include "hphp/hhbbc/context.h"
 
 namespace HPHP { namespace HHBBC {
 
@@ -25,6 +25,7 @@ namespace HPHP { namespace HHBBC {
 struct Index;
 struct FuncAnalysis;
 struct Bytecode;
+struct BlockUpdateInfo;
 
 /*
  * Use information from an analyze call to perform various
@@ -37,7 +38,16 @@ struct Bytecode;
  * php::Func, but it won't modify the top-level meta-data in the
  * php::Func itself.
  */
-void optimize_func(const Index&, FuncAnalysis&&);
+void optimize_func(const Index&, FuncAnalysis&&, bool isFinal);
+
+void update_bytecode(
+    php::Func* func,
+    CompactVector<std::pair<BlockId, BlockUpdateInfo>>&& blockUpdates);
+
+/*
+ * Optimize property type hints for a particular class.
+ */
+void optimize_class_prop_type_hints(const Index& index, Context ctx);
 
 /*
  * Return a bytecode to generate the value in cell

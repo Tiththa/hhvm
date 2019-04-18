@@ -1,11 +1,10 @@
-<?hh // decl /* -*- php -*- */
+<?hh /* -*- php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
 
@@ -13,28 +12,45 @@ namespace HH {
 function server_warmup_status(): string;
 function execution_context(): string;
 }
+namespace {
 const INF = 0.0;
 const NAN = 0.0;
+<<__PHPStdLib>>
 function connection_aborted();
+<<__PHPStdLib>>
 function connection_status();
+<<__PHPStdLib>>
 function connection_timeout();
-function constant($name);
-function define($name, $value, $case_insensitive = false);
-function defined(string $name, $autoload = true);
+<<__PHPStdLib>>
+function constant(string $name);
+<<__PHPStdLib>>
+function define(string $name, $value, bool $case_insensitive = false);
+<<__PHPStdLib>>
+function defined(string $name, bool $autoload = true);
+<<__PHPStdLib>>
 function get_browser($user_agent = null, $return_array = false);
-function highlight_file($filename, $ret = false);
-function show_source($filename, $ret = false);
-function highlight_string($str, $ret = false);
-function ignore_user_abort($setting = false);
-function pack($format, ...);
+<<__PHPStdLib>>
+function ignore_user_abort(bool $setting = false);
+<<__PHPStdLib, __Rx>>
+function pack(string $format, ...);
+<<__PHPStdLib>>
 function php_check_syntax($filename, &$error_message = null);
-function php_strip_whitespace($filename);
-function sleep($seconds);
-function usleep($micro_seconds);
-function time_nanosleep($seconds, $nanoseconds);
-function time_sleep_until($timestamp);
-function uniqid($prefix = null, $more_entropy = false);
-function unpack($format, $data);
+<<__PHPStdLib>>
+function sleep(int $seconds);
+<<__PHPStdLib>>
+function usleep(int $micro_seconds);
+<<__PHPStdLib>>
+function time_nanosleep(int $seconds, int $nanoseconds);
+<<__PHPStdLib>>
+function time_sleep_until(float $timestamp);
+<<__PHPStdLib>>
+function uniqid(string $prefix = "", bool $more_entropy = false);
+<<__PHPStdLib, __Rx>>
+function unpack(string $format, string $data);
+<<__PHPStdLib>>
 function sys_getloadavg();
+<<__PHPStdLib>>
 function hphp_process_abort($magic);
+<<__PHPStdLib, __Rx>>
 function hphp_to_string($v);
+}

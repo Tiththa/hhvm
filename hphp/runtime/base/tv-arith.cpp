@@ -19,7 +19,9 @@
 #include <limits>
 #include <algorithm>
 
+#include <folly/CPortability.h>
 #include <folly/ScopeGuard.h>
+#include <folly/tracing/StaticTracepoint.h>
 
 #include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/double-to-int64.h"
@@ -28,6 +30,7 @@
 #include "hphp/runtime/base/tv-conversions.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/ext/std/ext_std_math.h"
+#include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/util/overflow.h"
 
 namespace HPHP {
@@ -42,7 +45,7 @@ void throw_bad_array_operand(const ArrayData* ad) {
     if (ad->isVecArray()) return "vecs";
     if (ad->isDict()) return "dicts";
     if (ad->isKeyset()) return "keysets";
-    assert(ad->isPHPArray());
+    assertx(ad->isPHPArray());
     return "arrays";
   }();
   throw ExtendedException(
@@ -53,13 +56,46 @@ void throw_bad_array_operand(const ArrayData* ad) {
   );
 }
 
+/*
+ * unsigned to signed conversion when the unsigned value is out of
+ * range is implementation defined behavior. We can work around it
+ * with something like
+ *
+ *  return v > std::numeric_limits<int64_t>::max() ?
+ *             -int64_t(~v) - 1 : int64_t(v);
+ *
+ * which gcc appears to optimize to a no-op. But I'd rather avoid that
+ * until it becomes a problem.
+ *
+ * Putting this here as a placeholder.
+ */
+inline int64_t u2s(uint64_t v) {
+  return v;
+}
+
+inline int64_t add_ignore_overflow(int64_t a, int64_t b) {
+  return u2s(static_cast<uint64_t>(a) + b);
+}
+
+inline int64_t sub_ignore_overflow(int64_t a, int64_t b) {
+  return u2s(static_cast<uint64_t>(a) - b);
+}
+
+inline int64_t mul_ignore_overflow(int64_t a, int64_t b) {
+  return u2s(static_cast<uint64_t>(a) * b);
+}
+
+inline int64_t shl_ignore_overflow(int64_t a, int64_t b) {
+  return u2s(static_cast<uint64_t>(a) << (b & 63));
+}
+
 Cell make_int(int64_t n) { return make_tv<KindOfInt64>(n); }
 Cell make_dbl(double d)  { return make_tv<KindOfDouble>(d); }
 
 // Helper for converting String, Array, Bool, Null or Obj to Dbl|Int.
 // Other types (i.e. Int and Double) must be handled outside of this.
 TypedNum numericConvHelper(Cell cell) {
-  assert(cellIsPlausible(cell));
+  assertx(cellIsPlausible(cell));
 
   switch (cell.m_type) {
     case KindOfUninit:
@@ -68,6 +104,12 @@ TypedNum numericConvHelper(Cell cell) {
 
     case KindOfBoolean:
       return make_int(cell.m_data.num);
+
+    case KindOfFunc:
+      return stringToNumeric(funcToStringHelper(cell.m_data.pfunc));
+
+    case KindOfClass:
+      return stringToNumeric(classToStringHelper(cell.m_data.pclass));
 
     case KindOfString:
     case KindOfPersistentString:
@@ -79,10 +121,17 @@ TypedNum numericConvHelper(Cell cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
       throw_bad_array_operand(cell.m_data.parr);
+    case KindOfClsMeth:
+      throw ExtendedException("Invalid operand type was used: cannot perform "
+                              "this operation with clsmeth");
 
+    case KindOfRecord:
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
     case KindOfObject:
       return make_int(cell.m_data.pobj->toInt64());
 
@@ -105,7 +154,7 @@ again:
       if (c2.m_type == KindOfInt64)  return o(c1.m_data.num, c2.m_data.num);
       if (c2.m_type == KindOfDouble) return o(c1.m_data.num, c2.m_data.dbl);
       cellCopy(numericConvHelper(c2), c2);
-      assert(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
+      assertx(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
     }
   }
 
@@ -114,7 +163,7 @@ again:
       if (c2.m_type == KindOfDouble) return o(c1.m_data.dbl, c2.m_data.dbl);
       if (c2.m_type == KindOfInt64)  return o(c1.m_data.dbl, c2.m_data.num);
       cellCopy(numericConvHelper(c2), c2);
-      assert(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
+      assertx(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
     }
   }
 
@@ -123,7 +172,7 @@ again:
   }
 
   cellCopy(numericConvHelper(c1), c1);
-  assert(c1.m_type == KindOfInt64 || c1.m_type == KindOfDouble);
+  assertx(c1.m_type == KindOfInt64 || c1.m_type == KindOfDouble);
   goto again;
 }
 
@@ -154,12 +203,14 @@ struct Add {
   Cell operator()(double  a, int64_t b) const { return make_dbl(a + b); }
   Cell operator()(double  a, double  b) const { return make_dbl(a + b); }
   Cell operator()(int64_t a, double  b) const { return make_dbl(a + b); }
-  Cell operator()(int64_t a, int64_t b) const { return make_int(a + b); }
+  Cell operator()(int64_t a, int64_t b) const {
+    return make_int(add_ignore_overflow(a, b));
+  }
 
   ArrayData* operator()(ArrayData* a1, ArrayData* a2) const {
     if (UNLIKELY(a1->isHackArray())) throwInvalidAdditionException(a1);
     if (UNLIKELY(a2->isHackArray())) throwInvalidAdditionException(a2);
-    if (RuntimeOption::EvalHackArrCompatNotices) raiseHackArrCompatAdd();
+    if (checkHACArrayPlus()) raiseHackArrCompatAdd();
     a1->incRefCount(); // force COW
     SCOPE_EXIT { a1->decRefCount(); };
     return a1->plusEq(a2);
@@ -170,7 +221,9 @@ struct Sub {
   Cell operator()(double  a, int64_t b) const { return make_dbl(a - b); }
   Cell operator()(double  a, double  b) const { return make_dbl(a - b); }
   Cell operator()(int64_t a, double  b) const { return make_dbl(a - b); }
-  Cell operator()(int64_t a, int64_t b) const { return make_int(a - b); }
+  Cell operator()(int64_t a, int64_t b) const {
+    return make_int(sub_ignore_overflow(a, b));
+  }
 
   ArrayData* operator()(ArrayData* a1, ArrayData* /*a2*/) const {
     throw_bad_array_operand(a1);
@@ -181,7 +234,9 @@ struct Mul {
   Cell operator()(double  a, int64_t b) const { return make_dbl(a * b); }
   Cell operator()(double  a, double  b) const { return make_dbl(a * b); }
   Cell operator()(int64_t a, double  b) const { return make_dbl(a * b); }
-  Cell operator()(int64_t a, int64_t b) const { return make_int(a * b); }
+  Cell operator()(int64_t a, int64_t b) const {
+    return make_int(mul_ignore_overflow(a, b));
+  }
 
   ArrayData* operator()(ArrayData* a1, ArrayData* /*a2*/) const {
     throw_bad_array_operand(a1);
@@ -191,6 +246,9 @@ struct Mul {
 struct Div {
   Cell operator()(int64_t t, int64_t u) const {
     if (UNLIKELY(u == 0)) {
+      if (RuntimeOption::EvalForbidDivisionByZero) {
+        SystemLib::throwDivisionByZeroExceptionObject();
+      }
       raise_warning(Strings::DIVISION_BY_ZERO);
       if (RuntimeOption::PHP7_IntSemantics) {
         // PHP 7 requires IEEE compliance (+/- INF and NAN) with the result
@@ -208,7 +266,7 @@ struct Div {
         FOLLY_MSVC_DISABLE_WARNING(4723)
         return make_dbl([](int64_t tVal) {
           auto v = tVal / 0.0;
-          assert(std::isnan(v) || std::isinf(v));
+          assertx(std::isnan(v) || std::isinf(v));
           return v;
         }(t));
         FOLLY_POP_WARNING
@@ -233,6 +291,9 @@ struct Div {
     Cell
   >::type operator()(T t, U u) const {
     if (UNLIKELY(u == 0)) {
+      if (RuntimeOption::EvalForbidDivisionByZero) {
+        SystemLib::throwDivisionByZeroExceptionObject();
+      }
       raise_warning(Strings::DIVISION_BY_ZERO);
       if (RuntimeOption::PHP7_IntSemantics) {
         // PHP7 uses the IEEE definition (+/- INF and NAN).
@@ -250,57 +311,59 @@ struct Div {
 };
 
 template<class Op>
-void cellOpEq(Op op, Cell& c1, Cell c2) {
+void cellOpEq(Op op, tv_lval c1, Cell c2) {
 again:
-  if (c1.m_type == KindOfInt64) {
+  if (type(c1) == KindOfInt64) {
     for (;;) {
       if (c2.m_type == KindOfInt64) {
-        c1.m_data.num = op(c1.m_data.num, c2.m_data.num);
+        val(c1).num = op(val(c1).num, c2.m_data.num);
         return;
       }
       if (c2.m_type == KindOfDouble) {
-        c1.m_type = KindOfDouble;
-        c1.m_data.dbl = op(c1.m_data.num, c2.m_data.dbl);
+        type(c1) = KindOfDouble;
+        val(c1).dbl = op(val(c1).num, c2.m_data.dbl);
         return;
       }
       cellCopy(numericConvHelper(c2), c2);
-      assert(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
+      assertx(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
     }
   }
 
-  if (c1.m_type == KindOfDouble) {
+  if (type(c1) == KindOfDouble) {
     for (;;) {
       if (c2.m_type == KindOfInt64) {
-        c1.m_data.dbl = op(c1.m_data.dbl, c2.m_data.num);
+        val(c1).dbl = op(val(c1).dbl, c2.m_data.num);
         return;
       }
       if (c2.m_type == KindOfDouble) {
-        c1.m_data.dbl = op(c1.m_data.dbl, c2.m_data.dbl);
+        val(c1).dbl = op(val(c1).dbl, c2.m_data.dbl);
         return;
       }
       cellCopy(numericConvHelper(c2), c2);
-      assert(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
+      assertx(c2.m_type == KindOfInt64 || c2.m_type == KindOfDouble);
     }
   }
 
-  if (isArrayLikeType(c1.m_type) && isArrayLikeType(c2.m_type)) {
-    auto const ad1    = c1.m_data.parr;
+  if (isArrayLikeType(type(c1)) && isArrayLikeType(c2.m_type)) {
+    auto const ad1    = val(c1).parr;
     auto const newArr = op(ad1, c2.m_data.parr);
     if (newArr != ad1) {
-      c1.m_data.parr = newArr;
-      c1.m_type = newArr->toDataType();
+      val(c1).parr = newArr;
+      type(c1) = newArr->toDataType();
       decRefArr(ad1);
     }
     return;
   }
 
-  cellSet(numericConvHelper(c1), c1);
-  assert(c1.m_type == KindOfInt64 || c1.m_type == KindOfDouble);
+  cellSet(numericConvHelper(*c1), c1);
+  assertx(type(c1) == KindOfInt64 || type(c1) == KindOfDouble);
   goto again;
 }
 
 struct AddEq {
-  int64_t operator()(int64_t a, int64_t b) const { return a + b; }
+  int64_t operator()(int64_t a, int64_t b) const {
+    return add_ignore_overflow(a, b);
+  }
   double  operator()(double  a, int64_t b) const { return a + b; }
   double  operator()(int64_t a, double  b) const { return a + b; }
   double  operator()(double  a, double  b) const { return a + b; }
@@ -308,7 +371,7 @@ struct AddEq {
   ArrayData* operator()(ArrayData* ad1, ArrayData* ad2) const {
     if (UNLIKELY(ad1->isHackArray())) throwInvalidAdditionException(ad1);
     if (UNLIKELY(ad2->isHackArray())) throwInvalidAdditionException(ad2);
-    if (RuntimeOption::EvalHackArrCompatNotices) raiseHackArrCompatAdd();
+    if (checkHACArrayPlus()) raiseHackArrCompatAdd();
     if (ad2->empty() || ad1 == ad2) return ad1;
     if (ad1->empty()) {
       ad2->incRefCount();
@@ -319,7 +382,9 @@ struct AddEq {
 };
 
 struct SubEq {
-  int64_t operator()(int64_t a, int64_t b) const { return a - b; }
+  int64_t operator()(int64_t a, int64_t b) const {
+    return sub_ignore_overflow(a, b);
+  }
   double  operator()(double  a, int64_t b) const { return a - b; }
   double  operator()(int64_t a, double  b) const { return a - b; }
   double  operator()(double  a, double  b) const { return a - b; }
@@ -361,8 +426,8 @@ StringData* stringBitOp(BitOp bop, SzOp sop, StringData* s1, StringData* s2) {
 
 template<template<class> class BitOp, class StrLenOp>
 Cell cellBitOp(StrLenOp strLenOp, Cell c1, Cell c2) {
-  assert(cellIsPlausible(c1));
-  assert(cellIsPlausible(c2));
+  assertx(cellIsPlausible(c1));
+  assertx(cellIsPlausible(c2));
 
   if (isStringType(c1.m_type) && isStringType(c2.m_type)) {
     return make_tv<KindOfString>(
@@ -379,19 +444,19 @@ Cell cellBitOp(StrLenOp strLenOp, Cell c1, Cell c2) {
 }
 
 template<class Op>
-void cellBitOpEq(Op op, Cell& c1, Cell c2) {
-  auto const result = op(c1, c2);
-  auto const old = c1;
+void cellBitOpEq(Op op, tv_lval c1, Cell c2) {
+  auto const result = op(*c1, c2);
+  auto const old = *c1;
   tvCopy(result, c1);
   tvDecRefGen(old);
 }
 
 // Op must implement the interface described for cellIncDecOp.
 template<class Op>
-void stringIncDecOp(Op op, Cell& cell) {
-  assert(isStringType(cell.m_type));
+void stringIncDecOp(Op op, tv_lval cell, StringData* sd) {
+  assertx(isStringType(type(cell)) || isFuncType(type(cell)) ||
+          isClassType(type(cell)));
 
-  auto const sd = cell.m_data.pstr;
   if (sd->empty()) {
     decRefStr(sd);
     cellCopy(op.emptyString(), cell);
@@ -411,8 +476,25 @@ void stringIncDecOp(Op op, Cell& cell) {
     cellCopy(make_dbl(dval), cell);
     op.dblCase(cell);
   } else {
-    assert(dt == KindOfNull);
+    assertx(dt == KindOfNull);
     op.nonNumericString(cell);
+  }
+}
+
+void raiseIncDecInvalidType(tv_lval cell) {
+  switch (RuntimeOption::EvalWarnOnIncDecInvalidType) {
+    case 0:
+      break;
+    case 1:
+      raise_warning("Unsupported operand type (%s) for IncDec",
+                    describe_actual_type(cell, true).c_str());
+      break;
+    case 2:
+      raise_error("Unsupported operand type (%s) for IncDec",
+                  describe_actual_type(cell, true).c_str());
+      // fallthrough
+    default:
+      always_assert(false);
   }
 }
 
@@ -428,12 +510,13 @@ void stringIncDecOp(Op op, Cell& cell) {
  * abstracts out the common parts from those differences.
  */
 template<class Op>
-void cellIncDecOp(Op op, Cell& cell) {
-  assert(cellIsPlausible(cell));
+void cellIncDecOp(Op op, tv_lval cell) {
+  assertx(cellIsPlausible(*cell));
 
-  switch (cell.m_type) {
+  switch (type(cell)) {
     case KindOfUninit:
     case KindOfNull:
+      raiseIncDecInvalidType(cell);
       op.nullCase(cell);
       return;
 
@@ -445,9 +528,24 @@ void cellIncDecOp(Op op, Cell& cell) {
       op.dblCase(cell);
       return;
 
+    case KindOfFunc: {
+      raiseIncDecInvalidType(cell);
+      auto s = funcToStringHelper(val(cell).pfunc);
+      stringIncDecOp(op, cell, const_cast<StringData*>(s));
+      return;
+    }
+
+    case KindOfClass: {
+      raiseIncDecInvalidType(cell);
+      auto s = classToStringHelper(val(cell).pclass);
+      stringIncDecOp(op, cell, const_cast<StringData*>(s));
+      return;
+    }
+
     case KindOfPersistentString:
     case KindOfString:
-      stringIncDecOp(op, cell);
+      raiseIncDecInvalidType(cell);
+      stringIncDecOp(op, cell, val(cell).pstr);
       return;
 
     case KindOfBoolean:
@@ -457,10 +555,15 @@ void cellIncDecOp(Op op, Cell& cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
+    case KindOfClsMeth:
+    case KindOfRecord:
+      raiseIncDecInvalidType(cell);
       return;
 
     case KindOfRef:
@@ -473,20 +576,20 @@ const StaticString s_1("1");
 
 
 struct IncBase {
-  void dblCase(Cell& cell) const { ++cell.m_data.dbl; }
-  void nullCase(Cell& cell) const { cellCopy(make_int(1), cell); }
+  void dblCase(tv_lval cell) const { ++val(cell).dbl; }
+  void nullCase(tv_lval cell) const { cellCopy(make_int(1), cell); }
 
   Cell emptyString() const {
     return make_tv<KindOfPersistentString>(s_1.get());
   }
 
-  void nonNumericString(Cell& cell) const {
-    auto const sd = cell.m_data.pstr;
+  void nonNumericString(tv_lval cell) const {
+    auto const sd = val(cell).pstr;
     auto const newSd = [&]() -> StringData* {
       auto const tmp = StringData::Make(sd, CopyString);
       auto const tmp2 = tmp->increment();
       if (tmp2 != tmp) {
-        assert(tmp->hasExactlyOneRef());
+        assertx(tmp->hasExactlyOneRef());
         tmp->release();
         return tmp2;
       }
@@ -498,13 +601,13 @@ struct IncBase {
 };
 
 struct Inc : IncBase {
-  void intCase(Cell& cell) const { ++cell.m_data.num; }
+  void intCase(tv_lval cell) const { ++val(cell).num; }
 };
 
 struct IncO : IncBase {
-  void intCase(Cell& cell) const {
-    if (add_overflow(cell.m_data.num, int64_t{1})) {
-      cellCopy(cellAddO(cell, make_int(1)), cell);
+  void intCase(tv_lval cell) const {
+    if (add_overflow(val(cell).num, int64_t{1})) {
+      cellCopy(cellAddO(*cell, make_int(1)), cell);
     } else {
       Inc().intCase(cell);
     }
@@ -512,24 +615,24 @@ struct IncO : IncBase {
 };
 
 struct DecBase {
-  void dblCase(Cell& cell) { --cell.m_data.dbl; }
+  void dblCase(tv_lval cell) { --val(cell).dbl; }
   Cell emptyString() const { return make_int(-1); }
-  void nullCase(Cell&) const {}
-  void nonNumericString(Cell& cell) const {
+  void nullCase(tv_lval) const {}
+  void nonNumericString(tv_lval cell) const {
     if (RuntimeOption::EnableHipHopSyntax) {
-      raise_notice("Decrement on string '%s'", cell.m_data.pstr->data());
+      raise_notice("Decrement on string '%s'", val(cell).pstr->data());
     }
   }
 };
 
 struct Dec : DecBase {
-  void intCase(Cell& cell) { --cell.m_data.num; }
+  void intCase(tv_lval cell) { --val(cell).num; }
 };
 
 struct DecO : DecBase {
-  void intCase(Cell& cell) {
-    if (sub_overflow(cell.m_data.num, int64_t{1})) {
-      cellCopy(cellSubO(cell, make_int(1)), cell);
+  void intCase(tv_lval cell) {
+    if (sub_overflow(val(cell).num, int64_t{1})) {
+      cellCopy(cellSubO(*cell, make_int(1)), cell);
     } else {
       Dec().intCase(cell);
     }
@@ -578,7 +681,7 @@ Cell cellDiv(Cell c1, Cell c2) {
 }
 
 Cell cellPow(Cell c1, Cell c2) {
-  return *HHVM_FN(pow)(tvAsVariant(&c1), tvAsVariant(&c2)).asCell();
+  return *HHVM_FN(pow)(tvAsVariant(&c1), tvAsVariant(&c2)).toCell();
 }
 
 Cell cellMod(Cell c1, Cell c2) {
@@ -587,6 +690,8 @@ Cell cellMod(Cell c1, Cell c2) {
   if (UNLIKELY(i2 == 0)) {
     if (RuntimeOption::PHP7_IntSemantics) {
       SystemLib::throwDivisionByZeroErrorObject(Strings::MODULO_BY_ZERO);
+    } else if (RuntimeOption::EvalForbidDivisionByZero) {
+      SystemLib::throwDivisionByZeroExceptionObject();
     } else {
       raise_warning(Strings::DIVISION_BY_ZERO);
       return make_tv<KindOfBoolean>(false);
@@ -632,7 +737,7 @@ Cell cellShl(Cell c1, Cell c2) {
     }
   }
 
-  return make_int(lhs << (shift & 63));
+  return make_int(shl_ignore_overflow(lhs, shift));
 }
 
 Cell cellShr(Cell c1, Cell c2) {
@@ -652,61 +757,61 @@ Cell cellShr(Cell c1, Cell c2) {
   return make_int(lhs >> (shift & 63));
 }
 
-void cellAddEq(Cell& c1, Cell c2) {
+void cellAddEq(tv_lval c1, Cell c2) {
   cellOpEq(AddEq(), c1, c2);
 }
 
-void cellSubEq(Cell& c1, Cell c2) {
+void cellSubEq(tv_lval c1, Cell c2) {
   cellOpEq(SubEq(), c1, c2);
 }
 
-void cellMulEq(Cell& c1, Cell c2) {
+void cellMulEq(tv_lval c1, Cell c2) {
   cellOpEq(MulEq(), c1, c2);
 }
 
-void cellAddEqO(Cell& c1, Cell c2) { cellSet(cellAddO(c1, c2), c1); }
-void cellSubEqO(Cell& c1, Cell c2) { cellSet(cellSubO(c1, c2), c1); }
-void cellMulEqO(Cell& c1, Cell c2) { cellSet(cellMulO(c1, c2), c1); }
+void cellAddEqO(tv_lval c1, Cell c2) { cellSet(cellAddO(*c1, c2), c1); }
+void cellSubEqO(tv_lval c1, Cell c2) { cellSet(cellSubO(*c1, c2), c1); }
+void cellMulEqO(tv_lval c1, Cell c2) { cellSet(cellMulO(*c1, c2), c1); }
 
-void cellDivEq(Cell& c1, Cell c2) {
-  assert(cellIsPlausible(c1));
-  assert(cellIsPlausible(c2));
-  if (!isIntType(c1.m_type) && !isDoubleType(c1.m_type)) {
-    cellSet(numericConvHelper(c1), c1);
+void cellDivEq(tv_lval c1, Cell c2) {
+  assertx(cellIsPlausible(*c1));
+  assertx(cellIsPlausible(c2));
+  if (!isIntType(type(c1)) && !isDoubleType(type(c1))) {
+    cellSet(numericConvHelper(*c1), c1);
   }
-  cellCopy(cellDiv(c1, c2), c1);
+  cellCopy(cellDiv(*c1, c2), c1);
 }
 
-void cellPowEq(Cell& c1, Cell c2) {
-  cellSet(cellPow(c1, c2), c1);
+void cellPowEq(tv_lval c1, Cell c2) {
+  cellSet(cellPow(*c1, c2), c1);
 }
 
-void cellModEq(Cell& c1, Cell c2) {
-  cellSet(cellMod(c1, c2), c1);
+void cellModEq(tv_lval c1, Cell c2) {
+  cellSet(cellMod(*c1, c2), c1);
 }
 
-void cellBitAndEq(Cell& c1, Cell c2) {
+void cellBitAndEq(tv_lval c1, Cell c2) {
   cellBitOpEq(cellBitAnd, c1, c2);
 }
 
-void cellBitOrEq(Cell& c1, Cell c2) {
+void cellBitOrEq(tv_lval c1, Cell c2) {
   cellBitOpEq(cellBitOr, c1, c2);
 }
 
-void cellBitXorEq(Cell& c1, Cell c2) {
+void cellBitXorEq(tv_lval c1, Cell c2) {
   cellBitOpEq(cellBitXor, c1, c2);
 }
 
-void cellShlEq(Cell& c1, Cell c2) { cellSet(cellShl(c1, c2), c1); }
-void cellShrEq(Cell& c1, Cell c2) { cellSet(cellShr(c1, c2), c1); }
+void cellShlEq(tv_lval c1, Cell c2) { cellSet(cellShl(*c1, c2), c1); }
+void cellShrEq(tv_lval c1, Cell c2) { cellSet(cellShr(*c1, c2), c1); }
 
-void cellInc(Cell& cell) { cellIncDecOp(Inc(), cell); }
-void cellIncO(Cell& cell) { cellIncDecOp(IncO(), cell); }
-void cellDec(Cell& cell) { cellIncDecOp(Dec(), cell); }
-void cellDecO(Cell& cell) { cellIncDecOp(DecO(), cell); }
+void cellInc(tv_lval cell) { cellIncDecOp(Inc(), cell); }
+void cellIncO(tv_lval cell) { cellIncDecOp(IncO(), cell); }
+void cellDec(tv_lval cell) { cellIncDecOp(Dec(), cell); }
+void cellDecO(tv_lval cell) { cellIncDecOp(DecO(), cell); }
 
 void cellBitNot(Cell& cell) {
-  assert(cellIsPlausible(cell));
+  assertx(cellIsPlausible(cell));
 
   switch (cell.m_type) {
     case KindOfInt64:
@@ -718,13 +823,18 @@ void cellBitNot(Cell& cell) {
       cell.m_data.num = ~double_to_int64(cell.m_data.dbl);
       break;
 
+    case KindOfClass:
+    case KindOfFunc:
+      cell.m_data.pstr = isFuncType(cell.m_type)
+        ? const_cast<StringData*>(funcToStringHelper(cell.m_data.pfunc))
+        : const_cast<StringData*>(classToStringHelper(cell.m_data.pclass));
+      cell.m_type = KindOfString;
     case KindOfString:
       if (cell.m_data.pstr->cowCheck()) {
     case KindOfPersistentString:
-        auto const newSd = StringData::Make(
-          cell.m_data.pstr->slice(),
-          CopyString
-        );
+        auto const sl = cell.m_data.pstr->slice();
+        FOLLY_SDT(hhvm, hhvm_cow_bitnot, sl.size());
+        auto const newSd = StringData::Make(sl, CopyString);
         cell.m_data.pstr->decRefCount(); // can't go to zero
         cell.m_data.pstr = newSd;
         cell.m_type = KindOfString;
@@ -733,13 +843,14 @@ void cellBitNot(Cell& cell) {
         // created, so the following mutation will be safe wrt its
         // internal hash caching.
         cell.m_data.pstr->invalidateHash();
+        FOLLY_SDT(hhvm, hhvm_mut_bitnot, cell.m_data.pstr->size());
       }
 
       {
         auto const sd   = cell.m_data.pstr;
         auto const len  = sd->size();
         auto const data = sd->mutableData();
-        assert(sd->hasExactlyOneRef());
+        assertx(sd->hasExactlyOneRef());
         for (uint32_t i = 0; i < len; ++i) {
           data[i] = ~data[i];
         }
@@ -755,11 +866,15 @@ void cellBitNot(Cell& cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
+    case KindOfClsMeth:
+    case KindOfRecord:
       raise_error("Unsupported operand type for ~");
   }
 }

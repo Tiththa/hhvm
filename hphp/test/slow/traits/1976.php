@@ -1,9 +1,11 @@
 <?php
 
 trait Counter {
+
+  private static $incC = 0;
   public function inc() {
-    static $c = 0;
-    $c = $c + 1;
+    self::$incC = self::$incC + 1;
+    $c = self::$incC;
     echo "$c\n";
   }
 }
@@ -19,4 +21,3 @@ $p = new C2();
 $p->inc();
 $o->inc();
 $p->inc();
-?>

@@ -18,9 +18,9 @@
 #define incl_HPHP_PROF_TRANS_DATA_H_
 
 #include "hphp/util/atomic-vector.h"
-#include "hphp/util/hash-map-typedefs.h"
 
 #include "hphp/runtime/base/rds.h"
+#include "hphp/runtime/base/rds-local.h"
 
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/srckey.h"
@@ -35,13 +35,12 @@
 
 #include <vector>
 #include <memory>
-#include <unordered_map>
 
 namespace HPHP { namespace jit {
 
 struct ProfData;
 
-extern __thread ProfData* tl_profData;
+extern RDS_LOCAL_NO_CHECK(ProfData*, rl_profData);
 
 /*
  * Perform any process-global initialization required for ProfData.
@@ -63,7 +62,7 @@ void requestExitProfData();
  * survive at least as long as the current request.
  */
 inline ProfData* profData() {
-  return tl_profData;
+  return *rl_profData;
 }
 
 const ProfData* globalProfData();
@@ -160,7 +159,10 @@ struct ProfTransRec {
   /*
    * First BC offset in this translation.
    */
-  Offset startBcOff() const { return m_region->start().offset(); }
+  Offset startBcOff() const {
+    assertx(m_kind == TransKind::Profile);
+    return m_region->start().offset();
+  }
 
   /*
    * Last BC offset in this translation.
@@ -209,25 +211,33 @@ struct ProfTransRec {
    *
    * Precondition: kind() == TransKind::ProfPrologue
    */
-  std::vector<TCA>& mainCallers() {
+  auto& mainCallers() {
     assertx(m_kind == TransKind::ProfPrologue);
-    m_callers.lock.assertOwnedBySelf();
-    return m_callers.main;
+    m_callers->lock.assertOwnedBySelf();
+    return m_callers->main;
   }
-  const std::vector<TCA>& mainCallers() const {
+  auto const& mainCallers() const {
     return const_cast<ProfTransRec*>(this)->mainCallers();
   }
-  std::vector<TCA>& guardCallers() {
+  auto& guardCallers() {
     assertx(m_kind == TransKind::ProfPrologue);
-    m_callers.lock.assertOwnedBySelf();
-    return m_callers.guard;
+    m_callers->lock.assertOwnedBySelf();
+    return m_callers->guard;
   }
-  const std::vector<TCA>& guardCallers() const {
+  auto const& guardCallers() const {
     return const_cast<ProfTransRec*>(this)->guardCallers();
+  }
+  auto& profCallers() {
+    assertx(m_kind == TransKind::ProfPrologue);
+    m_callers->lock.assertOwnedBySelf();
+    return m_callers->profCallers;
+  }
+  auto const& profCallers() const {
+    return const_cast<ProfTransRec*>(this)->profCallers();
   }
   std::unique_lock<Mutex> lockCallerList() const {
     assertx(m_kind == TransKind::ProfPrologue);
-    return std::unique_lock<Mutex>{m_callers.lock};
+    return std::unique_lock<Mutex>{m_callers->lock};
   }
 
   /*
@@ -240,16 +250,16 @@ struct ProfTransRec {
    */
   void addMainCaller(TCA caller) {
     assertx(m_kind == TransKind::ProfPrologue);
-    m_callers.lock.assertOwnedBySelf();
-    m_callers.main.emplace_back(caller);
+    m_callers->lock.assertOwnedBySelf();
+    m_callers->main.emplace_back(caller);
   }
   void addGuardCaller(TCA caller) {
     assertx(m_kind == TransKind::ProfPrologue);
-    m_callers.lock.assertOwnedBySelf();
-    m_callers.guard.emplace_back(caller);
+    m_callers->lock.assertOwnedBySelf();
+    m_callers->guard.emplace_back(caller);
   }
-  void removeMainCaller(TCA caller) { removeCaller(m_callers.main, caller); }
-  void removeGuardCaller(TCA caller) { removeCaller(m_callers.guard, caller); }
+  void removeMainCaller(TCA caller) { removeCaller(m_callers->main, caller); }
+  void removeGuardCaller(TCA caller) { removeCaller(m_callers->guard, caller); }
 
   /*
    * Erase the record of all calls to this proflogue.
@@ -260,21 +270,28 @@ struct ProfTransRec {
    */
   void clearAllCallers() {
     assertx(m_kind == TransKind::ProfPrologue);
-    m_callers.lock.assertOwnedBySelf();
-    m_callers.main.clear();
-    m_callers.guard.clear();
+    m_callers->lock.assertOwnedBySelf();
+    m_callers->main.clear();
+    m_callers->guard.clear();
   }
 private:
   struct CallerRec {
-    std::vector<TCA> main;
-    std::vector<TCA> guard;
+    // main and guard are populated by profiling, and are used both to
+    // smash callers when we optimize, and to build the
+    // call-graph. profCallers is only populated via deserialization
+    // (where main and guard are not used), and is only used to build
+    // the call-graph.
+    CompactVector<TCA> main;
+    CompactVector<TCA> guard;
+    CompactVector<TransID> profCallers;
     mutable Mutex lock;
   };
+  using CallerRecPtr = std::unique_ptr<CallerRec>;
 
-  void removeCaller(std::vector<TCA>& v, TCA caller) {
+  void removeCaller(CompactVector<TCA>& v, TCA caller) {
     assertx(m_kind == TransKind::ProfPrologue);
-    m_callers.lock.assertOwnedBySelf();
-    auto pos = std::find(v.begin(), v.end(), caller);
+    m_callers->lock.assertOwnedBySelf();
+    auto const pos = std::find(v.begin(), v.end(), caller);
     if (pos != v.end()) v.erase(pos);
   }
 
@@ -286,15 +303,16 @@ private:
   };
   SrcKey m_sk;
   union {
-    RegionDescPtr m_region; // for TransProfile translations
-    CallerRec m_callers; // for TransProfPrologue translations
+    RegionDescPtr   m_region; // for TransProfile translations
+    CallerRecPtr    m_callers; // for TransProfPrologue translations
   };
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
 /**
- * ProfData encapsulates the profiling data kept by the JIT.
+ * ProfData encapsulates the profiling data kept by the JIT.  It also includes
+ * data derived from profiling counters.
  *
  * Thread safety: All of ProfData's member functions may be called with no
  * external synchronization, with the caveat that care must be taken to not
@@ -307,7 +325,8 @@ struct ProfData {
   ProfData& operator=(const ProfData&) = delete;
 
   struct Session final {
-    Session() { requestInitProfData(); }
+    Session() : m_ts(Treadmill::SessionKind::ProfData)
+               { requestInitProfData(); }
     ~Session() { requestExitProfData(); }
     Session(Session&&) = delete;
     Session& operator=(Session&&) = delete;
@@ -315,6 +334,28 @@ struct ProfData {
   private:
     Treadmill::Session m_ts;
   };
+
+  static bool triedDeserialization() {
+    return s_triedDeserialization.load(std::memory_order_relaxed);
+  }
+  static void setTriedDeserialization() {
+    s_triedDeserialization.store(true, std::memory_order_relaxed);
+  }
+
+  static bool wasDeserialized() {
+    return s_wasDeserialized.load(std::memory_order_relaxed);
+  }
+  static int64_t buildTime() {
+    return s_buildTime.load(std::memory_order_relaxed);
+  }
+  static const StringData* buildHost() {
+    return s_buildHost.load(std::memory_order_relaxed);
+  }
+  static void setDeserialized(const std::string& buildHost, int64_t buildTime) {
+    s_buildHost.store(makeStaticString(buildHost), std::memory_order_relaxed);
+    s_buildTime.store(buildTime, std::memory_order_relaxed);
+    s_wasDeserialized.store(true, std::memory_order_relaxed);
+  }
 
   /*
    * Allocate a new id for a translation. Depending on the kind of the
@@ -366,6 +407,16 @@ struct ProfData {
     return initVal - counter;
   }
 
+  /*
+   * Used for save/restore during serialization.
+   */
+  int64_t counterDefault() const {
+    return m_counters.getDefault();
+  }
+  void resetCounters(int64_t val) {
+    m_counters.resetAllCounters(val);
+  }
+
   ProfCounters<int64_t> takeCounters() {
     return std::move(m_counters);
   }
@@ -376,6 +427,13 @@ struct ProfData {
   int64_t* transCounterAddr(TransID id) {
     // getAddr() can grow the slab list, so grab a write lock.
     folly::SharedMutex::WriteHolder lock{m_transLock};
+    return m_counters.getAddr(id);
+  }
+
+  /*
+   * As above, if we already hold the lock.
+   */
+  int64_t* transCounterAddrNoLock(TransID id) {
     return m_counters.getAddr(id);
   }
 
@@ -406,6 +464,12 @@ struct ProfData {
    */
   void addTransProfile(TransID, const RegionDescPtr&, const PostConditions&);
   void addTransProfPrologue(TransID, SrcKey, int);
+
+  /*
+   * Add a ProfTransRec. Only used when deserializing the profile data, and
+   * must be called in single threaded context.
+   */
+  void addProfTrans(TransID transID, std::unique_ptr<ProfTransRec> tr);
 
   /*
    * Check if a (function|SrcKey) has been marked as optimized.
@@ -567,11 +631,28 @@ struct ProfData {
   /*
    * Support storing debug info about target profiles in profiling translations.
    */
-  struct TargetProfileInfo { rds::Profile key; std::string debugInfo; };
+  struct TargetProfileInfo { rds::Profile<void> key; std::string debugInfo; };
   void addTargetProfile(const TargetProfileInfo& info);
   std::vector<TargetProfileInfo> getTargetProfiles(TransID transID) const;
 
-private:
+  /*
+   * Access base profile count and function ordering. Set in hfsortFuncs().
+   */
+  uint64_t baseProfCount() const {
+    return m_baseProfCount;
+  }
+  void setBaseProfCount(uint64_t c) {
+    m_baseProfCount = c;
+  }
+  const std::vector<FuncId>& sortedFuncs() const {
+    return m_sortedFuncIds;
+  }
+  void setFuncOrder(std::vector<FuncId>&& order) {
+    assertx(m_sortedFuncIds.empty());
+    m_sortedFuncIds = order;
+  }
+
+ private:
   struct PrologueID {
     FuncId func;
     int nArgs;
@@ -632,7 +713,7 @@ private:
    * Lists of profiling translations for each Func, and a lock to protect it.
    */
   mutable folly::SharedMutex m_funcProfTransLock;
-  std::unordered_map<FuncId, TransIDVec> m_funcProfTrans;
+  jit::fast_map<FuncId, TransIDVec> m_funcProfTrans;
 
   /*
    * Map from jump addresses to the ID of the translation containing them.
@@ -643,20 +724,32 @@ private:
    * Cache for Func -> block end offsets. Values in this map cannot be modified
    * after insertion so no locking is necessary for lookups.
    */
-  folly::AtomicHashMap<FuncId, const std::unordered_set<Offset>>
+  folly::AtomicHashMap<FuncId, const jit::fast_set<Offset>>
     m_blockEndOffsets;
 
   mutable folly::SharedMutex m_targetProfilesLock;
-  std::unordered_map<TransID, std::vector<TargetProfileInfo>> m_targetProfiles;
+  jit::fast_map<TransID, jit::vector<TargetProfileInfo>> m_targetProfiles;
+
+  /*
+   * Base profile count for inlining.
+   */
+  uint64_t m_baseProfCount;
+
+  /*
+   * Order of optimized translations in the TC, obtained from hfsort on the
+   * callg graph.
+   */
+  std::vector<FuncId> m_sortedFuncIds;
+
+  /*
+   * The following static variables need to be alive for the lifetime of the
+   * process, even after profile data are freed.
+   */
+  static std::atomic_bool s_triedDeserialization;
+  static std::atomic_bool s_wasDeserialized;
+  static std::atomic<StringData*> s_buildHost;
+  static std::atomic<int64_t> s_buildTime;
 };
-
-//////////////////////////////////////////////////////////////////////
-
-/*
- * Returns whether or not we've collected enough profile data to trigger
- * retranslateAll.
- */
-bool hasEnoughProfDataToRetranslateAll();
 
 //////////////////////////////////////////////////////////////////////
 

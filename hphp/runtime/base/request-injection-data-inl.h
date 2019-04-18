@@ -33,6 +33,14 @@ inline bool RequestInjectionData::getJit() const {
   return m_jit;
 }
 
+inline bool RequestInjectionData::isJittingDisabled() const {
+  return m_jittingDisabled;
+}
+
+inline void RequestInjectionData::setJittingDisabled(bool flag) {
+  m_jittingDisabled = flag;
+}
+
 inline bool RequestInjectionData::getJitFolding() const {
   return m_jitFolding;
 }
@@ -41,13 +49,15 @@ inline void RequestInjectionData::setJitFolding(bool flag) {
   m_jitFolding = flag;
 }
 
-inline bool RequestInjectionData::getSuppressHackArrayCompatNotices() const {
-  return m_suppressHackArrayCompatNotices;
-}
-
-inline void RequestInjectionData::setSuppressHackArrayCompatNotices(bool flag) {
-  m_suppressHackArrayCompatNotices = flag;
-}
+#define HC(Opt, ...) \
+  inline bool RequestInjectionData::getSuppressHAC##Opt##Notices() const { \
+    return m_suppressHAC##Opt; \
+  } \
+  inline void RequestInjectionData::setSuppressHAC##Opt##Notices(bool flag) { \
+    m_suppressHAC##Opt = flag; \
+  }
+  HAC_CHECK_OPTS
+#undef HC
 
 inline bool RequestInjectionData::getCoverage() const {
   return m_coverage;
@@ -218,10 +228,6 @@ inline void RequestInjectionData::setSafeFileAccess(bool b) {
 
 inline bool RequestInjectionData::hasSafeFileAccess() const {
   return m_safeFileAccess;
-}
-
-inline bool RequestInjectionData::hasTrackErrors() const {
-  return m_trackErrors;
 }
 
 inline bool RequestInjectionData::hasHtmlErrors() const {

@@ -15,6 +15,9 @@
 */
 
 #include "hphp/runtime/server/source-root-info.h"
+
+#include <sstream>
+
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/php-globals.h"
@@ -31,8 +34,7 @@ using std::map;
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-IMPLEMENT_THREAD_LOCAL_NO_CHECK(std::string, SourceRootInfo::s_path);
-IMPLEMENT_THREAD_LOCAL_NO_CHECK(std::string, SourceRootInfo::s_phproot);
+THREAD_LOCAL_NO_CHECK(std::string, SourceRootInfo::s_path);
 
 const StaticString s_default("default");
 const StaticString s___builtin("__builtin");
@@ -40,7 +42,6 @@ SourceRootInfo::SourceRootInfo(Transport* transport)
     : m_sandboxCond(RuntimeOption::SandboxMode ? SandboxCondition::On :
                                                  SandboxCondition::Off) {
   s_path.destroy();
-  s_phproot.destroy();
 
   auto documentRoot = transport->getDocumentRoot();
   if (!documentRoot.empty()) {
@@ -63,17 +64,19 @@ SourceRootInfo::SourceRootInfo(Transport* transport)
     return;
   }
   if (RuntimeOption::SandboxFromCommonRoot) {
-    String sandboxName = matches.toArray().rvalAt(1).toString();
+    auto sandboxName = tvCastToString(matches.toArray().rvalAt(1).tv());
     createFromCommonRoot(sandboxName);
   } else {
     Array pair = StringUtil::Explode(
-      matches.toArray().rvalAt(1).toString(), "-", 2).toArray();
-    m_user = pair.rvalAt(0).toString();
+      tvCastToString(matches.toArray().rvalAt(1).tv()),
+      "-", 2
+    ).toArray();
+    m_user = tvCastToString(pair.rvalAt(0).tv());
     bool defaultSb = pair.size() == 1;
     if (defaultSb) {
       m_sandbox = s_default;
     } else {
-      m_sandbox = pair.rvalAt(1).toString();
+      m_sandbox = tvCastToString(pair.rvalAt(1).tv());
     }
 
     createFromUserConfig();
@@ -86,7 +89,6 @@ SourceRootInfo::SourceRootInfo(const std::string &user,
     : m_sandboxCond(RuntimeOption::SandboxMode ? SandboxCondition::On :
                                                  SandboxCondition::Off) {
   s_path.destroy();
-  s_phproot.destroy();
   if (!sandboxOn()) return;
   m_user = user;
   m_sandbox = sandbox;
@@ -145,7 +147,7 @@ void SourceRootInfo::createFromUserConfig() {
     alp = Config::Get(
         ini, config, (m_sandbox + ".accesslog").c_str(), "", false
     );
-  } catch (HdfException &e) {
+  } catch (HdfException& e) {
     Logger::Error("%s ignored: %s", confFileName.c_str(),
                   e.getMessage().c_str());
   }
@@ -217,12 +219,14 @@ Array SourceRootInfo::setServerVariables(Array server) const {
   for (auto it = RuntimeOption::SandboxServerVariables.begin();
        it != RuntimeOption::SandboxServerVariables.end();
        ++it) {
-    server.set(String(it->first),
-               String(parseSandboxServerVariable(it->second)));
+    String idx(it->first);
+    const auto arrkey = server.convertKey<IntishCast::Cast>(idx);
+    String str(parseSandboxServerVariable(it->second));
+    server.set(arrkey, make_tv<KindOfString>(str.get()), true);
   }
 
   {
-    SuppressHackArrCompatNotices suppress;
+    SuppressHACArrayPlusNotices shacn;
     if (!m_serverVars.empty()) {
       server += m_serverVars;
     }
@@ -252,7 +256,7 @@ SourceRootInfo::parseSandboxServerVariable(const std::string &format) const {
           // skip trailing /
           const char *data = m_path.data();
           int n = m_path.size() - 1;
-          assert(data[n] == '/');
+          assertx(data[n] == '/');
           res.write(data, n);
           break;
         }
@@ -276,21 +280,6 @@ std::string SourceRootInfo::path() const {
   } else {
     return RuntimeOption::SourceRoot;
   }
-}
-
-const StaticString
-  s_SERVER("_SERVER"),
-  s_PHP_ROOT("PHP_ROOT");
-
-std::string& SourceRootInfo::initPhpRoot() {
-  auto v = php_global(s_SERVER).toArray().rvalAt(s_PHP_ROOT);
-  if (v.isString()) {
-    *s_phproot.getCheck() = std::string(v.asCStrRef().data()) + "/";
-  } else {
-    // Our best guess at the source root.
-    *s_phproot.getCheck() = GetCurrentSourceRoot();
-  }
-  return *s_phproot.getCheck();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

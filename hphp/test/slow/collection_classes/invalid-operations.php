@@ -1,4 +1,6 @@
 <?hh
+
+<<__EntryPoint>>
 function main() {
   $containers = Vector {
     ImmVector {Vector {}, Vector {}},
@@ -170,15 +172,5 @@ function main() {
   }
   echo "\n";
 
-  $x = Pair {array(1), array(2)};
-
-  try {
-    $y =& $x[0][0];
-  } catch (InvalidOperationException $e) {
-    echo "Caught exception: " . $e->getMessage() . "\n";
-  }
-  $y = 2;
-  var_dump($x);
 }
 
-main();

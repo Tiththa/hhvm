@@ -14,8 +14,7 @@ $xml = simplexml_load_string ($xml_str) ;
 $val = 1;
 
 var_dump($val);
-$zml->pos["act_idx"] = $val;
+$zml->pos = ["act_idx" => $val];
 var_dump($val) ;
 
-?>
-===DONE===
+echo "===DONE===\n";

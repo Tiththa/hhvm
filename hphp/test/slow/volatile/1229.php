@@ -12,6 +12,9 @@ function __autoload($name) {
   echo __METHOD__ . "\n";
   throw new Exception('__autoload');
 }
+
+<<__EntryPoint>>
+function main_1229() {
 spl_autoload_register('autoload_first');
 spl_autoload_register('autoload_second');
 try {
@@ -32,9 +35,9 @@ try {
   }
  while($e = $e->getPrevious());
 }
-// hphpc won't call the autoloader unless there exists a 
+// hphpc won't call the autoloader unless there exists a
 // definition for the class somewhere
 if (true) {
-  class A {
+  include '1229.inc';
 }
 }

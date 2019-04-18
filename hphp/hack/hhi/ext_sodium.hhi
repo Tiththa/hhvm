@@ -1,56 +1,72 @@
-<?hh // decl
+<?hh
 
 final class SodiumException extends Exception { }
 
 ///// utilities
 
+<<__PHPStdLib>>
 function sodium_bin2hex(string $binary): string;
 
+<<__PHPStdLib>>
 function sodium_hex2bin(string $hex, ?string $ignore = null): string;
 
+<<__PHPStdLib>>
 function sodium_memzero(mixed &$buffer): void;
 
+<<__PHPStdLib>>
 function sodium_increment(mixed &$buffer): void;
 
+<<__PHPStdLib>>
 function sodium_add(mixed &$value, string $add): void;
 
+<<__PHPStdLib>>
 function sodium_memcmp(string $a, string $b): int;
 
+<<__PHPStdLib>>
 function sodium_compare(string $a, string $b): int;
 
+<<__PHPStdLib>>
 function sodium_crypto_scalarmult(string $n, string $p): string;
 
 ///// Hashing (not for passwords or keys)
 
+<<__PHPStdLib>>
 function sodium_crypto_generichash_keygen(): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_generichash(
   string $msg,
   ?string $key = null,
   ?int $length = null,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_generichash_init(
   ?string $key = null,
   ?int $length = null
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_generichash_update(
   mixed &$state,
   string $msg,
 ): bool;
 
+<<__PHPStdLib>>
 function sodium_crypto_generichash_final(
   mixed &$state,
   ?int $length = null,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_shorthash_keygen(): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_shorthash(string $message, string $key): string;
 
 ///// Key derivation (kdf)
 
+<<__PHPStdLib>>
 function sodium_crypto_pwhash(
   int $output_length,
   string $password,
@@ -59,6 +75,7 @@ function sodium_crypto_pwhash(
   int $memlimit,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_pwhash_scryptsalsa208sha256(
   int $output_length,
   string $password,
@@ -67,6 +84,7 @@ function sodium_crypto_pwhash_scryptsalsa208sha256(
   int $memlimit,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_kdf_derive_from_key(
   int $subkey_length,
   int $subkey_id,
@@ -76,23 +94,27 @@ function sodium_crypto_kdf_derive_from_key(
 
 ///// Password hashing for storage
 
+<<__PHPStdLib>>
 function sodium_crypto_pwhash_str(
   string $password,
   int $opslimit,
   int $memlimit,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_pwhash_str_verify(
   string $hash,
   string $password,
 ): bool;
 
+<<__PHPStdLib>>
 function sodium_crypto_pwhash_scryptsalsa208sha256_str(
   string $password,
   int $opslimit,
   int $memlimit,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_pwhash_scryptsalsa208sha256_str_verify(
   string $hash,
   string $password,
@@ -100,10 +122,13 @@ function sodium_crypto_pwhash_scryptsalsa208sha256_str_verify(
 
 ///// MACs
 
+<<__PHPStdLib>>
 function sodium_crypto_auth_keygen(): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_auth(string $message, string $key): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_auth_verify(
   string $signature,
   string $message,
@@ -112,14 +137,17 @@ function sodium_crypto_auth_verify(
 
 ///// Symmetric (PSK) encryption
 
+<<__PHPStdLib>>
 function sodium_crypto_secretbox_keygen(): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_secretbox(
   string $plaintext,
   string $nonce,
   string $key,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_secretbox_open(
   string $ciphertext,
   string $nonce,
@@ -128,31 +156,44 @@ function sodium_crypto_secretbox_open(
 
 ///// Asymetric (public-key) encryption key management
 
+<<__PHPStdLib>>
 function sodium_crypto_box_keypair(): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_seed_keypair(string $seed): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_keypair_from_secretkey_and_publickey(
   string $secretkey,
   string $publickey,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_publickey(string $keypair): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_secretkey(string $keypair): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_publickey_from_secretkey(string $key): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_scalarmult_base(string $key): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_kx_keypair(): string;
+<<__PHPStdLib>>
 function sodium_crypto_kx_seed_keypair(string $seed): string;
+<<__PHPStdLib>>
 function sodium_crypto_kx_secretkey(string $keypair): string;
+<<__PHPStdLib>>
 function sodium_crypto_kx_publickey(string $keypair): string;
+<<__PHPStdLib>>
 function sodium_crypto_kx_client_session_keys(
   string $client_keypair,
   string $server_pubkey,
 ): (string, string);
+<<__PHPStdLib>>
 function sodium_crypto_kx_server_session_keys(
   string $server_keypair,
   string $client_pubkey,
@@ -160,12 +201,14 @@ function sodium_crypto_kx_server_session_keys(
 
 ///// Unauthenticated asymetric (PSK) encryption (you probably don't want this)
 
+<<__PHPStdLib>>
 function sodium_crypto_stream(
   int $length,
   string $nonce,
   string $key,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_stream_xor(
   string $message,
   string $nonce,
@@ -174,23 +217,27 @@ function sodium_crypto_stream_xor(
 
 ///// Asymetric (public-key) encryption
 
+<<__PHPStdLib>>
 function sodium_crypto_box(
   string $plaintext,
   string $nonce,
   string $keypair,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_open(
   string $ciphertext,
   string $nonce,
   string $key,
 ): mixed;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_seal(
   string $plaintext,
   string $publickey,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_box_seal_open(
   string $ciphertext,
   string $keypair,
@@ -198,41 +245,53 @@ function sodium_crypto_box_seal_open(
 
 ///// Asymetric (public key) signature key management
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_keypair(): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_seed_keypair(string $seed): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_publickey_from_secretkey(string $secretkey): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_keypair_from_secretkey_and_publickey(
   string $secretkey,
   string $publickey,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_publickey(string $keypair): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_secretkey(string $keypair): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_ed25519_pk_to_curve25519(string $eddsakey): string;
+<<__PHPStdLib>>
 function sodium_crypto_sign_ed25519_sk_to_curve25519(string $eddsakey): string;
 
 ///// Asymetric (public key) signatures
 
+<<__PHPStdLib>>
 function sodium_crypto_sign(
   string $message,
   string $secretkey,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_open(
   string $signed,
   string $publickey,
 ): mixed;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_detached(
   string $message,
   string $secretkey,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_sign_verify_detached(
   string $signature,
   string $message,
@@ -241,8 +300,10 @@ function sodium_crypto_sign_verify_detached(
 
 ///// AEAD functions
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_aes256gcm_is_available(): bool;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_aes256gcm_decrypt(
   string $ciphertext,
   string $ad,
@@ -250,6 +311,7 @@ function sodium_crypto_aead_aes256gcm_decrypt(
   string $key,
 ): mixed;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_aes256gcm_encrypt(
   string $plaintext,
   string $ad,
@@ -257,6 +319,7 @@ function sodium_crypto_aead_aes256gcm_encrypt(
   string $key,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_chacha20poly1305_decrypt(
   string $ciphertext,
   string $ad,
@@ -264,6 +327,7 @@ function sodium_crypto_aead_chacha20poly1305_decrypt(
   string $key,
 ): mixed;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_chacha20poly1305_encrypt(
   string $plaintext,
   string $ad,
@@ -271,6 +335,7 @@ function sodium_crypto_aead_chacha20poly1305_encrypt(
   string $key,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_chacha20poly1305_ietf_decrypt(
   string $ciphertext,
   string $ad,
@@ -278,6 +343,7 @@ function sodium_crypto_aead_chacha20poly1305_ietf_decrypt(
   string $key,
 ): mixed;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_chacha20poly1305_ietf_encrypt(
   string $plaintext,
   string $ad,
@@ -285,6 +351,7 @@ function sodium_crypto_aead_chacha20poly1305_ietf_encrypt(
   string $key,
 ): string;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(
   string $ciphertext,
   string $ad,
@@ -292,6 +359,7 @@ function sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(
   string $key,
 ): mixed;
 
+<<__PHPStdLib>>
 function sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(
   string $plaintext,
   string $ad,

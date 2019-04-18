@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 // Test situations where traits cause duplicate property names when
 // preparing the array for 86pinit setup.
@@ -7,6 +7,7 @@
 // Do this thing with a non-scalar initializer
 
 class C { const A = "ASD"; }
+const MUST_PREPARE = "temp";
 
 trait TNonScalar { private $nonScalarTraitProperty = C::A; }
 

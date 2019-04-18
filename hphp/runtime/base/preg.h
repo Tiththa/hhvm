@@ -17,7 +17,6 @@
 #ifndef incl_HPHP_PREG_H_
 #define incl_HPHP_PREG_H_
 
-#include "hphp/runtime/base/req-containers.h"
 #include "hphp/runtime/base/type-string.h"
 
 #include <folly/Optional.h>
@@ -30,6 +29,8 @@
 #define PREG_PATTERN_ORDER          1
 #define PREG_SET_ORDER              2
 #define PREG_OFFSET_CAPTURE         (1<<8)
+#define PREG_FB_HACK_ARRAYS         (1<<30)
+#define PREG_FB__PRIVATE__HSL_IMPL  (1<<29)
 
 #define PREG_SPLIT_NO_EMPTY         (1<<0)
 #define PREG_SPLIT_DELIM_CAPTURE    (1<<1)

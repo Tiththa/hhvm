@@ -18,12 +18,16 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/logger.h"
+#include "hphp/util/stack-trace.h"
 #include "hphp/util/string-vsnprintf.h"
+#include "hphp/util/struct-log.h"
+
+#include <folly/logging/RateLimiter.h>
 
 #ifdef ERROR
 # undef ERROR
@@ -88,9 +92,12 @@ void raise_typehint_error(const std::string& msg) {
     SystemLib::throwTypeErrorObject(msg);
   }
   raise_recoverable_error_without_first_frame(msg);
-  if (RuntimeOption::RepoAuthoritative && Repo::global().HardTypeHints) {
-    raise_error("Error handler tried to recover from typehint violation");
-  }
+  raise_error("Error handler tried to recover from typehint violation");
+}
+
+void raise_reified_typehint_error(const std::string& msg, bool warn) {
+  if (!warn) return raise_typehint_error(msg);
+  raise_warning_unsampled(msg);
 }
 
 void raise_return_typehint_error(const std::string& msg) {
@@ -99,34 +106,214 @@ void raise_return_typehint_error(const std::string& msg) {
     SystemLib::throwTypeErrorObject(msg);
   }
   raise_recoverable_error(msg);
-  if (RuntimeOption::EvalCheckReturnTypeHints >= 3 ||
-      (RuntimeOption::RepoAuthoritative &&
-       Repo::global().HardReturnTypeHints)) {
+  if (RuntimeOption::EvalCheckReturnTypeHints >= 3) {
     raise_error("Error handler tried to recover from a return typehint "
                 "violation");
   }
 }
 
-void raise_disallowed_dynamic_call(const Func* f) {
-  if (RuntimeOption::RepoAuthoritative &&
-      Repo::global().DisallowDynamicVarEnvFuncs) {
-    raise_error(Strings::DISALLOWED_DYNCALL, f->fullName()->data());
+void raise_property_typehint_error(const std::string& msg, bool isSoft) {
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+
+  if (RuntimeOption::EvalCheckPropTypeHints == 1 || isSoft) {
+    raise_warning_unsampled(msg);
+    return;
   }
-  raise_hack_strict(
-    RuntimeOption::DisallowDynamicVarEnvFuncs,
-    "disallow_dynamic_var_env_funcs",
-    Strings::DISALLOWED_DYNCALL, f->fullName()->data()
+
+  raise_recoverable_error(msg);
+  if (RuntimeOption::EvalCheckPropTypeHints >= 3) {
+    raise_error("Error handler tried to recover from a property typehint "
+                "violation");
+  }
+}
+
+void raise_property_typehint_binding_error(const Class* declCls,
+                                           const StringData* propName,
+                                           bool isStatic,
+                                           bool isSoft) {
+  raise_property_typehint_error(
+    folly::sformat(
+      "{} '{}::{}' with type annotation binding to ref",
+      isStatic ? "Static property" : "Property",
+      declCls->name(),
+      propName
+    ),
+    isSoft
   );
 }
 
-void raise_intish_index_cast() {
-  if (UNLIKELY(RID().getSuppressHackArrayCompatNotices())) return;
-  raise_notice("Hack Array Compat: Intish index cast");
+void raise_property_typehint_unset_error(const Class* declCls,
+                                         const StringData* propName,
+                                         bool isSoft) {
+  raise_property_typehint_error(
+    folly::sformat(
+      "Unsetting property '{}::{}' with type annotation",
+      declCls->name(),
+      propName
+    ),
+    isSoft
+  );
+}
+
+void raise_convert_object_to_string(const char* cls_name) {
+  raise_error("Cannot convert object to string (got instance of %s)", cls_name);
+}
+
+void raise_convert_record_to_type(const char* typeName) {
+  raise_error("Cannot convert record to %s", typeName);
 }
 
 void raise_hackarr_compat_notice(const std::string& msg) {
-  if (UNLIKELY(RID().getSuppressHackArrayCompatNotices())) return;
   raise_notice("Hack Array Compat: %s", msg.c_str());
+}
+
+#define HC(Opt, opt) \
+  void raise_hac_##opt##_notice(const std::string& msg) {       \
+    if (UNLIKELY(RID().getSuppressHAC##Opt##Notices())) return; \
+    raise_notice("Hack Array Compat: %s", msg.c_str());         \
+  }
+HAC_CHECK_OPTS
+#undef HC
+
+void raise_hack_arr_compat_serialize_notice(const ArrayData* arr) {
+  auto const type = [&]{
+    if (arr->isVecArray()) return "vec";
+    if (arr->isDict())     return "dict";
+    if (arr->isKeyset())   return "keyset";
+    return "array";
+  }();
+  raise_notice("Hack Array Compat: Serializing %s", type);
+}
+
+void
+raise_hack_arr_compat_array_producing_func_notice(const std::string& name) {
+  raise_notice("Hack Array Compat: Calling array producing function %s",
+               name.c_str());
+}
+
+namespace {
+
+const char* arrayAnnotTypeToName(AnnotType at) {
+  switch (at) {
+    case AnnotType::VArray:     return "varray";
+    case AnnotType::DArray:     return "darray";
+    case AnnotType::VArrOrDArr: return "varray_or_darray";
+    case AnnotType::Array:      return "array";
+    default:                    always_assert(false);
+  }
+}
+
+const char* arrayToName(const ArrayData* ad) {
+  if (ad->isVArray()) return "varray";
+  if (ad->isDArray()) return "darray";
+  return "array";
+}
+
+void raise_hackarr_compat_type_hint_impl(const Func* func,
+                                         const ArrayData* ad,
+                                         AnnotType at,
+                                         folly::Optional<int> param) {
+  auto const name = arrayAnnotTypeToName(at);
+  auto const given = arrayToName(ad);
+
+  if (param) {
+    raise_notice(
+      "Hack Array Compat: Argument %d to %s() must be of type %s, %s given",
+      *param + 1, func->fullDisplayName()->data(), name, given
+    );
+  } else {
+    raise_notice(
+      "Hack Array Compat: Value returned from %s() must be of type %s, "
+      "%s given",
+      func->fullDisplayName()->data(), name, given
+    );
+  }
+}
+
+void raise_func_undefined(const char* prefix, const StringData* name,
+                          const Class* cls) {
+  if (LIKELY(!needsStripInOut(name))) {
+    if (cls) {
+      raise_error("%s undefined method %s::%s()", prefix, cls->name()->data(),
+                  name->data());
+    }
+    raise_error("%s undefined function %s()", prefix, name->data());
+  } else {
+    auto stripped = stripInOutSuffix(name);
+    if (cls) {
+      if (cls->lookupMethod(stripped)) {
+        raise_error("%s method %s::%s() with incorrectly annotated inout "
+                    "parameter", prefix, cls->name()->data(), stripped->data());
+      }
+      raise_error("%s undefined method %s::%s()", cls->name()->data(), prefix,
+                  stripped->data());
+    } else if (Unit::lookupFunc(stripped)) {
+      raise_error("%s function %s() with incorrectly annotated inout "
+                  "parameter", prefix, stripped->data());
+    }
+    raise_error("%s undefined function %s()", prefix, stripped->data());
+  }
+}
+
+}
+
+void raise_hackarr_compat_type_hint_param_notice(const Func* func,
+                                                 const ArrayData* ad,
+                                                 AnnotType at,
+                                                 int param) {
+  raise_hackarr_compat_type_hint_impl(func, ad, at, param);
+}
+
+void raise_hackarr_compat_type_hint_ret_notice(const Func* func,
+                                               const ArrayData* ad,
+                                               AnnotType at) {
+  raise_hackarr_compat_type_hint_impl(func, ad, at, folly::none);
+}
+
+void raise_hackarr_compat_type_hint_outparam_notice(const Func* func,
+                                                    const ArrayData* ad,
+                                                    AnnotType at,
+                                                    int param) {
+  auto const name = arrayAnnotTypeToName(at);
+  auto const given = arrayToName(ad);
+  raise_notice(
+    "Hack Array Compat: Argument %d returned from %s() as an inout parameter "
+    "must be of type %s, %s given",
+    param + 1, func->fullDisplayName()->data(), name, given
+  );
+}
+
+void raise_hackarr_compat_type_hint_property_notice(const Class* declCls,
+                                                    const ArrayData* ad,
+                                                    AnnotType at,
+                                                    const StringData* propName,
+                                                    bool isStatic) {
+  auto const name = arrayAnnotTypeToName(at);
+  auto const given = arrayToName(ad);
+  raise_notice(
+    "Hack Array Compat: %s '%s::%s' declared as type %s, %s assigned",
+    isStatic ? "Static property" : "Property",
+    declCls->name()->data(),
+    propName->data(),
+    name,
+    given
+  );
+}
+
+void raise_hackarr_compat_is_operator(const char* source, const char* target) {
+  raise_notice(
+    "Hack Array Compat: is/as operator used with %s and %s",
+    source,
+    target
+  );
+}
+
+void raise_resolve_undefined(const StringData* name, const Class* cls) {
+  raise_func_undefined("Failure to resolve", name, cls);
+}
+
+void raise_call_to_undefined(const StringData* name, const Class* cls) {
+  raise_func_undefined("Call to", name, cls);
 }
 
 void raise_recoverable_error(const char *fmt, ...) {
@@ -349,6 +536,27 @@ void raise_deprecated(const char *fmt, ...) {
   raise_notice_helper(ErrorMode::PHP_DEPRECATED, false, msg);
 }
 
+std::string param_type_error_message(
+    const char* func_name,
+    int param_num,
+    DataType expected_type,
+    DataType actual_type) {
+
+  // slice off fg1_
+  if (strncmp(func_name, "fg1_", 4) == 0) {
+    func_name += 4;
+  } else if (strncmp(func_name, "tg1_", 4) == 0) {
+    func_name += 4;
+  }
+  assertx(param_num > 0);
+  return folly::sformat(
+    "{}() expects parameter {} to be {}, {} given",
+    func_name,
+    param_num,
+    getDataTypeString(expected_type).data(),
+    getDataTypeString(actual_type).data());
+}
+
 void raise_param_type_warning(
     const char* func_name,
     int param_num,
@@ -359,19 +567,11 @@ void raise_param_type_warning(
   // end of the string
   auto is_constructor = is_constructor_name(func_name);
   if (!is_constructor && !warning_freq_check()) return;
-  // slice off fg1_
-  if (strncmp(func_name, "fg1_", 4) == 0) {
-    func_name += 4;
-  } else if (strncmp(func_name, "tg1_", 4) == 0) {
-    func_name += 4;
-  }
-  assert(param_num > 0);
-  auto msg = folly::sformat(
-    "{}() expects parameter {} to be {}, {} given",
-    func_name,
-    param_num,
-    getDataTypeString(expected_type).data(),
-    getDataTypeString(actual_type).data());
+
+  auto msg = param_type_error_message(func_name,
+                                      param_num,
+                                      expected_type,
+                                      actual_type);
 
   if (is_constructor) {
     SystemLib::throwExceptionObject(msg);
@@ -434,16 +634,58 @@ void raise_message(ErrorMode mode,
   raise_notice_helper(mode, skipTop, msg);
 }
 
+void raise_str_to_class_notice(const StringData* name) {
+  if (RuntimeOption::EvalRaiseStrToClsConversionWarning && !name->isStatic()) {
+    raise_notice("Implicit string to Class conversion for classname %s",
+                 name->data());
+  }
+}
+
+void raise_clsmeth_compat_type_hint(
+  const Func* func, const std::string& displayName,
+  folly::Optional<int> param) {
+  if (param) {
+    raise_notice(
+      "class_meth Compat: Argument %d passed to %s()"
+      " must be of type %s, clsmeth given",
+      *param + 1, func->fullDisplayName()->data(), displayName.c_str());
+  } else {
+    raise_notice(
+      "class_meth Compat: Value returned from function %s()"
+      " must be of type %s, clsmeth given",
+      func->fullDisplayName()->data(), displayName.c_str());
+  }
+}
+
+void raise_clsmeth_compat_type_hint_outparam_notice(
+  const Func* func, const std::string& displayName, int paramNum) {
+  raise_notice(
+    "class_meth Compat: Argument %d returned from %s()"
+    " must be of type %s, clsmeth given",
+    paramNum + 1, func->fullDisplayName()->data(), displayName.c_str());
+}
+
+void raise_clsmeth_compat_type_hint_property_notice(
+  const Class* declCls, const StringData* propName,
+  const std::string& displayName, bool isStatic) {
+  raise_notice(
+    "class_meth Compat: %s '%s::%s' declared as type %s, clsmeth assigned",
+    isStatic ? "Static property" : "Property",
+    declCls->name()->data(), propName->data(), displayName.c_str());
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
-SuppressHackArrCompatNotices::SuppressHackArrCompatNotices()
-  : old{RID().getSuppressHackArrayCompatNotices()} {
-  RID().setSuppressHackArrayCompatNotices(true);
-}
-
-SuppressHackArrCompatNotices::~SuppressHackArrCompatNotices() {
-  RID().setSuppressHackArrayCompatNotices(old);
-}
+#define HC(Opt, ...) \
+  SuppressHAC##Opt##Notices::SuppressHAC##Opt##Notices()    \
+    : old{RID().getSuppressHAC##Opt##Notices()} {           \
+    RID().setSuppressHAC##Opt##Notices(true);               \
+  }                                                         \
+  SuppressHAC##Opt##Notices::~SuppressHAC##Opt##Notices() { \
+    RID().setSuppressHAC##Opt##Notices(old);                \
+  }
+HAC_CHECK_OPTS
+#undef HC
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -39,9 +39,11 @@ Type arithOpResult(Type t1, Type t2) {
   auto both = t1 | t2;
   if (both.maybe(TDbl)) return TDbl;
   if (both.maybe(TArr)) return TArr;
+  if (both.maybe(TShape)) return TShape;
   if (both.maybe(TVec)) return TVec;
   if (both.maybe(TDict)) return TDict;
   if (both.maybe(TKeyset)) return TKeyset;
+  if (both.maybe(TClsMeth)) return TClsMeth;
   if (both.maybe(TStr)) return TCell;
   return TInt;
 }
@@ -107,14 +109,7 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     return TBoxedInitCell;
   };
 
-  auto outFlag = getInstrInfo(inst.op()).type;
-  if (outFlag == OutFInputL) {
-    outFlag = inst.preppedByRef ? OutVInputL : OutCInputL;
-  } else if (outFlag == OutFInputR) {
-    outFlag = inst.preppedByRef ? OutVInput : OutCInput;
-  }
-
-  switch (outFlag) {
+  switch (getInstrInfo(inst.op()).type) {
     case OutNull:        return TInitNull;
     case OutNullUninit:  return TUninit;
     case OutString:      return TStr;
@@ -127,6 +122,8 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutInt64:       return TInt;
     case OutArray:       return TArr;
     case OutArrayImm:    return TArr; // Should be StaticArr/Vec/Dict: t2124292
+    case OutVArray:      return RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+    case OutDArray:      return RuntimeOption::EvalHackArrDVArrs ? TDict : TArr;
     case OutVec:         return TVec;
     case OutVecImm:      return TVec;
     case OutDict:        return TDict;
@@ -135,6 +132,7 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutKeysetImm:   return TKeyset;
     case OutObject:
     case OutThisObject:  return TObj;
+    case OutRecord:      return TRecord;
     case OutResource:    return TRes;
 
     case OutFDesc:       return folly::none;
@@ -142,11 +140,11 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutVUnknown:    return TBoxedInitCell;
 
     case OutSameAsInput1: return topType(env, BCSPRelOffset{0});
+    case OutSameAsInput2: return topType(env, BCSPRelOffset{1});
+    case OutModifiedInput2: return topType(env, BCSPRelOffset{1}).modified();
     case OutModifiedInput3: return topType(env, BCSPRelOffset{2}).modified();
     case OutVInput:      return boxed(topType(env, BCSPRelOffset{0}));
     case OutVInputL:     return boxed(localType());
-    case OutFInputL:
-    case OutFInputR:     not_reached();
 
     case OutArith:
       return arithOpResult(topType(env, BCSPRelOffset{0}),
@@ -154,12 +152,8 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutArithO:
       return arithOpOverResult(topType(env, BCSPRelOffset{0}),
                                topType(env, BCSPRelOffset{1}));
-    case OutUnknown: {
-      if (isFPassStar(inst.op())) {
-        return inst.preppedByRef ? TBoxedInitCell : TCell;
-      }
-      return TGen;
-    }
+    case OutUnknown:     return TGen;
+
     case OutBitOp:
       return bitOpResult(topType(env, BCSPRelOffset{0}),
                          inst.op() == HPHP::OpBitNot ?
@@ -171,8 +165,6 @@ folly::Optional<Type> interpOutputType(IRGS& env,
       auto ty = localType().unbox();
       return ty <= TDbl ? ty : TCell;
     }
-    case OutFPushCufSafe: return folly::none;
-
     case OutNone:       return folly::none;
 
     case OutCInput: {
@@ -194,6 +186,9 @@ folly::Optional<Type> interpOutputType(IRGS& env,
       }
       return TCell;
     }
+    case OutFunc: return TFunc;
+    case OutClass: return TCls;
+    case OutClsMeth: return TClsMeth;
   }
   not_reached();
 }
@@ -217,7 +212,7 @@ interpOutputLocals(IRGS& env,
     locals.emplace_back(id, relaxToGuardable(t));
   };
   auto setImmLocType = [&](uint32_t id, Type t) {
-    assert(id < 4);
+    assertx(id < kMaxHhbcImms);
     setLocType(inst.imm[id].u_LA, t);
   };
   auto handleBoxiness = [&] (Type testTy, Type useTy) {
@@ -229,15 +224,6 @@ interpOutputLocals(IRGS& env,
   auto const mDefine = static_cast<unsigned char>(MOpMode::Define);
 
   switch (inst.op()) {
-    case OpSetN:
-    case OpSetOpN:
-    case OpIncDecN:
-    case OpBindN:
-    case OpVGetN:
-    case OpUnsetN:
-      smashesAllLocals = true;
-      break;
-
     case OpSetOpL:
     case OpIncDecL: {
       assertx(pushedType.hasValue());
@@ -249,28 +235,19 @@ interpOutputLocals(IRGS& env,
       break;
     }
 
-    case OpStaticLocInit:
-    case OpStaticLocDef:
-      setImmLocType(0, TBoxedInitCell);
-      break;
-
-    case OpStaticLocCheck:
-      setImmLocType(0, TGen);
-      break;
-
     case OpInitThisLoc:
       setImmLocType(0, TCell);
       break;
 
-    case OpSetL: {
+    case OpSetL:
+    case OpPopL: {
       auto locType = env.irb->local(localInputId(inst), DataTypeSpecific).type;
       auto stackType = topType(env, BCSPRelOffset{0});
-      // SetL preserves reffiness of a local.
+      // [Set,Pop]L preserves reffiness of a local.
       setImmLocType(0, handleBoxiness(locType, stackType));
       break;
     }
-    case OpVGetL:
-    case OpBindL: {
+    case OpVGetL: {
       assertx(pushedType.hasValue());
       assertx(*pushedType <= TBoxedCell);
       setImmLocType(0, pushedType.value());
@@ -285,46 +262,40 @@ interpOutputLocals(IRGS& env,
     // New minstrs are handled extremely conservatively.
     case OpQueryM:
     case OpMemoGet:
+    case OpMemoGetEager:
+    case OpMemoSet:
+    case OpMemoSetEager:
       break;
     case OpDim:
       if (inst.imm[0].u_OA & mDefine) smashesAllLocals = true;
       break;
-    case OpFPassDim:
-    case OpFPassM:
     case OpVGetM:
     case OpSetM:
     case OpIncDecM:
     case OpSetOpM:
-    case OpBindM:
     case OpUnsetM:
-    case OpSetWithRefLML:
-    case OpSetWithRefRML:
-    case OpMemoSet:
       smashesAllLocals = true;
       break;
 
-    case OpMIterInitK:
-    case OpMIterNextK:
-      setImmLocType(3, TCell);
-      /* fallthrough */
-    case OpMIterInit:
-    case OpMIterNext:
-      setImmLocType(2, TBoxedInitCell);
-      break;
-
     case OpIterInitK:
-    case OpWIterInitK:
     case OpIterNextK:
-    case OpWIterNextK:
       setImmLocType(3, TCell);
       /* fallthrough */
     case OpIterInit:
-    case OpWIterInit:
     case OpIterNext:
-    case OpWIterNext:
       setImmLocType(2, TGen);
       break;
 
+    case OpLIterInitK:
+    case OpLIterNextK:
+      setImmLocType(4, TCell);
+      /* fallthrough */
+    case OpLIterInit:
+    case OpLIterNext:
+      setImmLocType(3, TGen);
+      break;
+
+    case OpVerifyParamTypeTS:
     case OpVerifyParamType: {
       auto locType = env.irb->local(localInputId(inst), DataTypeSpecific).type;
       setImmLocType(0, handleBoxiness(locType, TCell));
@@ -442,31 +413,17 @@ void interpOne(IRGS& env,
 
 #define INTERP interpOne(env, *env.currentNormalizedInstruction);
 
-void emitFPushObjMethod(IRGS& env, uint32_t, ObjMethodOp) { INTERP }
+void emitFPushObjMethod(IRGS& env, uint32_t, ObjMethodOp, const ImmVector&) {
+  INTERP
+}
 
-void emitAddElemV(IRGS& env)                  { INTERP }
-void emitAddNewElemV(IRGS& env)               { INTERP }
 void emitExit(IRGS& env)                      { INTERP }
 void emitFatal(IRGS& env, FatalOp)            { INTERP }
-void emitUnwind(IRGS& env)                    { INTERP }
-void emitThrow(IRGS& env)                     { INTERP }
-void emitCGetN(IRGS& env)                     { INTERP }
-void emitCGetQuietN(IRGS& env)                { INTERP }
-void emitVGetN(IRGS& env)                     { INTERP }
-void emitIssetN(IRGS& env)                    { INTERP }
-void emitEmptyN(IRGS& env)                    { INTERP }
-void emitSetN(IRGS& env)                      { INTERP }
-void emitSetOpN(IRGS& env, SetOpOp)           { INTERP }
 void emitSetOpG(IRGS& env, SetOpOp)           { INTERP }
 void emitSetOpS(IRGS& env, SetOpOp, uint32_t) { INTERP }
-void emitIncDecN(IRGS& env, IncDecOp)         { INTERP }
 void emitIncDecG(IRGS& env, IncDecOp)         { INTERP }
-void emitBindN(IRGS& env)                     { INTERP }
-void emitUnsetN(IRGS& env)                    { INTERP }
 void emitUnsetG(IRGS& env)                    { INTERP }
-void emitFPassN(IRGS& env, uint32_t)          { INTERP }
-void emitCufSafeArray(IRGS& env)              { INTERP }
-void emitCufSafeReturn(IRGS& env)             { INTERP }
+void emitVGetS(IRGS& env, uint32_t)           { INTERP }
 void emitIncl(IRGS& env)                      { INTERP }
 void emitInclOnce(IRGS& env)                  { INTERP }
 void emitReq(IRGS& env)                       { INTERP }
@@ -476,11 +433,11 @@ void emitEval(IRGS& env)                      { INTERP }
 void emitDefTypeAlias(IRGS& env, uint32_t)    { INTERP }
 void emitDefCns(IRGS& env, const StringData*) { INTERP }
 void emitDefCls(IRGS& env, uint32_t)          { INTERP }
+void emitDefRecord(IRGS& env, uint32_t)       { INTERP }
 void emitAliasCls(IRGS& env,
                   const StringData*,
                   const StringData*)          { INTERP }
-void emitDefFunc(IRGS& env, uint32_t)         { INTERP }
-void emitCatch(IRGS& env)                     { INTERP }
+void emitChainFaults(IRGS& env)               { INTERP }
 void emitContGetReturn(IRGS& env)             { INTERP }
 void emitContAssignDelegate(IRGS& env, int32_t)
                                               { INTERP }

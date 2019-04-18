@@ -58,7 +58,7 @@ WidthAnalysis::WidthAnalysis(Vunit& unit)
   for (size_t i = 0; i < m_def_widths.size(); ++i) {
     Vreg r{i};
     if (r.isGP()) m_def_widths[i] &= Width::QuadN;
-    if (r.isSIMD()) m_def_widths[i] &= Width::Wide;
+    if (r.isSIMD()) m_def_widths[i] &= Width::Octa;
     if (r.isSF()) m_def_widths[i] &= Width::Flags;
   }
 
@@ -71,7 +71,7 @@ WidthAnalysis::WidthAnalysis(Vunit& unit)
         case Vconst::Quad:
         case Vconst::Long:
         case Vconst::Byte:   return Width::QuadN;
-        case Vconst::Double: return Width::Dbl;
+        case Vconst::Double: return Width::Quad;
       }
       not_reached();
     }();
@@ -231,12 +231,9 @@ bool diamondIntoCmov(Vunit& unit, jcc& jcc_i,
         moves.emplace_back(cmovq{cc, sf, r1, r2, d}, irctx);
         break;
       case Width::Octa:
-      case Width::Dbl:
       case Width::Flags:
-      case Width::Wide:
       case Width::AnyNF:
       case Width::Any:
-      /* This can happen due to int/double mixing: t11216467 */
       case Width::None:
         return false;
     }
@@ -250,11 +247,11 @@ bool diamondIntoCmov(Vunit& unit, jcc& jcc_i,
   auto const join = next_phi.target;
   ++npreds[join];
   if (!--npreds[next]) {
-    unit.blocks[next].code[0] = ud2{};
+    unit.blocks[next].code[0] = trap{TRAP_REASON};
     --npreds[join];
   }
   if (!--npreds[taken]) {
-    unit.blocks[taken].code[0] = ud2{};
+    unit.blocks[taken].code[0] = trap{TRAP_REASON};
     --npreds[join];
   }
 
@@ -302,10 +299,12 @@ void optimizeJmps(Vunit& unit) {
           changed = true;
         } else {
           auto jcc_i = code.back().jcc_;
-          if (isOnly(unit, jcc_i.targets[0], Vinstr::fallback)) {
+          if (isOnly(unit, jcc_i.targets[0], Vinstr::fallback) ||
+              isOnly(unit, jcc_i.targets[0], Vinstr::jmpi)) {
             jcc_i = jcc{ccNegate(jcc_i.cc), jcc_i.sf,
                         {jcc_i.targets[1], jcc_i.targets[0]}};
           }
+
           if (isOnly(unit, jcc_i.targets[1], Vinstr::fallback)) {
             // replace jcc with fallbackcc and jmp
             const auto& fb_i = unit.blocks[jcc_i.targets[1]].code[0].fallback_;
@@ -319,6 +318,22 @@ void optimizeJmps(Vunit& unit) {
             );
             code.emplace_back(jmp{t0}, jcc_irctx);
             changed = true;
+          }
+
+          if (isOnly(unit, jcc_i.targets[1], Vinstr::jmpi)) {
+            // Replace jcc with jcci if the taken branch is just a jmpi
+            auto const& jmpi = unit.blocks[jcc_i.targets[1]].code[0].jmpi_;
+            if (jmpi.args.empty()) {
+              // We don't have a way to provide the jmpi's args in a jcci, so
+              // only perform the optimization if there's none.
+              auto const jcc_irctx = code.back().irctx();
+              code.pop_back();
+              code.emplace_back(
+                jcci{jcc_i.cc, jcc_i.sf, jcc_i.targets[0], jmpi.target},
+                jcc_irctx
+              );
+              changed = true;
+            }
           }
 
           changed |= diamondIntoCmov(unit, jcc_i, code, npreds);

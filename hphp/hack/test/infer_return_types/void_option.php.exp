@@ -1,3 +1,3 @@
-\f : ?_ try ?_
-\g : \Awaitable<void>, \Awaitable<?_> try \Awaitable<?_>
+\f : void, null try mixed
+\g : \Awaitable<void>, \Awaitable<null> try \Awaitable<mixed>
 No errors

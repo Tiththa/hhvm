@@ -25,12 +25,13 @@
 #include "hphp/runtime/ext/string/ext_string.h" // nolint - see above
 #include "hphp/util/bstring.h"
 #include "hphp/runtime/ext/hash/hash_murmur.h"
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/base/actrec-args.h"
 #include "hphp/runtime/base/plain-file.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
-#include "hphp/runtime/base/request-local.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/zend-scanf.h"
@@ -44,6 +45,7 @@
 #include "hphp/util/lock.h"
 #include "hphp/util/concurrent-lru-cache.h"
 #include "hphp/zend/html-table.h"
+#include "hphp/zend/zend-string.h"
 
 #include <folly/Unicode.h>
 #include <locale.h>
@@ -533,8 +535,22 @@ String HHVM_FUNCTION(implode,
                      const Variant& arg2 /* = uninit_variant */) {
   if (isContainer(arg1)) {
     return StringUtil::Implode(arg1, arg2.toString(), false);
+  } else if (arg1.isClsMeth()) {
+    raiseClsMethToVecWarningHelper(__FUNCTION__+2);
+    auto const clsMeth = arg1.toClsMethVal();
+    return concat3(
+      StrNR(clsMeth->getCls()->name()),
+      arg2.toString(),
+      StrNR(clsMeth->getFunc()->name()));
   } else if (isContainer(arg2)) {
     return StringUtil::Implode(arg2, arg1.toString(), false);
+  } else if (arg2.isClsMeth()) {
+    raiseClsMethToVecWarningHelper(__FUNCTION__+2);
+    auto const clsMeth = arg2.toClsMethVal();
+    return concat3(
+      StrNR(clsMeth->getCls()->name()),
+      arg1.toString(),
+      StrNR(clsMeth->getFunc()->name()));
   } else {
     throw_bad_type_exception("implode() expects a container as "
                              "one of the arguments");
@@ -883,15 +899,16 @@ static bool string_substr_check(int len, int& f, int& l) {
   return true;
 }
 
-TypedValue HHVM_FUNCTION(substr, const String& str, int start, int length) {
-  if (!string_substr_check(str.size(), start, length)) {
-    if (RuntimeOption::PHP7_Substr && str.size() == start) {
+TypedValue HHVM_FUNCTION(substr, StringArg str, int start, int length) {
+  auto const size = str.get()->size();
+  if (!string_substr_check(size, start, length)) {
+    if (RuntimeOption::PHP7_Substr && size == start) {
       return make_tv<KindOfPersistentString>(empty_string_ref.get());
     } else {
       return make_tv<KindOfBoolean>(false);
     }
   }
-  return tvReturn(str.substr(start, length));
+  return tvReturn(String::attach(str.get()->substr(start, length)));
 }
 
 String HHVM_FUNCTION(str_pad,
@@ -1125,7 +1142,7 @@ TypedValue HHVM_FUNCTION(strstr,
                          bool before_needle /* = false */) {
   auto const tv = HHVM_FN(strpos)(haystack, needle);
   auto const& ret = tvAsCVarRef(&tv);
-  assert(!isRefcountedType(tv.m_type));
+  assertx(!isRefcountedType(tv.m_type));
 
   if (same(ret, false)) {
     return make_tv<KindOfBoolean>(false);
@@ -1143,7 +1160,7 @@ TypedValue HHVM_FUNCTION(stristr,
                          bool before_needle /* = false */) {
   auto const tv = HHVM_FN(stripos)(haystack, needle);
   auto const& ret = tvAsCVarRef(&tv);
-  assert(!isRefcountedType(tv.m_type));
+  assertx(!isRefcountedType(tv.m_type));
 
   if (same(ret, false)) {
     return make_tv<KindOfBoolean>(false);
@@ -1161,7 +1178,7 @@ Variant strpbrk_char_list_has_nulls_slow(const String& haystack,
 
   auto const charListSz = char_list.size();
   auto const charListData = char_list.c_str();
-  assert(memchr(charListData, '\0', charListSz) != nullptr);
+  assertx(memchr(charListData, '\0', charListSz) != nullptr);
 
   // in order to use strcspn, remove all null byte(s) from char_list
   auto charListWithoutNull = (char*) req::malloc_noptrs(charListSz);
@@ -1172,7 +1189,7 @@ Variant strpbrk_char_list_has_nulls_slow(const String& haystack,
   for (auto ptr = charListData; ptr != charListStop; ++ptr) {
     if (*ptr != '\0') { *copy_ptr++ = *ptr; }
   }
-  assert((copy_ptr - charListWithoutNull) < charListSz);
+  assertx((copy_ptr - charListWithoutNull) < charListSz);
   // at least one of charListData chars was null, so there must be room:
   *copy_ptr = '\0';
 
@@ -1478,63 +1495,9 @@ TypedValue HHVM_FUNCTION(strcspn,
   return make_tv<KindOfInt64>(length);
 }
 
-TypedValue HHVM_FUNCTION(strlen,
-                         const Variant& vstr) {
-  auto const cell = vstr.asCell();
-  switch (cell->m_type) {
-    case KindOfPersistentString:
-    case KindOfString:
-      return make_tv<KindOfInt64>(cell->m_data.pstr->size());
-
-    case KindOfPersistentVec:
-    case KindOfVec:
-      raise_warning("strlen() expects parameter 1 to be string, "
-                    "vec given");
-      return make_tv<KindOfNull>();
-
-    case KindOfPersistentDict:
-    case KindOfDict:
-      raise_warning("strlen() expects parameter 1 to be string, "
-                    "dict given");
-      return make_tv<KindOfNull>();
-
-    case KindOfPersistentKeyset:
-    case KindOfKeyset:
-      raise_warning("strlen() expects parameter 1 to be string, "
-                    "keyset given");
-      return make_tv<KindOfNull>();
-
-    case KindOfPersistentArray:
-    case KindOfArray:
-      raise_warning("strlen() expects parameter 1 to be string, "
-                    "array given");
-      return make_tv<KindOfNull>();
-
-    case KindOfResource:
-      raise_warning("strlen() expects parameter 1 to be string, "
-                    "resource given");
-      return make_tv<KindOfNull>();
-
-    case KindOfObject:
-      if (!HHVM_FN(method_exists)(vstr, "__toString")) {
-        raise_warning("strlen() expects parameter 1 to be string, "
-                      "object given");
-        return make_tv<KindOfNull>();
-      }
-      // else fallback to default
-    case KindOfUninit:
-    case KindOfNull:
-    case KindOfBoolean:
-    case KindOfInt64:
-    case KindOfDouble: {
-      const String& str = vstr.toString();
-      return make_tv<KindOfInt64>(str.size());
-    }
-
-    case KindOfRef:
-      break;
-  }
-  not_reached();
+int64_t HHVM_FUNCTION(strlen,
+                      StringArg str) {
+  return str.get()->size();
 }
 
 Array HHVM_FUNCTION(str_getcsv,
@@ -1543,7 +1506,7 @@ Array HHVM_FUNCTION(str_getcsv,
                     const String& enclosure /* = "\"" */,
                     const String& escape /* = "\\" */) {
   if (str.empty()) {
-    return Array::Create(uninit_variant);
+    return make_packed_array(uninit_variant);
   }
 
   auto check_arg = [](const String& arg, char default_arg) {
@@ -1774,11 +1737,11 @@ String HHVM_FUNCTION(fb_htmlspecialchars,
                      const String& str,
                      int flags /* = k_ENT_HTML_QUOTE_DOUBLE */,
                      const String& charset /* = "ISO-8859-1" */,
-                     const Variant& extra /* = empty_array_ref */) {
+                     const Variant& extra /* = varray[] */) {
   if (!extra.isNull() && !extra.isArray()) {
     throw_expected_array_exception("fb_htmlspecialchars");
   }
-  const Array& arr_extra = extra.isNull() ? empty_array_ref : extra.toArray();
+  const Array& arr_extra = extra.isNull() ? empty_varray() : extra.toArray();
   return StringUtil::HtmlEncodeExtra(str, StringUtil::toQuoteStyle(flags),
                                      charset.data(), false, arr_extra);
 }
@@ -1817,8 +1780,8 @@ String HHVM_FUNCTION(str_rot13,
 }
 
 int64_t HHVM_FUNCTION(crc32,
-                      const String& str) {
-  return (uint32_t)StringUtil::CRC32(str);
+                      StringArg str) {
+  return (uint32_t)string_crc32(str.get()->data(), str.get()->size());
 }
 
 String HHVM_FUNCTION(crypt,
@@ -1935,7 +1898,7 @@ private:
 };
 
 uint16_t inline PatAndRepl::hash(int start, int len) const {
-  assert(pat.size() >= start + len);
+  assertx(pat.size() >= start + len);
   return strtr_hash(pat.data() + start, len);
 };
 
@@ -1980,7 +1943,7 @@ void WuManberReplacement::initTables() {
       // init shift tab
       for (int j = 0; j < max_shift; j++) {
         uint16_t h2 = patterns[i].hash( j, B ) & SHIFT_TAB_MASK;
-        assert((long long) m - (long long) j - B >= 0);
+        assertx((long long) m - (long long) j - B >= 0);
         shift[h2] = MIN(shift[h2], m - j - B);
       }
       // init prefix
@@ -2059,9 +2022,11 @@ bool strtr_slow(const Array& arr, StringBuffer& result, String& key,
   memcpy(key.mutableData(), s + pos, maxlen);
   for (int len = maxlen; len >= minlen; len--) {
     key.setSize(len);
-    auto const& var = arr->get(arr.convertKey(key));
-    if (&var != &uninit_variant) {
-      String replace = var.toString();
+    auto const key_tval = make_tv<KindOfString>(key.get());
+    auto const arrkey = arr.convertKey<IntishCast::Cast>(key_tval);
+    auto const rval = arr->get(arrkey);
+    if (!rval.is_dummy()) {
+      String replace = tvCastToString(rval.tv());
       if (!replace.empty()) {
         result.append(replace);
       }
@@ -2294,13 +2259,181 @@ Array HHVM_FUNCTION(localeconv) {
   return ret;
 }
 
-String HHVM_FUNCTION(nl_langinfo,
-                     int item) {
+Variant HHVM_FUNCTION(nl_langinfo, int item) {
 #ifdef _MSC_VER
   raise_warning("nl_langinfo is not yet implemented on Windows!");
-  return "";
+  return empty_string();
 #else
-  return nl_langinfo(item);
+  switch(item) {
+#ifdef ABDAY_1
+    case ABDAY_1:
+    case ABDAY_2:
+    case ABDAY_3:
+    case ABDAY_4:
+    case ABDAY_5:
+    case ABDAY_6:
+    case ABDAY_7:
+#endif
+#ifdef DAY_1
+    case DAY_1:
+    case DAY_2:
+    case DAY_3:
+    case DAY_4:
+    case DAY_5:
+    case DAY_6:
+    case DAY_7:
+#endif
+#ifdef ABMON_1
+    case ABMON_1:
+    case ABMON_2:
+    case ABMON_3:
+    case ABMON_4:
+    case ABMON_5:
+    case ABMON_6:
+    case ABMON_7:
+    case ABMON_8:
+    case ABMON_9:
+    case ABMON_10:
+    case ABMON_11:
+    case ABMON_12:
+#endif
+#ifdef MON_1
+    case MON_1:
+    case MON_2:
+    case MON_3:
+    case MON_4:
+    case MON_5:
+    case MON_6:
+    case MON_7:
+    case MON_8:
+    case MON_9:
+    case MON_10:
+    case MON_11:
+    case MON_12:
+#endif
+#ifdef AM_STR
+    case AM_STR:
+#endif
+#ifdef PM_STR
+    case PM_STR:
+#endif
+#ifdef D_T_FMT
+    case D_T_FMT:
+#endif
+#ifdef D_FMT
+    case D_FMT:
+#endif
+#ifdef T_FMT
+    case T_FMT:
+#endif
+#ifdef T_FMT_AMPM
+    case T_FMT_AMPM:
+#endif
+#ifdef ERA
+    case ERA:
+#endif
+#ifdef ERA_YEAR
+    case ERA_YEAR:
+#endif
+#ifdef ERA_D_T_FMT
+    case ERA_D_T_FMT:
+#endif
+#ifdef ERA_D_FMT
+    case ERA_D_FMT:
+#endif
+#ifdef ERA_T_FMT
+    case ERA_T_FMT:
+#endif
+#ifdef ALT_DIGITS
+    case ALT_DIGITS:
+#endif
+#ifdef INT_CURR_SYMBOL
+    case INT_CURR_SYMBOL:
+#endif
+#ifdef CURRENCY_SYMBOL
+    case CURRENCY_SYMBOL:
+#endif
+#ifdef CRNCYSTR
+    case CRNCYSTR:
+#endif
+#ifdef MON_DECIMAL_POINT
+    case MON_DECIMAL_POINT:
+#endif
+#ifdef MON_THOUSANDS_SEP
+    case MON_THOUSANDS_SEP:
+#endif
+#ifdef MON_GROUPING
+    case MON_GROUPING:
+#endif
+#ifdef POSITIVE_SIGN
+    case POSITIVE_SIGN:
+#endif
+#ifdef NEGATIVE_SIGN
+    case NEGATIVE_SIGN:
+#endif
+#ifdef INT_FRAC_DIGITS
+    case INT_FRAC_DIGITS:
+#endif
+#ifdef FRAC_DIGITS
+    case FRAC_DIGITS:
+#endif
+#ifdef P_CS_PRECEDES
+    case P_CS_PRECEDES:
+#endif
+#ifdef P_SEP_BY_SPACE
+    case P_SEP_BY_SPACE:
+#endif
+#ifdef N_CS_PRECEDES
+    case N_CS_PRECEDES:
+#endif
+#ifdef N_SEP_BY_SPACE
+    case N_SEP_BY_SPACE:
+#endif
+#ifdef P_SIGN_POSN
+    case P_SIGN_POSN:
+#endif
+#ifdef N_SIGN_POSN
+    case N_SIGN_POSN:
+#endif
+#ifdef DECIMAL_POINT
+    case DECIMAL_POINT:
+#elif defined(RADIXCHAR)
+    case RADIXCHAR:
+#endif
+#ifdef THOUSANDS_SEP
+    case THOUSANDS_SEP:
+#elif defined(THOUSEP)
+    case THOUSEP:
+#endif
+#ifdef GROUPING
+    case GROUPING:
+#endif
+#ifdef YESEXPR
+    case YESEXPR:
+#endif
+#ifdef NOEXPR
+    case NOEXPR:
+#endif
+#ifdef YESSTR
+    case YESSTR:
+#endif
+#ifdef NOSTR
+    case NOSTR:
+#endif
+#ifdef CODESET
+    case CODESET:
+#endif
+      break;
+    default:
+      raise_warning("Item '%d' is not valid", item);
+      return false;
+  }
+
+  auto const ret = nl_langinfo(item);
+  if (ret == nullptr) {
+    return false;
+  }
+  return String(ret);
 #endif
 }
 
@@ -2368,7 +2501,7 @@ entity_doctype determine_doctype(int flags) {
 
 String encode_as_utf8(int code_point) {
   auto res = folly::codePointToUtf8(code_point);
-  return String::FromCStr(res.data());
+  return String(res);
 }
 
 Array HHVM_FUNCTION(get_html_translation_table,

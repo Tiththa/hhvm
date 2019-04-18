@@ -1,20 +1,17 @@
 <?hh
-// Copyright 2004-present Facebook. All Rights Reserved.
-
-$got_notice = false;
 function handler($errno, $errstr, $errfile, $errline, $errcontext='',
                  $errtrace = array()) {
-  global $got_notice;
+
   if ($errstr === "Hack Array Compat: Comparing array with non-array") {
-    $got_notice = true;
+    HackArrCompatCompare::$got_notice = true;
   }
 }
 
 function do_compare($cmp) {
-  global $got_notice;
-  $got_notice = false;
+
+  HackArrCompatCompare::$got_notice = false;
   $cmp();
-  return $got_notice;
+  return HackArrCompatCompare::$got_notice;
 }
 
 function exn_wrap($cmp) {
@@ -83,4 +80,15 @@ function main() {
   do_compares(1, 2);
 }
 
+// Copyright 2004-present Facebook. All Rights Reserved.
+
+<<__EntryPoint>>
+function main_compare() {
+$got_notice = false;
+
 main();
+}
+
+abstract final class HackArrCompatCompare {
+  public static $got_notice;
+}

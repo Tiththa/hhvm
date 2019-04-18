@@ -4,7 +4,7 @@
 */
 
 echo "\n*** Testing rename() by giving stream context as third argument ***\n";
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 $context = stream_context_create();
 
@@ -32,9 +32,7 @@ var_dump( file_exists($src_name) );  // expecting false
 var_dump( file_exists($dest_name) );  // expecting true
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
-unlink(dirname(__FILE__)."/rename_variation9_new.tmp");
-rmdir(dirname(__FILE__)."/rename_variation9.phpt_dir9_new");
-?>
+error_reporting(0);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+unlink($file_path."/rename_variation9_new.tmp");
+rmdir($file_path."/rename_variation9.phpt_dir9_new");

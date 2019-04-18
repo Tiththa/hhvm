@@ -58,7 +58,7 @@ bool HHVM_FUNCTION(ob_start, const Variant& callback /* = null */,
 
   if (!callback.isNull()) {
     CallCtx ctx;
-    vm_decode_function(callback, nullptr, false, ctx);
+    vm_decode_function(callback, nullptr, ctx);
     if (!ctx.func) {
       return false;
     }
@@ -127,7 +127,7 @@ int64_t HHVM_FUNCTION(ob_get_length) {
 int64_t HHVM_FUNCTION(ob_get_level) {
   return g_context->obGetLevel();
 }
-Array HHVM_FUNCTION(ob_get_status, bool full_status /* = false */) {
+Variant HHVM_FUNCTION(ob_get_status, bool full_status /* = false */) {
   return g_context->obGetStatus(full_status);
 }
 void HHVM_FUNCTION(ob_implicit_flush, bool flag /* = true */) {
@@ -135,13 +135,6 @@ void HHVM_FUNCTION(ob_implicit_flush, bool flag /* = true */) {
 }
 Array HHVM_FUNCTION(ob_list_handlers) {
   return g_context->obGetHandlers();
-}
-bool HHVM_FUNCTION(output_add_rewrite_var, const String& /*name*/,
-                   const String& /*value*/) {
-  throw_not_supported(__func__, "bad coding style");
-}
-bool HHVM_FUNCTION(output_reset_rewrite_vars) {
-  throw_not_supported(__func__, "bad coding style");
 }
 
 void HHVM_FUNCTION(hphp_crash_log, const String& name, const String& value) {
@@ -155,19 +148,19 @@ int64_t HHVM_FUNCTION(hphp_get_stats, const String& name) {
   return ServerStats::Get(name.data());
 }
 Array HHVM_FUNCTION(hphp_get_status) {
-  std::string out;
-  ServerStats::ReportStatus(out, Writer::Format::JSON);
-  return Variant::attach(HHVM_FN(json_decode)(String(out))).toArray();
+  auto const out = ServerStats::ReportStatus(Writer::Format::JSON);
+  auto result = HHVM_FN(json_decode)(
+    String(out),
+    false,
+    512,
+    HPHP::k_JSON_FB_DARRAYS_AND_VARRAYS);
+  return Variant::attach(result).toArray().toDArray();
 }
 Array HHVM_FUNCTION(hphp_get_iostatus) {
   return ServerStats::GetThreadIOStatuses();
 }
 void HHVM_FUNCTION(hphp_set_iostatus_address, const String& name) {
-  return ServerStats::SetThreadIOStatusAddress(name.c_str());
 }
-
-
-
 
 static double ts_float(const timespec &ts) {
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000;
@@ -292,8 +285,6 @@ void StandardExtension::initOutput() {
   HHVM_FE(ob_get_status);
   HHVM_FE(ob_implicit_flush);
   HHVM_FE(ob_list_handlers);
-  HHVM_FE(output_add_rewrite_var);
-  HHVM_FE(output_reset_rewrite_vars);
   HHVM_FE(hphp_crash_log);
   HHVM_FE(hphp_stats);
   HHVM_FE(hphp_get_stats);

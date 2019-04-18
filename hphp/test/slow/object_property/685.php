@@ -1,28 +1,10 @@
 <?php
 
 if (true) {
-  class A {
-    var $a0;
-    static $a1 = 1;
-    static $a2 = 2;
-  }
-  class X {
-    var $x0;
-    static $x1 = 1;
-    static $x2 = 2;
-  }
+  include '685-1.inc';
 }
  else {
-  class A {
-    var $a3;
-    static $a4 = 4;
-    static $a5 = 5;
-  }
-  class X {
-    var $y3;
-    static $y4 = 4;
-    static $y5 = 5;
-  }
+  include '685-2.inc';
 }
 class B extends A {
   var $b0 = 3;
@@ -45,20 +27,20 @@ class Z {
   static $z2 = 2;
 }
 $vars = get_class_vars('A');
- asort($vars);
+ asort(&$vars);
  var_dump($vars);
 $vars = get_class_vars('B');
- asort($vars);
+ asort(&$vars);
  var_dump($vars);
 $vars = get_class_vars('C');
- asort($vars);
+ asort(&$vars);
  var_dump($vars);
 $vars = get_class_vars('X');
- asort($vars);
+ asort(&$vars);
  var_dump($vars);
 $vars = get_class_vars('Y');
- asort($vars);
+ asort(&$vars);
  var_dump($vars);
 $vars = get_class_vars('Z');
- asort($vars);
+ asort(&$vars);
  var_dump($vars);

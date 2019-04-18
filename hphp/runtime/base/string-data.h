@@ -37,6 +37,7 @@ namespace HPHP {
 struct APCString;
 struct Array;
 struct String;
+struct APCHandle;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -59,7 +60,7 @@ enum CopyStringMode { CopyString };
  * StringDatas can also be allocated in multiple ways.  Normally, they
  * are created through one of the Make overloads, which drops them in
  * the request-local heap.  They can also be low-malloced (for static
- * strings), or malloc'd (MakeMalloc) for APC shared or uncounted strings.
+ * strings), or uncounted-malloced for APC shared or uncounted strings.
  *
  * Here's a breakdown of string modes, and which configurations are
  * allowed in which allocation mode:
@@ -70,7 +71,7 @@ enum CopyStringMode { CopyString };
  *   Proxy  |        |          |    X
  */
 struct StringData final : MaybeCountable,
-                          type_scan::MarkCountable<StringData> {
+                          type_scan::MarkCollectable<StringData> {
   friend struct APCString;
   friend StringData* allocFlat(size_t len);
 
@@ -154,7 +155,7 @@ struct StringData final : MaybeCountable,
   /*
    * Same as MakeStatic but the string allocated will *not* be in the static
    * string table, will not be in low-memory, and should be deleted using
-   * destructUncounted once the root goes out of scope.
+   * ReleaseUncounted once the root goes out of scope.
    */
   static StringData* MakeUncounted(folly::StringPiece);
 
@@ -163,6 +164,12 @@ struct StringData final : MaybeCountable,
    * This should be called by the static string table initialization code.
    */
   static StringData* MakeEmpty();
+
+  /*
+   * return estimated capacity for a string of the given size, due to
+   * size-class rounding.
+   */
+  static size_t estimateCap(size_t size);
 
   /*
    * Offset accessors for the JIT compiler.
@@ -196,15 +203,23 @@ struct StringData final : MaybeCountable,
 
   /*
    * StringData objects allocated with MakeUncounted should be freed
-   * using this function.
+   * using this function. It will remove a reference via
+   * uncountedDecRef, and if necessary destroy the StringData and
+   * return true.
    */
-  void destructUncounted();
+  static void ReleaseUncounted(const StringData*);
+
+  /*
+   * root is the address of the top-level APCHandle which contains this string
+   * register {allocation, root} with APCGCManager
+   */
+  void registerUncountedAllocation(APCHandle* rootAPCHandle);
 
   /*
    * Reference-counting related.
    */
   ALWAYS_INLINE void decRefAndRelease() {
-    assert(kindIsValid());
+    assertx(kindIsValid());
     if (decReleaseCheck()) release();
   }
 
@@ -452,6 +467,15 @@ struct StringData final : MaybeCountable,
   int compare(const StringData* v2) const;
 
   /*
+   * Create a sub-string from start with specified length.
+   *
+   * If the start is outside the bounds of the string, or the length is
+   * negative, the empty string is returned.  The range [start, start+length]
+   * gets clamped to [start, size()].
+   */
+  StringData* substr(int start, int length = StringData::MaxSize);
+
+  /*
    * Debug dumping of a StringData to stdout.
    */
   void dump() const;
@@ -574,7 +598,7 @@ void decRefStr(StringData* s);
 //////////////////////////////////////////////////////////////////////
 
 /*
- * Function objects the forward to the StringData member functions of
+ * Function objects that forward to the StringData member functions of
  * the same name.
  */
 struct string_data_hash;

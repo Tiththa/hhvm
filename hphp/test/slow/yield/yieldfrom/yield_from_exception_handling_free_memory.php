@@ -18,7 +18,6 @@
  */
 class FooBar implements Iterator {
     function __construct()   { echo "Constructing new FooBar\n"; }
-    function __destruct()    { echo "Destructing FooBar\n"; }
     function current ()      { throw new Exception; }
     function key ()          { return 0; }
     function next ()         {}
@@ -45,4 +44,8 @@ function bar() {
     echo "Finishing bar()\n";
 }
 
+
+<<__EntryPoint>>
+function main_yield_from_exception_handling_free_memory() {
 bar();
+}

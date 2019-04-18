@@ -16,6 +16,7 @@
 #include "hphp/runtime/vm/jit/irgen-ret.h"
 
 
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
@@ -31,7 +32,8 @@ namespace {
 
 const StaticString s_returnHook("SurpriseReturnHook");
 
-void retSurpriseCheck(IRGS& env, SSATmp* retVal) {
+template<class AH>
+void retSurpriseCheck(IRGS& env, SSATmp* retVal, AH afterHook) {
   /*
    * This is a weird situation for throwing: we've partially torn down the
    * ActRec (decref'd all the frame's locals), and we've popped the return
@@ -42,19 +44,23 @@ void retSurpriseCheck(IRGS& env, SSATmp* retVal) {
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  ifThen(
+  ifThenElse(
     env,
     [&] (Block* taken) {
-      auto const ptr = resumed(env) ? sp(env) : fp(env);
+      auto const ptr = resumeMode(env) != ResumeMode::None ? sp(env) : fp(env);
       gen(env, CheckSurpriseFlags, taken, ptr);
+    },
+    [&] {
+      ringbufferMsg(env, Trace::RBTypeFuncExit, curFunc(env)->fullName());
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
       ringbufferMsg(env, Trace::RBTypeMsg, s_returnHook.get());
       gen(env, ReturnHook, fp(env), retVal);
+      ringbufferMsg(env, Trace::RBTypeFuncExit, curFunc(env)->fullName());
+      afterHook();
     }
   );
-  ringbufferMsg(env, Trace::RBTypeFuncExit, curFunc(env)->fullName());
 }
 
 void freeLocalsAndThis(IRGS& env) {
@@ -65,7 +71,7 @@ void freeLocalsAndThis(IRGS& env) {
     // side-exit in the middle of the sequence of LdLocPseudoMains.
     if (curFunc(env)->isPseudoMain()) return false;
     // We don't want to specialize on arg types for builtins
-    if (curFunc(env)->builtinFuncPtr()) return false;
+    if (curFunc(env)->arFuncPtr()) return false;
 
     if (localCount > RuntimeOption::EvalHHIRInliningMaxReturnLocals) {
       return false;
@@ -91,90 +97,43 @@ void freeLocalsAndThis(IRGS& env) {
   decRefThis(env);
 }
 
-void normalReturn(IRGS& env, SSATmp* retval) {
+void normalReturn(IRGS& env, SSATmp* retval, bool suspended) {
   if (RuntimeOption::EvalHHIRGenerateAsserts) {
     gen(env, DbgTrashRetVal, fp(env));
   }
+
   // If we're on the eager side of an async function, we have to zero-out the
-  // TV aux of the return value, because it might be used as a flag if we were
-  // called with FCallAwait.
-  auto const aux = curFunc(env)->isAsyncFunction() && !resumed(env)
-    ? folly::make_optional(AuxUnion{0})
-    : folly::none;
+  // TV aux of the return value, because it might be used as a flag if async
+  // eager return was requested.
+  auto const aux = [&] () -> folly::Optional<AuxUnion> {
+    if (suspended) return AuxUnion{std::numeric_limits<uint32_t>::max()};
+    if (curFunc(env)->isAsyncFunction() &&
+        resumeMode(env) == ResumeMode::None) {
+      return AuxUnion{0};
+    }
+    return folly::none;
+  }();
 
   auto const data = RetCtrlData { offsetToReturnSlot(env), false, aux };
   gen(env, RetCtrl, data, sp(env), fp(env), retval);
 }
 
-void emitAsyncRetSlow(IRGS& env, SSATmp* retVal) {
-  // Slow path: unblock all parents, then return.
-  auto parentChain = gen(env, LdAsyncArParentChain, fp(env));
-  gen(env, StAsyncArSucceeded, fp(env));
-  gen(env, StAsyncArResult, fp(env), retVal);
-  gen(env, ABCUnblock, parentChain);
+void asyncFunctionReturn(IRGS& env, SSATmp* retVal, bool suspended) {
+  if (resumeMode(env) == ResumeMode::None) {
+    retSurpriseCheck(env, retVal, []{});
 
-  // We don't really pass a return value via the stack, but enterTCHelper is
-  // going to want to store the rret() regs to the top of the stack, so we need
-  // the stack depth to be one deeper here.  The resumeAsyncFunc() entry point
-  // in ExecutionContext doesn't care what we put here, but also won't try to
-  // decref it, so we use a null.  (This push doesn't actually get the value
-  // into memory---we're going to put it in the return value for AsyncRetCtrl
-  // and let enterTCHelper store it to memory.)
-  auto const ret = cns(env, TInitNull);
-  push(env, ret);
-
-  // Must load this before FreeActRec, which adjusts fp(env).
-  auto const resumableObj = gen(env, LdResumableArObj, fp(env));
-  gen(env, FreeActRec, fp(env));
-  decRef(env, resumableObj);
-
-  gen(env, AsyncRetCtrl, RetCtrlData { spOffBCFromIRSP(env), false },
-      sp(env), fp(env), ret);
-}
-
-void asyncRetSurpriseCheck(IRGS& env, SSATmp* retVal) {
-  // The AsyncRet unique stub may or may not be able to do fast return (jump to
-  // parent directly).  So we don't know for sure if return hook should be
-  // called.  When profiling is enabled, we call the return hook, and follow the
-  // slow path return (uncommon case).
-
-  updateMarker(env);
-  env.irb->exceptionStackBoundary();
-
-  ifThen(
-    env,
-    [&] (Block* taken) {
-      gen(env, CheckSurpriseFlags, taken, sp(env));
-    },
-    [&] {
-      hint(env, Block::Hint::Unlikely);
-
-      ringbufferMsg(env, Trace::RBTypeMsg, s_returnHook.get());
-      gen(env, ReturnHook, fp(env), retVal);
-      ringbufferMsg(env, Trace::RBTypeFuncExit, curFunc(env)->fullName());
-
-      // Uncommon case: after calling the return hook, follow the slow path.
-      // Next opcode is unreachable on this path.
-      emitAsyncRetSlow(env, retVal);
-    }
-  );
-  ringbufferMsg(env, Trace::RBTypeFuncExit, curFunc(env)->fullName());
-}
-
-void asyncFunctionReturn(IRGS& env, SSATmp* retVal) {
-  if (!resumed(env)) {
-    retSurpriseCheck(env, retVal);
+    if (suspended) return normalReturn(env, retVal, true);
 
     // Return from an eagerly-executed async function: wrap the return value in
-    // a StaticWaitHandle object and return that normally, unless we were called
-    // via FCallAwait
+    // a StaticWaitHandle object and return that normally, unless async eager
+    // return was requested.
     auto const wrapped = cond(
       env,
       [&] (Block* taken) {
         auto flags = gen(env, LdARNumArgsAndFlags, fp(env));
         auto test = gen(
           env, AndInt, flags,
-          cns(env, static_cast<int32_t>(ActRec::Flags::IsFCallAwait)));
+          cns(env, static_cast<int32_t>(ActRec::Flags::AsyncEagerRet)));
         gen(env, JmpNZero, taken, test);
       },
       [&] {
@@ -183,50 +142,61 @@ void asyncFunctionReturn(IRGS& env, SSATmp* retVal) {
       [&] {
         return retVal;
       });
-    normalReturn(env, wrapped);
+    normalReturn(env, wrapped, false);
     return;
   }
+  assertx(!suspended);
 
-  // When surprise flag is set, the slow path is always used.  So fast path is
-  // never reached in that case (e.g. when debugging).  Consider disabling this
-  // when debugging the fast return path.
-  asyncRetSurpriseCheck(env, retVal);
-
-  // Unblock parents and possibly take fast path to resume parent.
   auto const spAdjust = offsetFromIRSP(env, BCSPRelOffset{-1});
-  gen(env, AsyncRetFast, RetCtrlData { spAdjust, false },
-      sp(env), fp(env), retVal);
+
+  // When surprise flag is set, the slow path is always used.
+  retSurpriseCheck(env, retVal, [&] {
+    gen(env, AsyncFuncRetSlow, IRSPRelOffsetData { spAdjust }, sp(env), fp(env),
+        retVal);
+  });
+
+  // Call stub that will mark this AFWH as finished, unblock parents and
+  // possibly take fast path to resume parent. Leave SP pointing to a single
+  // uninitialized cell which will be filled by the stub.
+  gen(env, AsyncFuncRet, IRSPRelOffsetData { spAdjust }, sp(env), fp(env),
+      retVal);
 }
 
 void generatorReturn(IRGS& env, SSATmp* retval) {
-  // Clear generator's key.
-  auto const oldKey = gen(env, LdContArKey, TCell, fp(env));
-  gen(env, StContArKey, fp(env), cns(env, TInitNull));
-  decRef(env, oldKey);
+  assertx(resumeMode(env) == ResumeMode::GenIter);
+  retSurpriseCheck(env, retval, []{});
 
-  // Populate the generator's value with retval to support `getReturn`
-  auto const oldValue = gen(env, LdContArValue, TCell, fp(env));
-  gen(env, StContArValue, fp(env), retval);
-  decRef(env, oldValue);
+  if (!curFunc(env)->isAsync()) {
+    // Clear generator's key.
+    auto const oldKey = gen(env, LdContArKey, TCell, fp(env));
+    gen(env, StContArKey, fp(env), cns(env, TInitNull));
+    decRef(env, oldKey);
+
+    // Populate the generator's value with retval to support `getReturn`
+    auto const oldValue = gen(env, LdContArValue, TCell, fp(env));
+    gen(env, StContArValue, fp(env), retval);
+    decRef(env, oldValue);
+    retval = cns(env, TInitNull);
+  } else {
+    assertx(retval->isA(TInitNull));
+    retval = gen(env, CreateSSWH, cns(env, TInitNull));
+  }
 
   gen(env,
       StContArState,
       GeneratorState { BaseGenerator::State::Done },
       fp(env));
 
+  // Return control to the caller (Gen::next()).
   auto const spAdjust = offsetFromIRSP(env, BCSPRelOffset{-1});
-  gen(
-    env,
-    RetCtrl,
-    RetCtrlData { spAdjust, true },
-    sp(env),
-    fp(env),
-    cns(env, TInitNull)
-  );
+  auto const retData = RetCtrlData { spAdjust, true };
+  gen(env, RetCtrl, retData, sp(env), fp(env), retval);
 }
 
-void implRet(IRGS& env) {
+void implRet(IRGS& env, bool suspended) {
   auto func = curFunc(env);
+  assertx(!suspended || func->isAsyncFunction());
+  assertx(!suspended || resumeMode(env) == ResumeMode::None);
 
   // Pop the return value. Since it will be teleported to its place in memory,
   // we don't care about the type.
@@ -246,16 +216,16 @@ void implRet(IRGS& env) {
 
   // Async function has its own surprise check.
   if (func->isAsyncFunction()) {
-    return asyncFunctionReturn(env, retval);
+    return asyncFunctionReturn(env, retval, suspended);
   }
 
-  retSurpriseCheck(env, retval);
-
-  if (resumed(env)) {
-    assertx(curFunc(env)->isNonAsyncGenerator());
+  if (func->isGenerator()) {
     return generatorReturn(env, retval);
   }
-  return normalReturn(env, retval);
+
+  assertx(resumeMode(env) == ResumeMode::None);
+  retSurpriseCheck(env, retval, []{});
+  return normalReturn(env, retval, false);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -268,23 +238,42 @@ IRSPRelOffset offsetToReturnSlot(IRGS& env) {
 }
 
 void emitRetC(IRGS& env) {
-  if (curFunc(env)->isAsyncGenerator()) PUNT(RetC-AsyncGenerator);
+  if (curFunc(env)->isAsyncGenerator() &&
+      resumeMode(env) == ResumeMode::Async) {
+    PUNT(RetC-AsyncGenerator);
+  }
 
   if (isInlining(env)) {
-    assertx(!resumed(env));
+    assertx(resumeMode(env) == ResumeMode::None);
     retFromInlined(env);
   } else {
-    implRet(env);
+    implRet(env, false);
   }
 }
 
-void emitRetV(IRGS& env) {
-  assertx(!resumed(env));
+void emitRetM(IRGS& env, uint32_t nvals) {
+  assertx(!isInlining(env));
+  assertx(resumeMode(env) == ResumeMode::None);
   assertx(!curFunc(env)->isResumable());
+  assertx(nvals > 1);
+
+  // Pop the return values. Since they will be teleported to their places in
+  // memory, we don't care about their types.
+  for (int i = 0; i < nvals - 1; i++) {
+    gen(env, StOutValue, IndexData(i), fp(env), pop(env, DataTypeGeneric));
+  }
+
+  implRet(env, false);
+}
+
+void emitRetCSuspended(IRGS& env) {
+  assertx(curFunc(env)->isAsyncFunction());
+  assertx(resumeMode(env) == ResumeMode::None);
+
   if (isInlining(env)) {
-    retFromInlined(env);
+    suspendFromInlined(env, pop(env, DataTypeGeneric));
   } else {
-    implRet(env);
+    implRet(env, true);
   }
 }
 

@@ -1,24 +1,24 @@
 <?php
 
-var_dump(str_ireplace());
-var_dump(str_ireplace(""));
-var_dump(str_ireplace("", ""));
+try { var_dump(str_ireplace()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+try { var_dump(str_ireplace("")); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+try { var_dump(str_ireplace("", "")); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 var_dump(str_ireplace("", "", ""));
 
 var_dump(str_ireplace("tt", "a", "ttttTttttttttTT"));
-var_dump(str_ireplace("tt", "a", "ttttTttttttttTT", $count));
+var_dump(str_ireplace("tt", "a", "ttttTttttttttTT", &$count));
 var_dump($count);
 
 var_dump(str_ireplace("tt", "aa", "ttttTttttttttTT"));
-var_dump(str_ireplace("tt", "aa", "ttttTttttttttTT", $count));
+var_dump(str_ireplace("tt", "aa", "ttttTttttttttTT", &$count));
 var_dump($count);
 
 var_dump(str_ireplace("tt", "aaa", "ttttTttttttttTT"));
-var_dump(str_ireplace("tt", "aaa", "ttttTttttttttTT", $count));
+var_dump(str_ireplace("tt", "aaa", "ttttTttttttttTT", &$count));
 var_dump($count);
 
 var_dump(str_ireplace("tt", "aaa", "ttttTttttttttTT"));
-var_dump(str_ireplace("tt", "aaa", "ttttTttttttttTT", $count));
+var_dump(str_ireplace("tt", "aaa", "ttttTttttttttTT", &$count));
 var_dump($count);
 
 var_dump(str_ireplace(array("tt", "tt"), "aaa", "ttttTttttttttTT"));
@@ -43,4 +43,3 @@ var_dump($Data = str_ireplace("\n", "<br>", $Data));
 
 
 echo "Done\n";
-?>

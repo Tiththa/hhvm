@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -30,9 +30,10 @@ inline APCLocalArray::APCLocalArray(const APCArray* source)
 {
   m_size = m_arr->size();
   source->reference();
-  MM().addApcArray(this);
-  memset(localCache(), KindOfUninit, m_size * sizeof(TypedValue));
-  assert(hasExactlyOneRef());
+  tl_heap->addApcArray(this);
+  memset(localCache(), static_cast<data_type_t>(KindOfUninit),
+         m_size * sizeof(TypedValue));
+  assertx(hasExactlyOneRef());
 }
 
 inline size_t APCLocalArray::heapSize() const {
@@ -41,21 +42,20 @@ inline size_t APCLocalArray::heapSize() const {
 
 inline APCLocalArray* APCLocalArray::Make(const APCArray* aa) {
   auto size = sizeof(APCLocalArray) + aa->size() * sizeof(TypedValue);
-  auto local = new (MM().objMalloc(size)) APCLocalArray(aa);
-  assert(local->heapSize() == size);
+  auto local = new (tl_heap->objMalloc(size)) APCLocalArray(aa);
+  assertx(local->heapSize() == size);
   return local;
 }
 
 ALWAYS_INLINE
 APCLocalArray* APCLocalArray::asApcArray(ArrayData* ad) {
-  assert(ad->kind() == kApcKind);
+  assertx(ad->kind() == kApcKind);
   return static_cast<APCLocalArray*>(ad);
 }
 
 ALWAYS_INLINE
 const APCLocalArray* APCLocalArray::asApcArray(const ArrayData* ad) {
-  assert(ad->kind() == kApcKind);
-  assert(checkInvariants(ad));
+  assertx(ad->kind() == kApcKind);
   return static_cast<const APCLocalArray*>(ad);
 }
 

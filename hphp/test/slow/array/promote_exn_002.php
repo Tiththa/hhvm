@@ -8,6 +8,7 @@ function foo() {
   $bar = new bar;
   echo "----\n";
   $lol = new stdclass;
+  $bar->x = array();
   try {
     $bar->x[$lol] = 2;
   } catch (Exception $y) {
@@ -19,6 +20,10 @@ function foo() {
   var_dump($bar);
 }
 
+
+<<__EntryPoint>>
+function main_promote_exn_002() {
 foo();
 set_error_handler('err');
 foo();
+}

@@ -23,7 +23,7 @@
 #include "hphp/runtime/base/types.h"
 
 #include "hphp/util/assertions.h"
-#include "hphp/util/hash-map-typedefs.h"
+#include "hphp/util/hash-set.h"
 
 namespace HPHP { namespace jit {
 
@@ -148,10 +148,12 @@ inline bool isPrologue(TransKind k) {
 struct TransFlags {
   /* implicit */ TransFlags(uint64_t flags = 0) : packed(flags) {}
 
+  bool operator==(TransFlags o) const { return packed == o.packed; }
+  bool operator!=(TransFlags o) const { return packed != o.packed; }
+
   union {
     struct {
       bool noinlineSingleton : 1;
-      bool noProfiledFPush : 1;
     };
     uint64_t packed;
   };
@@ -172,6 +174,12 @@ enum class CodeKind : uint8_t {
    * Normal PHP code in the TC.
    */
   Trace,
+
+  /*
+   * Code for function prologues. Similar to CrossTrace, but may allow more
+   * registers.
+   */
+  Prologue,
 
   /*
    * Code at the TC boundaries, e.g., service requests, unique stubs.
@@ -246,6 +254,25 @@ inline uint64_t areaWeightFactor(AreaIndex area) {
 using Vflags = uint8_t;
 
 ///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Information attached to an assertion in emitted code.
+ */
+struct Reason {
+  const char* file;
+  unsigned line;
+
+  bool operator==(const Reason& o) const {
+    return line == o.line && std::string{file} == std::string{o.file};
+  }
+  bool operator!=(const Reason& o) const {
+    return line != o.line || std::string{file} != std::string{o.file};
+  }
+};
+
+inline std::string show(const Reason &r) {
+  return folly::sformat("{}:{}", r.file, r.line);
+}
 
 }}
 

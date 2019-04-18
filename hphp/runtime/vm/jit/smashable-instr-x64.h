@@ -17,6 +17,7 @@
 #ifndef incl_HPHP_JIT_SMASHABLE_INSTR_X64_H_
 #define incl_HPHP_JIT_SMASHABLE_INSTR_X64_H_
 
+#include "hphp/runtime/vm/jit/align-x64.h"
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/phys-reg.h"
 
@@ -41,6 +42,8 @@ constexpr size_t smashableCallLen() { return 5; }
 constexpr size_t smashableJmpLen()  { return 5; }
 constexpr size_t smashableJccLen()  { return 6; }
 
+constexpr size_t smashableAlignTo() { return cache_line_size(); }
+
 TCA emitSmashableMovq(CodeBlock& cb, CGMeta& fixups, uint64_t imm,
                       PhysReg d);
 TCA emitSmashableCmpq(CodeBlock& cb, CGMeta& fixups, int32_t imm,
@@ -61,6 +64,10 @@ TCA smashableCallTarget(TCA inst);
 TCA smashableJmpTarget(TCA inst);
 TCA smashableJccTarget(TCA inst);
 ConditionCode smashableJccCond(TCA inst);
+
+bool optimizeSmashedCall(TCA inst);
+bool optimizeSmashedJmp(TCA inst);
+bool optimizeSmashedJcc(TCA inst);
 
 /*
  * Smashable immediate and target offsets.

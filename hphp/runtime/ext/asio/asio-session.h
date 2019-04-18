@@ -19,7 +19,8 @@
 #define incl_HPHP_EXT_ASIO_SESSION_H_
 
 #include "hphp/runtime/ext/extension.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/rds-local.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/ext/asio/asio-context.h"
 #include "hphp/runtime/ext/asio/asio-external-thread-event-queue.h"
 
@@ -27,14 +28,14 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 struct ActRec;
-struct c_WaitHandle;
+struct c_Awaitable;
 struct c_AwaitAllWaitHandle;
 struct c_ConditionWaitHandle;
 struct c_ResumableWaitHandle;
 
 struct AsioSession final {
   static void Init();
-  static AsioSession* Get() { return s_current.get(); }
+  static AsioSession* Get() { return *s_current; }
 
   // context
   void enterContext(ActRec* savedFP);
@@ -45,17 +46,17 @@ struct AsioSession final {
   }
 
   AsioContext* getContext(context_idx_t ctx_idx) {
-    assert(ctx_idx <= m_contexts.size());
+    assertx(ctx_idx <= m_contexts.size());
     return ctx_idx ? m_contexts[ctx_idx - 1] : nullptr;
   }
 
   AsioContext* getCurrentContext() {
-    assert(isInContext());
+    assertx(isInContext());
     return m_contexts.back();
   }
 
   context_idx_t getCurrentContextIdx() {
-    assert(static_cast<context_idx_t>(m_contexts.size()) == m_contexts.size());
+    assertx(static_cast<context_idx_t>(m_contexts.size()) == m_contexts.size());
     return static_cast<context_idx_t>(m_contexts.size());
   }
 
@@ -71,7 +72,7 @@ struct AsioSession final {
   // time is exceeded, onIOWaitExit will throw after checking surprise.
   static TimePoint getLatestWakeTime() {
     auto now = std::chrono::steady_clock::now();
-    auto info = ThreadInfo::s_threadInfo.getNoCheck();
+    auto info = RequestInfo::s_requestInfo.getNoCheck();
     auto& data = info->m_reqInjectionData;
     if (!data.getTimeout()) {
       // Don't wait for over nine thousand hours.
@@ -97,7 +98,7 @@ struct AsioSession final {
   bool hasAbruptInterruptException() { return !!m_abruptInterruptException; }
   void initAbruptInterruptException();
 
-  // WaitHandle callbacks:
+  // Awaitable callbacks:
   void setOnIOWaitEnter(const Variant& callback);
   void setOnIOWaitExit(const Variant& callback);
   void setOnJoin(const Variant& callback);
@@ -106,7 +107,7 @@ struct AsioSession final {
   bool hasOnJoin() { return !!m_onJoin; }
   void onIOWaitEnter();
   void onIOWaitExit();
-  void onJoin(c_WaitHandle* waitHandle);
+  void onJoin(c_Awaitable* waitHandle);
 
   // ResumableWaitHandle callbacks:
   void setOnResumableCreate(const Variant& callback);
@@ -142,9 +143,9 @@ struct AsioSession final {
   bool hasOnExternalThreadEventFail() { return !!m_onExtThreadEventFail; }
   void onExternalThreadEventCreate(c_ExternalThreadEventWaitHandle* waitHandle);
   void onExternalThreadEventSuccess(c_ExternalThreadEventWaitHandle* waitHandle,
-                                    const Variant& result);
+                                    const Variant& result, int64_t finish_time);
   void onExternalThreadEventFail(c_ExternalThreadEventWaitHandle* waitHandle,
-                                 const Object& exception);
+                                 const Object& exception, int64_t finish_time);
 
   // SleepWaitHandle callbacks:
   void setOnSleepCreate(const Variant& callback);
@@ -152,14 +153,14 @@ struct AsioSession final {
   bool hasOnSleepCreate() { return !!m_onSleepCreate; }
   bool hasOnSleepSuccess() { return !!m_onSleepSuccess; }
   void onSleepCreate(c_SleepWaitHandle* waitHandle);
-  void onSleepSuccess(c_SleepWaitHandle* waitHandle);
+  void onSleepSuccess(c_SleepWaitHandle* waitHandle, int64_t finish_time);
 
 private:
   AsioSession();
   friend AsioSession* req::make_raw<AsioSession>();
 
 private:
-  static DECLARE_THREAD_LOCAL_PROXY(AsioSession, false, s_current);
+  static RDS_LOCAL_NO_CHECK(AsioSession*, s_current);
   req::vector<AsioContext*> m_contexts;
   req::vector<c_SleepWaitHandle*> m_sleepEvents;
   AsioExternalThreadEventQueue m_externalThreadEventQueue;

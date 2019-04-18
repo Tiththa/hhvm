@@ -5,7 +5,7 @@
  */
 
 
-$test_num = 1;
+ZendGoodExtIntlTestsCollatorSortWithSortKeysVariant2::$test_num = 1;
 
 /*
  * Sort arrays in the given list using specified locale.
@@ -19,23 +19,22 @@ function sort_arrays( $locale, $arrays )
     foreach( $arrays as $array )
     {
         // Sort array values
-        $res_val = ut_coll_sort_with_sort_keys( $coll, $array );
+        $res_val = ut_coll_sort_with_sort_keys( $coll, &$array );
 
         // Concatenate the sorted array and function result
         // with output string.
         $res_dump = "\n" . dump( $array ) .
                     "\n Result: " . dump( $res_val );
-        
-        
+
+
         // Preppend test signature to output string
         $md5 = md5( $res_dump );
 
-        global $test_num;
 
         $res_str .= "\n\n".
-                    "Test $test_num.$md5:" .
+                    "Test ".ZendGoodExtIntlTestsCollatorSortWithSortKeysVariant2::$test_num.".$md5:" .
                     $res_dump;
-        ++$test_num;
+        ++ZendGoodExtIntlTestsCollatorSortWithSortKeysVariant2::$test_num;
     }
 
     return $res_str;
@@ -44,8 +43,8 @@ function sort_arrays( $locale, $arrays )
 
 function ut_main()
 {
-    global $test_num;
-    $test_num = 1;
+
+    ZendGoodExtIntlTestsCollatorSortWithSortKeysVariant2::$test_num = 1;
     $res_str = '';
 
     // Sort an array in SORT_REGULAR mode using en_US locale.
@@ -84,4 +83,7 @@ function ut_main()
 
 include_once( 'ut_common.inc' );
 ut_run();
-?>
+
+abstract final class ZendGoodExtIntlTestsCollatorSortWithSortKeysVariant2 {
+  public static $test_num;
+}

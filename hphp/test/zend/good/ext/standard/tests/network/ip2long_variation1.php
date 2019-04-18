@@ -100,10 +100,9 @@ $inputs = array(
 
 foreach($inputs as $key =>$value) {
       echo "\n--$key--\n";
-      var_dump( ip2long($value) );
+      try { var_dump( ip2long($value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
 fclose($res);
 
-?>
-===DONE===
+echo "===DONE===\n";

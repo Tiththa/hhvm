@@ -14,9 +14,8 @@ imagesetthickness($image, 5);
 imagerectangle($image, 14, 14, 185, 85, $black);
 
 ob_start();
-imagepng($image, null, 9);
+imagepng($image, '', 9);
 $img = ob_get_contents();
 ob_end_clean();
 
 echo md5(base64_encode($img));
-?>

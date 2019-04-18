@@ -55,12 +55,17 @@ struct SSATmp;
  *     DParam(t)    single dst has type of the instruction's type parameter,
  *                    which must be a subtype of t
  *     DParamMayRelax(t) like DParam, except type may relax
- *     DParamPtr(k) like DParam, but the param must be a PtrTo* of kind k
  *     DUnboxPtr    Unboxed PtrTo*T; adds possibility of pointing into a ref
  *     DBoxPtr      Boxed PtrTo*T
  *     DAllocObj    single dst has a type of a newly allocated object; may be a
  *                    specialized object type if the class is known
  *     DArrPacked   single dst has a packed array type
+ *     DArrMixed    single dst has a mixed array type
+ *     DVArr        single dst is either a packed array type or vec, depending
+                      on configuration
+ *     DVArrOrNull  either as described above as DVarr or the type is nullptr
+ *     DDArr        single dst is either a mixed array type or dict, depending
+                      on configuration
  *     DArrElem     single dst has type based on reading an array element,
  *                    intersected with an optional type parameter
  *     DVecElem    single dst has type based on reading a vec element,
@@ -72,7 +77,7 @@ struct SSATmp;
  *     DCtx         single dst has type Cctx|Obj<=ctx, where ctx is the
  *                    current context class
  *     DMulti       multiple dests. type and number depend on instruction
- *     DSetElem     single dst is a subset of CountedStr|Nullptr depending on
+ *     DSetElem     single dst is a subset of StaticStr|Nullptr depending on
  *                    sources
  *     DBuiltin     single dst for CallBuiltin. This can return complex data
  *                    types such as (TStr | TNull)
@@ -87,6 +92,8 @@ struct SSATmp;
  *                      N srcs.
  *     DMemoKey     single dst for memoization key generation. Type depends on
  *                    source type.
+ *     DLvalOfPtr   single dst with the Ptr type of src 0 converted to an
+ *                    equivalent Lval, preserving all inner type information.
  *
  * srcinfo:
  *
@@ -98,6 +105,12 @@ struct SSATmp;
  *     C(type)          source must be a constant, and subtype of type
  *     CStr             same as C(StaticStr)
  *     SVar(t1,...,tn)  variadic source list, all subtypes of {t1|..|tn}
+ *     SVArr            source must be a packed array type or vec, depending
+ *                      on configuration
+ *     SDArr            source must be a mixed array type or dict, depending
+ *                      on configuration
+ *     CDArr            source must be a constant mixed array type or dict,
+ *                      depending on configuration
  *
  * flags:
  *
@@ -111,7 +124,6 @@ struct SSATmp;
  *   The following abbreviations are used in this table:
  *
  *      NF    no flags
- *      Er    mayRaiseError
  *      PRc   producesRC
  *      CRc   consumesRC
  *      T     isTerminal
@@ -161,21 +173,21 @@ bool opHasExtraData(Opcode op);
 
 enum OpcodeFlag : uint64_t {
   NoFlags          = 0,
-  HasDest          = 1ULL <<  0,
-  Branch           = 1ULL <<  1,
-  ConsumesRC       = 1ULL <<  2,
-  ProducesRC       = 1ULL <<  3,
-  MInstrProp       = 1ULL <<  4,
-  MInstrElem       = 1ULL <<  5,
-  MayRaiseError    = 1ULL <<  6,
-  Terminal         = 1ULL <<  7, // has no next instruction
-  NaryDest         = 1ULL <<  8, // has 0 or more destinations
-  HasExtra         = 1ULL <<  9,
-  Passthrough      = 1ULL << 10,
+  HasDest          = 1ULL << 0,
+  Branch           = 1ULL << 1,
+  ConsumesRC       = 1ULL << 2,
+  ProducesRC       = 1ULL << 3,
+  MInstrProp       = 1ULL << 4,
+  MInstrElem       = 1ULL << 5,
+  Terminal         = 1ULL << 6, // has no next instruction
+  NaryDest         = 1ULL << 7, // has 0 or more destinations
+  HasExtra         = 1ULL << 8,
+  Passthrough      = 1ULL << 9,
 };
 
 bool hasEdges(Opcode opc);
 bool opcodeHasFlags(Opcode opc, uint64_t flags);
+bool opcodeMayRaise(Opcode opc);
 
 /*
  * Given an SSATmp of type Cls, try to find the name of the class.

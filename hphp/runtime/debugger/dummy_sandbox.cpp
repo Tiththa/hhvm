@@ -20,7 +20,7 @@
 #include "hphp/runtime/debugger/debugger_hook_handler.h"
 #include "hphp/runtime/debugger/cmd/cmd_signal.h"
 #include "hphp/runtime/base/program-functions.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/server/source-root-info.h"
 #include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/php-globals.h"
@@ -78,7 +78,7 @@ const StaticString s__SERVER("_SERVER");
 
 void DummySandbox::run() {
   TRACE(2, "DummySandbox::run\n");
-  ThreadInfo *ti = ThreadInfo::s_threadInfo.getNoCheck();
+  RequestInfo *ti = RequestInfo::s_requestInfo.getNoCheck();
   while (!m_stopped) {
     try {
       CLISession hphpSession;
@@ -112,7 +112,7 @@ void DummySandbox::run() {
           bool error; std::string errorMsg;
           bool ret = hphp_invoke(g_context.getNoCheck(), doc, false, null_array,
                                  uninit_null(), "", "", error, errorMsg, true,
-                                 false, true);
+                                 false, true, RuntimeOption::EvalPreludePath);
           if (!ret || error) {
             msg += "Unable to pre-load " + doc;
             if (!errorMsg.empty()) {
@@ -125,7 +125,13 @@ void DummySandbox::run() {
         g_context->setSandboxId(m_proxy->getDummyInfo().id());
       }
 
-      DebuggerHook::attach<HphpdHook>(ti);
+      if (!DebuggerHook::attach<HphpdHook>(ti)) {
+        const char* fail = "Could not attach hphpd to request: another debugger"
+                           " is already attached.";
+        Logger::Error("%s", fail);
+        Debugger::InterruptSessionStarted(nullptr, fail);
+        throw DebuggerClientAttachFailureException();
+      }
       {
         DebuggerDummyEnv dde;
         // This is really the entire point of having the dummy sandbox. This
@@ -147,10 +153,10 @@ void DummySandbox::run() {
         }
         m_signum = CmdSignal::SignalNone;
       }
-    } catch (const DebuggerClientExitException &e) {
+    } catch (const DebuggerClientExitException& e) {
       // stopped by the dummy sandbox thread itself
       break;
-    } catch (const DebuggerException &e) {
+    } catch (const DebuggerException& e) {
     }
   }
 }

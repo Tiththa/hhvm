@@ -73,7 +73,7 @@ void cgInst(IRLS& env, const IRInstruction* inst){
     if (auto const next = inst->next()) {
       v << jmp{label(env, next)};
     } else {
-      v << ud2{}; // or end?
+      v << trap{TRAP_REASON}; // or end?
     }
   }
 }
@@ -117,6 +117,7 @@ void optimize(Vunit& unit, CodeKind kind, bool regAlloc) {
 std::unique_ptr<Vunit> lowerUnit(const IRUnit& unit, CodeKind kind,
                                  bool regAlloc /* = true */) noexcept {
   Timer timer(Timer::hhir_lower, unit.logEntry().get_pointer());
+  rqtrace::EventGuard trace{"VLOWER"};
   SCOPE_ASSERT_DETAIL("hhir unit") { return show(unit); };
 
   auto vunit = std::make_unique<Vunit>();
@@ -160,9 +161,11 @@ std::unique_ptr<Vunit> lowerUnit(const IRUnit& unit, CodeKind kind,
     assertx(vasm.frozen().empty() || vasm.frozen().closed());
   }
 
+  fixBlockWeights(*vunit);
   printUnit(kInitialVasmLevel, "after initial vasm generation", *vunit);
   assertx(check(*vunit));
   timer.stop();
+  trace.finish();
 
   try {
     optimize(*vunit, kind, regAlloc);

@@ -72,6 +72,7 @@ $sample_urls = array (
 );
 
     foreach ($sample_urls as $url) {
+        echo "\n--> $url: ";
         var_dump(@parse_url($url));
     }
 
@@ -79,4 +80,3 @@ $sample_urls = array (
     foreach (array(PHP_URL_SCHEME,PHP_URL_HOST,PHP_URL_PORT,PHP_URL_USER,PHP_URL_PASS,PHP_URL_PATH,PHP_URL_QUERY,PHP_URL_FRAGMENT) as $v) {
 	var_dump(parse_url($url, $v));
     }
-?>

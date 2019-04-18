@@ -1,14 +1,15 @@
-<?hh
+<?hh // partial
 
 namespace HH {
 
 /* A wait handle representing asynchronous operation
  */
-abstract class WaitHandle implements Awaitable {
+<<__Sealed(StaticWaitHandle::class, WaitableWaitHandle::class)>>
+abstract class Awaitable {
 
   final private function __construct() {
     throw new \InvalidOperationException(
-      get_class($this) . "s cannot be constructed directly"
+      \get_class($this) . "s cannot be constructed directly"
     );
   }
 
@@ -29,13 +30,6 @@ abstract class WaitHandle implements Awaitable {
    */
   <<__HipHopSpecific, __Native>>
   final public static function setOnJoinCallback(mixed $callback): void;
-
-  /* Return this wait handle (for Awaitable interface)
-   * @return object
-   */
-  final public function getWaitHandle(): this {
-    return $this;
-  }
 
   /* Check if this wait handle finished (succeeded or failed)
    * @return bool - A boolean indicating whether this wait handle finished
@@ -72,15 +66,24 @@ abstract class WaitHandle implements Awaitable {
 
 /* A wait handle that is always finished
  */
-final class StaticWaitHandle extends WaitHandle {}
+final class StaticWaitHandle extends Awaitable {}
 
 /* A wait handle that can be waited upon
  */
-abstract class WaitableWaitHandle extends WaitHandle {
+<<__Sealed(
+  AwaitAllWaitHandle::class,
+  ConditionWaitHandle::class,
+  ExternalThreadEventWaitHandle::class,
+  RescheduleWaitHandle::class,
+  ResumableWaitHandle::class,
+  SleepWaitHandle::class
+)>>
+abstract class WaitableWaitHandle extends Awaitable {
 }
 
 /* A wait handle that can resume execution of PHP code
  */
+<<__Sealed(AsyncFunctionWaitHandle::class, AsyncGeneratorWaitHandle::class)>>
 abstract class ResumableWaitHandle extends WaitableWaitHandle {
 
   /* Set callback to be called when a ResumableWaitHandle is created
@@ -130,7 +133,23 @@ final class AwaitAllWaitHandle extends WaitableWaitHandle {
    * dependencies
    */
   <<__Native>>
-  public static function fromArray(array $dependencies): WaitHandle;
+  public static function fromArray(array $dependencies): Awaitable;
+
+  /* Create a wait handle that waits for a given array of dependencies
+   * @param array $dependencies - A DArray of dependencies to wait for
+   * @return object - A WaitHandle that will wait for a given array of
+   * dependencies
+   */
+  <<__Native>>
+  public static function fromDArray(darray $dependencies): Awaitable;
+
+  /* Create a wait handle that waits for a given array of dependencies
+   * @param array $dependencies - A VArray of dependencies to wait for
+   * @return object - A WaitHandle that will wait for a given array of
+   * dependencies
+   */
+  <<__Native>>
+  public static function fromVArray(varray $dependencies): Awaitable;
 
   /* Create a wait handle that waits for a given vec of dependencies
    * @param array $dependencies - A vec of dependencies to wait for
@@ -138,7 +157,7 @@ final class AwaitAllWaitHandle extends WaitableWaitHandle {
    * dependencies
    */
   <<__Native>>
-  public static function fromVec(vec $dependencies): WaitHandle;
+  public static function fromVec(vec $dependencies): Awaitable;
 
   /* Create a wait handle that waits for a given dict of dependencies
    * @param array $dependencies - A dict of dependencies to wait for
@@ -146,7 +165,7 @@ final class AwaitAllWaitHandle extends WaitableWaitHandle {
    * dependencies
    */
   <<__Native>>
-  public static function fromDict(dict $dependencies): WaitHandle;
+  public static function fromDict(dict $dependencies): Awaitable;
 
   /* Create a wait handle that waits for a given Map of dependencies
    * @param mixed $dependencies - A Map of dependencies to wait for
@@ -154,7 +173,7 @@ final class AwaitAllWaitHandle extends WaitableWaitHandle {
    * dependencies
    */
   <<__Native>>
-  public static function fromMap(mixed $dependencies): WaitHandle;
+  public static function fromMap(mixed $dependencies): Awaitable;
 
   /* Create a wait handle that waits for a given Vector of dependencies
    * @param mixed $dependencies - A Vector of dependencies to wait for
@@ -162,7 +181,7 @@ final class AwaitAllWaitHandle extends WaitableWaitHandle {
    * dependencies
    */
   <<__Native>>
-  public static function fromVector(mixed $dependencies): WaitHandle;
+  public static function fromVector(mixed $dependencies): Awaitable;
 
   /* Set callback for when a AwaitAllWaitHandle is created
    * @param mixed $callback - A Closure to be called on creation
@@ -193,13 +212,13 @@ final class ConditionWaitHandle extends WaitableWaitHandle {
    * @param mixed $result - A result to be set
    */
   <<__Native>>
-  function succeed(mixed $result): void;
+  public function succeed(mixed $result): void;
 
   /* Notify the condition variable and mark the ConditionWaitHandle as failed
    * @param mixed $exception - An exception to be set
    */
   <<__Native>>
-  function fail(\Exception $exception): void;
+  public function fail(\Exception $exception): void;
 }
 
 /* A wait handle that succeeds with null once desired scheduling priority is
@@ -317,25 +336,21 @@ function join<T>(Awaitable<T> $awaitable): mixed;
  * Throws an InvalidOperationException if the Awaitable is not finished.
  */
 function result<T>(Awaitable<T> $awaitable): T {
-  invariant(
-    $awaitable instanceof WaitHandle,
-    'unsupported user-land Awaitable',
-  );
-  return \hh\asm('
-    CGetL $awaitable
-    WHResult
-  ');
+  return \__hhvm_internal_whresult($awaitable);
 }
 
 /**
  * Check whether the given Awaitable has finished.
  */
 function has_finished<T>(Awaitable<T> $awaitable): bool {
-  invariant(
-    $awaitable instanceof WaitHandle,
-    'unsupported user-land Awaitable',
-  );
   return $awaitable->isFinished();
+}
+
+/**
+ * Get the name of the Awaitable
+ */
+function name<T>(Awaitable<T> $awaitable): string {
+  return $awaitable->getName();
 }
 
 /**
@@ -371,8 +386,8 @@ function cancel<T>(Awaitable<T> $awaitable, \Exception $exception): bool;
  */
 <<__Native>>
 function backtrace<T>(Awaitable<T> $awaitable,
-                      int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT,
-                      int $limit = 0): array<array>;
+                      int $options = \DEBUG_BACKTRACE_PROVIDE_OBJECT,
+                      int $limit = 0): varray<darray>;
 
 
 } // namespace

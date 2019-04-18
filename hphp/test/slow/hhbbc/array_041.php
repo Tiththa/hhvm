@@ -7,15 +7,21 @@ function bar() {
   $x = foo();
   $val = some_int();
   $x[$val] = new C;
-  global $g;
-  $g = $val;
+
+  HhbbcArray041::$g = $val;
   return $x;
 }
-function main() {
-  global $g;
+
+<<__EntryPoint>>
+function main_array_041() {
+
   $y = bar();
-  $l = (int)$g;
+  $l = (int)HhbbcArray041::$g;
   $y = $y[$l];
   $y->heh();
 }
-main();
+
+
+abstract final class HhbbcArray041 {
+  public static $g;
+}

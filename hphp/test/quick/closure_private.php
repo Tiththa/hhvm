@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
 
@@ -34,28 +34,18 @@ class A {
     return $c($a);
   }
 
-  public function testByRef() {
-    $a = "foo";
-    $b = "bar";
-    $c = function(&$foo) use (&$b) {
-      $this->double($foo, $b);
-    };
-    $c($a);
-    return $a.$b;
-  }
-
   public function testNotByRef() {
     $a = "foo";
     $b = "bar";
     $c = function($foo) use ($b) {
-      $this->double($foo, $b);
+      $this->double(&$foo, &$b);
     };
     $c($a);
     return $a.$b;
   }
 
-  private function justReturn() {
-    return func_get_args();
+  private function justReturn(...$args) {
+    return $args;
   }
 
   private function double(&$a, &$b) {
@@ -69,5 +59,4 @@ var_dump($a->testPublic());
 var_dump($a->testUse());
 var_dump($a->testParam());
 var_dump($a->testParamAndClosure());
-var_dump($a->testByRef());
 var_dump($a->testNotByRef());

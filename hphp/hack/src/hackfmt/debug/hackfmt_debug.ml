@@ -2,20 +2,21 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-module SyntaxTree = Full_fidelity_syntax_tree
 module SourceText = Full_fidelity_source_text
+module Syntax = Full_fidelity_positioned_syntax
+module SyntaxTree = Full_fidelity_syntax_tree.WithSyntax(Syntax)
+module DebugPos = Debug.WithSyntax(Syntax)
 
-open Core
+open Core_kernel
 
 type debug_config = {
   print_ast: bool;
-  print_fmt_node: bool;
+  print_doc: bool;
   print_nesting_graph: bool;
   print_rule_dependencies: bool;
   chunk_ids: int list option;
@@ -23,7 +24,7 @@ type debug_config = {
 
 let debug_config = ref {
   print_ast = false;
-  print_fmt_node = false;
+  print_doc = false;
   print_nesting_graph = false;
   print_rule_dependencies = false;
   chunk_ids = None;
@@ -33,10 +34,10 @@ let init_with_options () = [
   "--ast",
   Arg.Unit (fun () -> debug_config := { !debug_config with print_ast = true }),
   " Print out an ast dump before the formatted result ";
-  "--fmt",
+  "--doc",
   Arg.Unit (fun () ->
-    debug_config := { !debug_config with print_fmt_node = true }),
-  " Print out a dump of the fmt_node IR";
+    debug_config := { !debug_config with print_doc = true }),
+  " Print out a dump of the Doc IR";
   "--ids",
   Arg.String (fun s ->
     debug_config := { !debug_config with chunk_ids = Some (
@@ -59,7 +60,7 @@ let debug_nesting chunk_group =
   List.iteri chunk_group.Chunk_group.chunks ~f:(fun i c ->
     let nesting_list =
       Nesting.get_self_and_parent_list (Some c.Chunk.nesting) in
-    let list_string = String.concat ", "
+    let list_string = String.concat ~sep:", "
       @@ List.map nesting_list ~f:string_of_int in
     Printf.printf "Chunk %d - [ %s ]\n" i list_string;
   )
@@ -67,7 +68,7 @@ let debug_nesting chunk_group =
 let debug_rule_deps chunk_group =
   Printf.printf "%s\n" (Chunk_group.dependency_map_to_string chunk_group)
 
-let debug_chunk_groups ~range source_text chunk_groups =
+let debug_chunk_groups env ~range source_text chunk_groups =
   let print_chunk = match !debug_config.chunk_ids with
     | None -> (fun id c -> Some (id, c))
     | Some id_list -> (fun id c ->
@@ -76,7 +77,7 @@ let debug_chunk_groups ~range source_text chunk_groups =
   in
   chunk_groups
   |> List.filter_mapi ~f:print_chunk
-  |> List.filter ~f:(fun (i, cg) ->
+  |> List.filter ~f:(fun (_i, cg) ->
     let group_range = Chunk_group.get_char_range cg in
     Interval.intervals_overlap range group_range
   )
@@ -90,7 +91,7 @@ let debug_chunk_groups ~range source_text chunk_groups =
         c.Chunk.rule
         c.Chunk.start_char
         c.Chunk.end_char
-        c.Chunk.text
+        (Chunk.text c)
     );
     Printf.printf "Rule count %d\n"
       (IMap.cardinal cg.Chunk_group.rule_map);
@@ -102,23 +103,24 @@ let debug_chunk_groups ~range source_text chunk_groups =
     if !debug_config.print_nesting_graph then debug_nesting cg;
 
     Printf.printf "%s\n"
-      (Line_splitter.solve ~range (SourceText.text source_text) [cg]);
+      (Line_splitter.solve env ~range ~source_text:(SourceText.text source_text) [cg]);
   )
 
 let debug_full_text source_text =
   Printf.printf "%s\n" (SourceText.get_text source_text)
 
 let debug_ast syntax_tree =
-  Printf.printf "%s\n" @@ Debug.dump_full_fidelity syntax_tree
+  let root = SyntaxTree.root syntax_tree in
+  Printf.printf "%s\n" @@ DebugPos.dump_syntax root
 
 let debug_text_range source_text start_char end_char =
   Printf.printf "Subrange passed:\n%s\n" @@
-    String.sub source_text.SourceText.text start_char (end_char - start_char)
+    String.sub (SourceText.text source_text) start_char (end_char - start_char)
 
-let debug ~range source_text syntax_tree fmt_node chunk_groups =
+let debug env ~range source_text syntax_tree doc chunk_groups =
   if !debug_config.print_ast then debug_ast syntax_tree;
-  if !debug_config.print_fmt_node then ignore (Fmt_node.dump fmt_node);
+  if !debug_config.print_doc then ignore (Doc.dump doc);
   let range = Option.value range
     ~default:(0, Full_fidelity_source_text.length source_text)
   in
-  debug_chunk_groups ~range source_text chunk_groups
+  debug_chunk_groups env ~range source_text chunk_groups

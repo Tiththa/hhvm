@@ -3,12 +3,16 @@ function foo(stdClass $a, array $b, callable $c, stdClass $d = null,
              $e = null, string $f, bool $g, int $h, float $i,
              NotExisting $j) { }
 function bar(): stdClass { return new stdClass; }
-class c extends stdClass {
+class b {}
+class c extends b {
   function bar(self $x): int { return 1; }
   function pbar(parent $x): int { return 1; }
   function factory(): self { return new c; }
-  function pfactory(): parent { return new stdClass; }
+  function pfactory(): parent { return new b(); }
 }
+
+<<__EntryPoint>>
+function main_reflection_type_detailed() {
 $closure = function (Test $a): Test { return $a; };
 echo "*** functions\n";
 foreach ([
@@ -62,4 +66,5 @@ foreach ([
     var_dump($ra->isBuiltin());
     var_dump((string)$ra);
   }
+}
 }

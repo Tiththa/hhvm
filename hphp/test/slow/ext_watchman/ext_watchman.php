@@ -1,11 +1,11 @@
-<?hh
+<?hh // decl
 
 # !!! Please contact devx_www oncall if this breaks. !!!
 #
 # The Watchman extension is a core part of www infrastructure on devservers.
 
-require_once 'constants.php';
-require_once 'callback.php';
+require_once 'constants.inc';
+require_once 'callback.inc';
 
 // Borrowed and stripped down from Watchman project test infrastructure.
 class WatchmanInstance {
@@ -53,7 +53,7 @@ class WatchmanInstance {
       0 => array('file', '/dev/null', 'r'),
       1 => array('file', $this->logfile, 'a'),
       2 => array('file', $this->logfile, 'a'),
-    ), $pipes, $this->repo_root);
+    ), &$pipes, $this->repo_root);
     if (!$this->proc) {
       throw new Exception("Failed to spawn $cmd");
     }
@@ -71,7 +71,7 @@ class WatchmanInstance {
   }
   private function openSock() {
     $sockname = $this->getFullSockName();
-    $deadline = time() + 5;
+    $deadline = time() + 60;
     do {
       if (!file_exists($sockname)) {
         usleep(30000);
@@ -113,9 +113,6 @@ class WatchmanInstance {
       $this->proc = null;
     }
   }
-  function __destruct() {
-    $this->terminateProcess();
-  }
 }
 
 function waitFor(string $filename, WatchmanInstance $wminst): void {
@@ -133,14 +130,13 @@ function waitFor(string $filename, WatchmanInstance $wminst): void {
   }
 }
 
-function test_core(string $tmpdir): void {
+function test_core(WatchmanInstance $wminst): void {
   if ((int)HH\ext_watchman_version()) {
     print "PASSED version get test\n";
   } else {
     print "FAILED version get test\n";
   }
 
-  $wminst = new WatchmanInstance($tmpdir);
   $sock = $wminst->getFullSockName();
   // Test one-shot
   print("Testing one-shot\n");
@@ -236,8 +232,13 @@ function test_core(string $tmpdir): void {
   }
   HH\watchman_unsubscribe(SUB_NAME) |> HH\asio\join($$);
 
-  print("Stess test subscription\n");
-  apc_delete('stress_counter');
+  print("Stress test\n");
+  apc_store('stress_counter', 0);
+  fb_call_user_func_array_async(
+    __DIR__.'/callback.inc',
+    'callback_checksub',
+    varray[SUB_NAME],
+  );
   // Success for this test is just not crashing HHVM
   $subscribed = false;
   $subscribe_c = 0;
@@ -248,8 +249,8 @@ function test_core(string $tmpdir): void {
   $exception_count = array(0, 0, 0);
   $op_count = array(0, 0, 0);
   srand(1);
-  for ($i = 0; $i < 3000; $i++) {
-    if ($i % 100 === 0) {
+  for ($i = 0; $i < 30000; $i++) {
+    if ($i % 1000 === 0) {
       print(".");
       invariant(
         ($op_count[0] === 0 && $op_count[1] === 0)
@@ -291,7 +292,7 @@ function test_core(string $tmpdir): void {
     } catch (Exception $e) {
       $exception_count[$op]++;
     }
-    usleep(rand() % 10000);
+    usleep(rand() % 1000);
   }
   try {
     if ($last_subscribe) {
@@ -310,6 +311,8 @@ function test_core(string $tmpdir): void {
   } else {
     print("\nPASS ($subscribe_c, $unsubscribe_c, $touch_c, $hit_c)\n");
   }
+  apc_delete('stress_counter');  // Stops async callback_checksub()
+  sleep(1);
 
   # Sync testing is based on the fact there will immediately be an event to
   # process as Watchman will send us an "initial" update straight away. There
@@ -434,12 +437,16 @@ $tmpdir = tempnam(sys_get_temp_dir(), 'wmt');
 if (!mkdir($tmpdir)) {
   throw new Exception("FAIL failed creating dir '$tmpdir'\n");
 }
+$wminst = null;
 try {
   if (!chdir($tmpdir)) {
     throw new Exception("FAIL (creating temporary directory)\n");
   }
-  test_core($tmpdir);
+  $wminst = new WatchmanInstance($tmpdir);
+  test_core($wminst);
 } finally {
+  apc_delete('stress_counter');  // Stops async callback_checksub() if running
+  $wminst->terminateProcess();
   if (is_dir($tmpdir)) {
     foreach (glob($tmpdir.'/*') as $file) {
       unlink($file);

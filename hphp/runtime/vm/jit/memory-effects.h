@@ -91,7 +91,9 @@ struct PureLoad       { AliasClass src; };
  * The effect of definitely storing `value' to a location, without performing
  * any other work.  Instructions with these memory effects can be removed if we
  * know the value being stored does not change the value of the location, or if
- * we know the location can never be loaded from again.
+ * we know the location can never be loaded from again. `value' can be a
+ * nullptr, in which case the store can still be elided if it is known to never
+ * be loaded afterwards.
  */
 struct PureStore    { AliasClass dst; SSATmp* value; };
 
@@ -119,9 +121,6 @@ struct PureSpillFrame { AliasClass stk;
 /*
  * Calls are somewhat special enough that they get a top-level effect.
  *
- * The `writes_locals' flag indicates whether the call can write to locals in
- * the calling frame (e.g. extract() or parse_str(), when called with FCall).
- *
  * The `kills' set are locations that cannot be read by this instruction unless
  * it writes to them first, and which it generally may write to.  (This is used
  * for killing stack slots below the call depth.)
@@ -139,8 +138,7 @@ struct PureSpillFrame { AliasClass stk;
  * Note that calls that have been weakened to CallBuiltin use GeneralEffects,
  * not CallEffects.
  */
-struct CallEffects    { bool writes_locals;
-                        AliasClass kills;
+struct CallEffects    { AliasClass kills;
                         AliasClass stack;
                         AliasClass locals;
                         AliasClass callee; };
@@ -212,7 +210,7 @@ MemEffects canonicalize(MemEffects);
 
 /*
  * Return an alias class representing the pointee of the given value, which
- * must be <= TPtrToGen.
+ * must be <= TMemToGen.
  */
 AliasClass pointee(const SSATmp*);
 

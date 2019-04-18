@@ -69,11 +69,10 @@ $inputs =  array (
 $count = 1;
 foreach($inputs as $input) {
   echo "-- Iteration $count --\n";
-  var_dump( str_shuffle($input) );
+  try { var_dump( str_shuffle($input) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $count ++;
 }
 
 fclose($file_handle);  //closing the file handle
 
-?>
-===DONE===
+echo "===DONE===\n";

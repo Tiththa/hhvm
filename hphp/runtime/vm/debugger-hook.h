@@ -19,7 +19,7 @@
 
 #include <functional>
 
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/surprise-flags.h"
 #include "hphp/runtime/vm/event-hook.h"
 #include "hphp/runtime/vm/hhbc.h"
@@ -41,13 +41,10 @@ struct Func;
 struct ObjectData;
 
 // Is this thread being debugged?
-inline bool isDebuggerAttached(ThreadInfo* ti = nullptr) {
-  ti = (ti != nullptr) ? ti : &TI();
+inline bool isDebuggerAttached(RequestInfo* ti = nullptr) {
+  ti = (ti != nullptr) ? ti : &RI();
   return ti->m_reqInjectionData.getDebuggerAttached();
 }
-
-/* Hacky way of checking if a DebuggerHook is an HphpdHook. */
-bool isHphpd(const DebuggerHook*);
 
 // Executes the passed code only if there is a debugger attached to the current
 // thread.
@@ -82,27 +79,35 @@ struct DebuggerHook {
   // success, false on failure (for instance, if another debugger hook is
   // already attached).
   template<class HookClass>
-  static bool attach(ThreadInfo* ti = nullptr) {
-    ti = (ti != nullptr) ? ti : &TI();
+  static bool attach(RequestInfo* ti = nullptr) {
+    ti = (ti != nullptr) ? ti : &RI();
 
-    // The only time one hook can override another is when hphpd tries to
-    // override xdebug.
     if (isDebuggerAttached(ti)) {
-      if (!std::is_same<HookClass, HPHP::Eval::HphpdHook>::value) {
-        return false;
-      }
-      if (isHphpd(ti->m_debuggerHook)) {
-        return false;
-      }
-      detach();
+      // Check if this debugger hook is already attached.
+      // TODO: Ideally this wouldn't be necessary here, debuggers should
+      // be well behaved and only attach once per thread. There is at least
+      // one instance where hphpd still needs this. Remove once that's
+      // cleaned up.
+      return dynamic_cast<HookClass*>(ti->m_debuggerHook) != nullptr;
     }
-
-    // Attach to the thread
-    ti->m_debuggerHook = HookClass::GetInstance();
 
     // Increment the number of attached hooks.
     {
       Lock lock(s_lock);
+      auto instance = HookClass::GetInstance();
+
+      // Once a debugger has attached to any request, it is the only debugger
+      // allowed to attach to subsequent requests until it has detached from
+      // all requests.
+      if (s_activeHook == nullptr) {
+        s_activeHook = instance;
+      } else if (s_activeHook != instance) {
+        return false;
+      }
+
+      // Attach to the thread
+      ti->m_debuggerHook = instance;
+
       s_numAttached++;
       ti->m_reqInjectionData.setDebuggerAttached(true);
     }
@@ -119,8 +124,29 @@ struct DebuggerHook {
     return true;
   }
 
+  // Attempts to set or remove the specified debugger hook as the "active" hook.
+  // The active hook is the only hook that is permitted to attach to any request
+  static bool setActiveDebuggerInstance(DebuggerHook* hook, bool attach) {
+    Lock lock(s_lock);
+    if (attach) {
+      if (s_activeHook != nullptr) {
+        return s_activeHook == hook;
+      }
+
+      s_activeHook = hook;
+      return true;
+    } else {
+      if (s_activeHook != hook) {
+        return false;
+      }
+
+      s_activeHook = nullptr;
+      return true;
+    }
+  }
+
   // If a hook is attached to the thread, detaches it.
-  static void detach(ThreadInfo* ti = nullptr);
+  static void detach(RequestInfo* ti = nullptr);
 
   // Debugger events. Subclasses can override these methods to receive
   // events.
@@ -132,6 +158,7 @@ struct DebuggerHook {
   virtual void onFileLoad(Unit* /*efile*/) {}
   virtual void onDefClass(const Class* /*cls*/) {}
   virtual void onDefFunc(const Func* /*func*/) {}
+  virtual void onRegisterFuncIntercept(const String& /*name*/) {}
 
   // Called whenever the program counter is at a location that could be
   // interesting to a debugger. Such as when have hit a registered breakpoint
@@ -139,11 +166,10 @@ struct DebuggerHook {
   // over an active line breakpoint
   virtual void onOpcode(const unsigned char* /*pc*/) {}
 
-  // Called right before top-level pseudo-main enters and right after it
-  // exits. This is useful for debuggers to initialize and shutdown separate
-  // from an extension as they can assume other extensions are initialized.
+  // Called right before top-level pseudo-main enters. This may be useful for
+  // debuggers to initialize separate from an extension as they can assume
+  // other extensions are initialized.
   virtual void onRequestInit() {}
-  virtual void onRequestShutdown() {}
 
   // Called whenever we are breaking due to completion of a step in or step out
   virtual void onStepInBreak(const Unit* /*unit*/, int /*line*/) {}
@@ -165,11 +191,12 @@ struct DebuggerHook {
   // are no hooks attached.
   static Mutex s_lock;
   static int s_numAttached;
+  static DebuggerHook* s_activeHook;
 };
 
 // Returns the current hook.
 inline DebuggerHook* getDebuggerHook() {
-  return TI().m_debuggerHook;
+  return RI().m_debuggerHook;
 }
 
 // Is this process being debugged? Since this is across all threads, this cannot
@@ -185,18 +212,18 @@ inline bool isDebuggerAttachedProcess() {
 // execution indefinitely within one of these hooks.
 void phpDebuggerOpcodeHook(const unsigned char* pc);
 void phpDebuggerRequestInitHook();
-void phpDebuggerRequestShutdownHook();
 void phpDebuggerFuncEntryHook(const ActRec* ar);
 void phpDebuggerFuncExitHook(const ActRec* ar);
 void phpDebuggerExceptionThrownHook(ObjectData* exception);
 void phpDebuggerExceptionHandlerHook() noexcept;
-void phpDebuggerErrorHook(const ExtendedException &ee,
+void phpDebuggerErrorHook(const ExtendedException& ee,
                           int errnum,
                           const std::string& message);
 void phpDebuggerEvalHook(const Func* f);
 void phpDebuggerFileLoadHook(Unit* efile);
 void phpDebuggerDefClassHook(const Class* cls);
 void phpDebuggerDefFuncHook(const Func* func);
+void phpDebuggerInterceptRegisterHook(const String& name);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Flow commands

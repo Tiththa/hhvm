@@ -40,15 +40,15 @@ if (LIBINOTIFY_INCLUDE_DIR)
   include_directories(${LIBINOTIFY_INCLUDE_DIR})
 endif()
 
-# mysql checks - if we're using async mysql, we use webscalesqlclient from
+# mysql checks - if we're using async mysql, we use fbmysqlclient from
 # third-party/ instead
 if (ENABLE_ASYNC_MYSQL)
   include_directories(
     ${RE2_INCLUDE_DIR}
     ${TP_DIR}/squangle/src/
-    ${TP_DIR}/webscalesqlclient/src/include/
+    ${TP_DIR}/fb-mysql/src/include/
   )
-  set(MYSQL_CLIENT_LIB_DIR ${TP_DIR}/webscalesqlclient/src/)
+  set(MYSQL_CLIENT_LIB_DIR ${TP_DIR}/fb-mysql/src/)
   set(MYSQL_CLIENT_LIBS
     ${MYSQL_CLIENT_LIB_DIR}/libmysql/libfbmysqlclient_r.a
   )
@@ -81,10 +81,14 @@ endif()
 set(CMAKE_REQUIRED_LIBRARIES)
 
 # libXed
-find_package(LibXed)
-if (LibXed_INCLUDE_DIR AND LibXed_LIBRARY)
-  include_directories(${LibXed_INCLUDE_DIR})
+if (ENABLE_XED)
+  find_package(LibXed)
+  if (LibXed_FOUND)
+    include_directories(${LibXed_INCLUDE_DIR})
+  endif()
   add_definitions("-DHAVE_LIBXED")
+else()
+  message(STATUS "XED is disabled")
 endif()
 
 # CURL checks
@@ -112,8 +116,8 @@ add_definitions(${LIBXML2_DEFINITIONS})
 
 # libsqlite3
 find_package(LibSQLite)
-if (LIBSQLITE_INCLUDE_DIR)
-  include_directories(${LIBSQLITE_INCLUDE_DIR})
+if (LIBSQLITE3_INCLUDE_DIR)
+  include_directories(${LIBSQLITE3_INCLUDE_DIR})
 endif ()
 
 # libdouble-conversion
@@ -165,6 +169,10 @@ if (ICU_FOUND)
     add_definitions("-DU_EXPORT=")
     add_definitions("-DU_IMPORT=")
   endif()
+  # Everything is either in the `icu61` namespace or `icu` namespace, depending
+  # on another definition. There's an implicit `using namespace WHATEVER;` in
+  # ICU4c < 61.1, but now that's opt-in rather than opt-out.
+  add_definitions("-DU_USING_ICU_NAMESPACE=1")
 endif (ICU_FOUND)
 
 # jemalloc/tmalloc and profiler
@@ -427,6 +435,7 @@ macro(hphp_link target)
     target_link_libraries(${target} ${GOOGLE_TCMALLOC_MIN_LIB})
   endif()
 
+  add_dependencies(${target} boostMaybeBuild)
   target_link_libraries(${target} boost)
   target_link_libraries(${target} ${MYSQL_CLIENT_LIBS})
   if (ENABLE_ASYNC_MYSQL)
@@ -439,10 +448,6 @@ macro(hphp_link target)
   target_link_libraries(${target} ${LIBGLOG_LIBRARY})
   if (LIBJSONC_LIBRARY)
     target_link_libraries(${target} ${LIBJSONC_LIBRARY})
-  endif()
-
-  if (LibXed_LIBRARY)
-    target_link_libraries(${target} ${LibXed_LIBRARY})
   endif()
 
   if (LIBINOTIFY_LIBRARY)
@@ -508,6 +513,8 @@ macro(hphp_link target)
   else()
     target_link_libraries(${target} lz4)
   endif()
+  # The syntax used for these warnings is unparsable by Apple's Clang
+  add_definitions("-DLZ4_DISABLE_DEPRECATE_WARNINGS=1")
 
   if (LIBZIP_LIBRARY)
     target_link_libraries(${target} ${LIBZIP_LIBRARY})
@@ -554,10 +561,46 @@ macro(hphp_link target)
   endif()
 
   if (LINUX)
-    target_link_libraries(${target} -Wl,--wrap=pthread_create -Wl,--wrap=pthread_exit -Wl,--wrap=pthread_join)
+    target_link_libraries(${target})
   endif()
 
   if (MSVC)
     target_link_libraries(${target} dbghelp.lib dnsapi.lib)
+  endif()
+
+# Check whether atomic operations require -latomic or not
+# See https://github.com/facebook/hhvm/issues/5217
+  include(CheckCXXSourceCompiles)
+  set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+  set(CMAKE_REQUIRED_FLAGS "-std=c++1y")
+  CHECK_CXX_SOURCE_COMPILES("
+#include <atomic>
+#include <iostream>
+#include <stdint.h>
+int main() {
+    struct Test { int64_t val1; int64_t val2; };
+    std::atomic<Test> s;
+    // Do this to stop modern compilers from optimizing away the libatomic
+    // calls in release builds, making this test always pass in release builds,
+    // and incorrectly think that HHVM doesn't need linking against libatomic.
+    bool (std::atomic<Test>::* volatile x)(void) const =
+      &std::atomic<Test>::is_lock_free;
+    std::cout << (s.*x)() << std::endl;
+}
+  " NOT_REQUIRE_ATOMIC_LINKER_FLAG)
+
+  if(NOT "${NOT_REQUIRE_ATOMIC_LINKER_FLAG}")
+      message(STATUS "-latomic is required to link hhvm")
+      find_library(ATOMIC_LIBRARY NAMES atomic libatomic.so.1)
+      target_link_libraries(${target} ${ATOMIC_LIBRARY})
+  endif()
+  set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
+
+  if (ENABLE_XED)
+    if (LibXed_FOUND)
+        target_link_libraries(${target} ${LibXed_LIBRARY})
+    else()
+        target_link_libraries(${target} xed)
+    endif()
   endif()
 endmacro()

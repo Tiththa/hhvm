@@ -1,3 +1,1 @@
-
-Fatal error: HH mode: content before <?hh (Line: %d, Char: %d)
-syntax error, unexpected T_HH_ERROR, expecting $end in %s on line 1
+Fatal error: A .php file must begin with '<?hh'. in %s/test/quick/hh_bad_start.php on line 1

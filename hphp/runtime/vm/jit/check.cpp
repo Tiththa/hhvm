@@ -35,7 +35,6 @@
 #include <bitset>
 #include <iostream>
 #include <string>
-#include <unordered_set>
 
 #include <boost/dynamic_bitset.hpp>
 
@@ -139,7 +138,7 @@ bool checkBlock(Block* b) {
 bool DEBUG_ONLY checkInitCtxInvariants(const IRUnit& unit) {
   auto const blocks = rpoSortCfg(unit);
 
-  jit::hash_map<SSATmp*, Block*> init_ctx_blocks;
+  jit::fast_map<SSATmp*, Block*> init_ctx_blocks;
 
   for (auto& blk : blocks) {
     for (auto& inst : blk->instrs()) {
@@ -240,6 +239,7 @@ bool checkCfg(const IRUnit& unit) {
     for (auto& inst : blk->instrs()) {
       for (auto src : inst.srcs()) {
         if (src->inst()->is(DefConst)) continue;
+        if (src->type() <= TBottom) continue;
 
         always_assert_flog(
           src->inst()->dsts().contains(src),
@@ -421,11 +421,13 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
       "Error: failed type check on operand {}\n"
       "   instruction: {}\n"
       "   was expecting: {}\n"
-      "   received: {}\n",
+      "   received: {}\n"
+      "   from: {}\n",
         curSrc,
-        inst->toString(),
+        *inst,
         expectStr,
-        inst->src(curSrc)->type().toString()
+        inst->src(curSrc)->type(),
+        *inst->src(curSrc)->inst()
       ).str()
     );
     return true;
@@ -455,6 +457,19 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
     return true;
   };
 
+  auto checkArr = [&] (bool is_kv, bool is_const) {
+    auto t = src()->type();
+    auto cond_type = RuntimeOption::EvalHackArrDVArrs
+      ? (is_kv ? TDict : TVec) : TArr;
+    if (is_const) {
+      auto expected = folly::sformat("constant {}", t.toString());
+      check(src()->hasConstVal(cond_type), t, expected.c_str());
+    } else {
+      check(src()->isA(cond_type), t, nullptr);
+    }
+    ++curSrc;
+  };
+
   auto checkDst = [&] (bool cond, const std::string& errorMessage) {
     if (cond) return true;
 
@@ -475,15 +490,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
     }
   };
 
-  auto requireTypeParamPtr = [&] (Ptr kind) {
-    checkDst(inst->hasTypeParam(),
-      "Missing paramType for DParamPtr instruction");
-    if (inst->hasTypeParam()) {
-      checkDst(inst->typeParam() <= TGen.ptr(kind),
-               "Invalid paramType for DParamPtr instruction");
-    }
-  };
-
   auto checkVariadic = [&] (Type super) {
     for (; curSrc < inst->numSrcs(); ++curSrc) {
       auto const valid = (inst->src(curSrc)->type() <= super);
@@ -493,9 +499,15 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 
 #define IRT(name, ...) UNUSED static constexpr Type name = T##name;
 #define IRTP(name, ...) IRT(name)
+#define IRTL(name, ...) IRT(name)
+#define IRTM(name, ...) IRT(name)
+#define IRTX(name, ...) IRT(name)
   IR_TYPES
 #undef IRT
 #undef IRTP
+#undef IRTL
+#undef IRTM
+#undef IRTX
 
 #define NA            return checkNoArgs();
 #define S(...)        {                                   \
@@ -505,12 +517,15 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
                       }
 #define AK(kind)      Type::Array(ArrayData::k##kind##Kind)
 #define C(T)          check(src()->hasConstVal(T) ||     \
-                            src()->isA(TBottom),    \
+                            src()->isA(TBottom),         \
                             Type(),                      \
                             "constant " #T);             \
                       ++curSrc;
 #define CStr          C(StaticStr)
 #define SVar(...)     checkVariadic(buildUnion(__VA_ARGS__));
+#define SVArr         checkArr(false /* is_kv */, false /* is_const */);
+#define SDArr         checkArr(true  /* is_kv */, false /* is_const */);
+#define CDArr         checkArr(true  /* is_kv */, true  /* is_const */);
 #define ND
 #define DMulti
 #define DSetElem
@@ -527,7 +542,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
                       requireTypeParam(Top);
 #define DParamMayRelax(t) requireTypeParam(t);
 #define DParam(t)         requireTypeParam(t);
-#define DParamPtr(k)   requireTypeParamPtr(Ptr::k);
 #define DUnion(...)    forEachSrcIdx(                                          \
                          [&](uint32_t idx) {                                   \
                            checkDst(idx < inst->numSrcs(), "invalid src num"); \
@@ -542,12 +556,27 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #define DVecElem
 #define DDictElem
 #define DKeysetElem
+#define DVecFirstElem
+#define DVecLastElem
+#define DVecKey
+#define DDictFirstElem
+#define DDictLastElem
+#define DDictFirstKey
+#define DDictLastKey
+#define DKeysetFirstElem
+#define DKeysetLastElem
 #define DArrPacked
+#define DArrMixed
+#define DVArr
+#define DVArrOrNull
+#define DDArr
+#define DStaticDArr
 #define DCol
 #define DCtx
 #define DCtxCls
 #define DCns
 #define DMemoKey
+#define DLvalOfPtr
 
 #define O(opcode, dstinfo, srcinfo, flags) \
   case opcode: dstinfo srcinfo countCheck(); return true;
@@ -565,6 +594,9 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #undef C
 #undef CStr
 #undef SVar
+#undef SVArr
+#undef SDArr
+#undef CDArr
 
 #undef ND
 #undef D
@@ -578,7 +610,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #undef DRefineS
 #undef DParamMayRelax
 #undef DParam
-#undef DParamPtr
 #undef DLdObjCls
 #undef DUnboxPtr
 #undef DBoxPtr
@@ -587,14 +618,28 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #undef DVecElem
 #undef DDictElem
 #undef DKeysetElem
+#undef DVecFirstElem
+#undef DVecLastElem
+#undef DVecKey
+#undef DDictFirstElem
+#undef DDictLastElem
+#undef DDictFirstKey
+#undef DDictLastKey
+#undef DKeysetFirstElem
+#undef DKeysetLastElem
 #undef DArrPacked
+#undef DArrMixed
+#undef DVArr
+#undef DVArrOrNull
+#undef DDArr
+#undef DStaticDArr
 #undef DCol
 #undef DCtx
 #undef DCtxCls
 #undef DCns
 #undef DUnion
 #undef DMemoKey
-
+#undef DLvalOfPtr
   return true;
 }
 

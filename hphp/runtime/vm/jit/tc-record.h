@@ -58,9 +58,9 @@ void recordGdbTranslation(SrcKey sk, const Func* srcFunc, const CodeBlock& cb,
 void recordBCInstr(uint32_t op, const TCA addr, const TCA end, bool cold);
 
 /*
- * Report jit warmup statistics to scribe via StructuredLog.
+ * Update JIT warmup stats and related counters.
  */
-void reportJitMaturity(const CodeCache& code);
+void reportJitMaturity();
 
 /*
  * Get a code size counter for the named code block ("main", "cold", etc.)
@@ -70,6 +70,11 @@ ServiceData::ExportedTimeSeries* getCodeSizeCounter(const std::string& name);
  * Log statistics about a translation to scribe via StructuredLog.
  */
 void logTranslation(const TransEnv& env, const TransRange& range);
+
+/*
+ * Log inlined frames in unit via StructuredLog.
+ */
+void logFrames(const Vunit& unit);
 
 /*
  * Record smashed calls in the TC that may need to be re-smashed in the event

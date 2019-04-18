@@ -1,6 +1,6 @@
 <?php
 function s() {
-  static $storage = array(array('x', 'y'));
+  $storage = array(array('x', 'y'));
   return $storage[0];
 }
 
@@ -12,4 +12,3 @@ foreach (s() as $k => $function) {
     }
   }
 }
-?>

@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /**
  * Caches a variable in the data store, only if it's not already stored.
@@ -136,7 +136,7 @@ function apc_clear_cache(string $cache_type = ""): bool;
  *
  */
 <<__Native>>
-function apc_sma_info(bool $limited = false): array;
+function apc_sma_info(bool $limited = false): darray;
 
 /**
  * Increases a stored number.
@@ -200,3 +200,14 @@ function apc_cas(string $key,
  */
 <<__Native>>
 function apc_exists(mixed $key): mixed;
+
+/**
+ * Find the in-memory size of a key in APC, for debugging purposes.
+ *
+ * @param string $key - The key to find the size of.
+ *
+ * @return mixed - Returns the current size of a key or null on failure.
+ *
+ */
+<<__Native>>
+function apc_size(string $key): ?int;

@@ -27,7 +27,7 @@ namespace HPHP {
 TRACE_SET_MOD(debuggerflow);
 
 c_WaitableWaitHandle *objToWaitableWaitHandle(const Object& o) {
-  assert(o->instanceof(c_WaitableWaitHandle::classof()));
+  assertx(o->instanceof(c_WaitableWaitHandle::classof()));
   return static_cast<c_WaitableWaitHandle*>(o.get());
 }
 
@@ -44,14 +44,12 @@ bool AsyncFlowStepper::isActRecOnAsyncStack(const ActRec* target) {
   ArrayIter iter(depStack);
   ++iter; // Skip the top frame.
   for (; iter; ++iter) {
-    auto const rval = tvToCell(iter.secondRval());
+    auto const rval = iter.secondRval().unboxed();
     if (isNullType(rval.type())) {
       return false;
     }
-    auto wh = objToWaitableWaitHandle(
-      Object::attach(tvCastToObject(rval.tv()))
-    );
-    if (wh->getKind() == c_WaitHandle::Kind::AsyncFunction &&
+    auto wh = objToWaitableWaitHandle(tvCastToObject(rval.tv()));
+    if (wh->getKind() == c_Awaitable::Kind::AsyncFunction &&
       target == wh->asAsyncFunction()->actRec()) {
       return true;
     }
@@ -115,7 +113,7 @@ AsyncStepHandleOpcodeResult AsyncFlowStepper::handleOpcode(PC pc) {
     {
       // Check if we are executing "await" instruction.
       if (m_awaitOpcodeBreakpointFilter.checkPC(pc)) {
-        auto wh = c_WaitHandle::fromCell(vmsp());
+        auto wh = c_Awaitable::fromCell(*vmsp());
         // Is "await" blocked?
         if (wh && !wh->isFinished()) {
           handleBlockedAwaitOpcode(pc);
@@ -210,7 +208,7 @@ void AsyncFlowStepper::handleBlockedAwaitOpcode(PC pc) {
 // This is required because async frame ActRec's address
 // is used for m_asyncResumableId.
 void AsyncFlowStepper::stepOverAwaitOpcode() {
-  assert(vmfp()->func()->isAsyncFunction());
+  assertx(vmfp()->func()->isAsyncFunction());
   m_stage = AsyncStepperStage::StepOverAwait;
 
   // Request interrupt opcode callback after "await" instruction
@@ -229,10 +227,10 @@ void AsyncFlowStepper::captureResumeIdAfterAwait() {
 // Set guard internal breakpoint at async operation
 // resume point to continue stepping.
 void AsyncFlowStepper::setResumeInternalBreakpoint(PC pc) {
-  assert(decode_op(pc) == Op::Await);
+  assertx(decode_op(pc) == Op::Await);
 
   auto resumeInstPc = pc + instrLen(pc);
-  assert(vmfp()->func()->unit()->offsetOf(resumeInstPc)
+  assertx(vmfp()->func()->unit()->offsetOf(resumeInstPc)
     != InvalidAbsoluteOffset);
 
   TRACE(2, "Setup internal breakpoint after await at '%s' offset %d\n",
@@ -254,8 +252,8 @@ bool AsyncFlowStepper::didResumeBreakpointTrigger(PC pc) {
 }
 
 const ActRec* AsyncFlowStepper::getAsyncResumableId(const ActRec* fp) {
-  assert(fp->resumed());
-  assert(fp->func()->isResumable());
+  assertx(fp->resumed());
+  assertx(fp->func()->isResumable());
   return fp;
 }
 

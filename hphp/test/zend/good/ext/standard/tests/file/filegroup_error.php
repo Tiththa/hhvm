@@ -10,12 +10,10 @@ var_dump( filegroup("/no/such/file/dir") );
 
 /* Invalid arguments */
 var_dump( filegroup("string") );
-var_dump( filegroup(100) );
+var_dump( filegroup('100') );
 
 /* Invalid no.of arguments */
-var_dump( filegroup() );  // args < expected
-var_dump( filegroup("/no/such/file", "root") );  // args > expected
+try { var_dump( filegroup() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; } // args < expected
+try { var_dump( filegroup("/no/such/file", "root") ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; } // args > expected
 
 echo "\n*** Done ***\n";
-?>
-

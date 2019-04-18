@@ -33,8 +33,8 @@ bool branchesToItself(SrcKey sk) {
   auto const op = peek_op(pc);
   if (!instrIsControlFlow(op)) return false;
   if (isSwitch(op)) return false;
-  auto const branchOffsetPtr = instrJumpOffset(pc);
-  return branchOffsetPtr != nullptr && *branchOffsetPtr == 0;
+  auto const offsets = instrJumpOffsets(pc);
+  return std::find(offsets.begin(), offsets.end(), 0) != offsets.end();
 }
 
 /*
@@ -118,6 +118,14 @@ Block* makeExitSlow(IRGS& env) {
   if (!opcodeChangesPC(env.currentNormalizedInstruction->op())) {
     gen(env, Jmp, makeExit(env, nextBcOff(env)));
   }
+  return exit;
+}
+
+Block* makeExitSurprise(IRGS& env, Offset targetBcOff) {
+  auto const exit = defBlock(env, Block::Hint::Unlikely);
+  BlockPusher bp(*env.irb, makeMarker(env, targetBcOff), exit);
+  gen(env, HandleRequestSurprise);
+  exitRequest(env, TransFlags{}, SrcKey{curSrcKey(env), targetBcOff});
   return exit;
 }
 

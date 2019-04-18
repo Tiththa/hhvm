@@ -61,7 +61,7 @@ struct BaseGenerator {
    * Skips CreateCont and PopC opcodes.
    */
   static Offset userBase(const Func* func) {
-    assert(func->isGenerator());
+    assertx(func->isGenerator());
     auto base = func->base();
 
     // Skip past VerifyParamType and EntryNoop bytecodes
@@ -74,8 +74,8 @@ struct BaseGenerator {
 
     auto DEBUG_ONLY op1 = decode_op(pc);
     auto DEBUG_ONLY op2 = decode_op(pc);
-    assert(op1 == OpCreateCont);
-    assert(op2 == OpPopC);
+    assertx(op1 == OpCreateCont);
+    assertx(op2 == OpPopC);
 
     return func->unit()->offsetOf(pc);
   }
@@ -87,18 +87,19 @@ struct BaseGenerator {
 
   template<class T>
   static ObjectData* Alloc(Class* cls, size_t totalSize) {
-    auto const node = reinterpret_cast<NativeNode*>(MM().objMalloc(totalSize));
+    auto const node = reinterpret_cast<NativeNode*>(
+        tl_heap->objMalloc(totalSize)
+    );
     auto const obj_offset = totalSize - sizeof(ObjectData);
     auto const objmem = reinterpret_cast<char*>(node) + obj_offset;
     auto const datamem = objmem - sizeof(T);
     auto const ar_off = (char*)((T*)datamem)->actRec() - (char*)node;
     auto const tyindex = type_scan::getIndexForMalloc<T>();
     node->obj_offset = obj_offset;
-    node->initHeader(tyindex, HeaderKind::NativeData, ar_off);
-    auto const obj = new (objmem) ObjectData(cls, ObjectData::HasNativeData);
-    assert((void*)obj == (void*)objmem);
-    assert(obj->hasExactlyOneRef());
-    assert(obj->noDestruct());
+    node->initHeader_32_16(HeaderKind::NativeData, ar_off, tyindex);
+    auto const obj = new (objmem) ObjectData(cls, 0, HeaderKind::NativeObject);
+    assertx((void*)obj == (void*)objmem);
+    assertx(obj->hasExactlyOneRef());
     return obj;
   }
 
@@ -171,11 +172,10 @@ struct Generator final : BaseGenerator {
   ~Generator();
   Generator& operator=(const Generator& other);
 
-  template <bool clone>
   static ObjectData* Create(const ActRec* fp, size_t numSlots,
                             jit::TCA resumeAddr, Offset resumeOffset);
   static Class* getClass() {
-    assert(s_class);
+    assertx(s_class);
     return s_class;
   }
   static constexpr ptrdiff_t objectOff() {
@@ -183,16 +183,6 @@ struct Generator final : BaseGenerator {
   }
   static Generator* fromObject(ObjectData *obj) {
     return Native::data<Generator>(obj);
-  }
-  static ObjectData* allocClone(ObjectData *obj) {
-    auto const genDataSz = Native::getNativeNode(
-                             obj, getClass()->getNativeDataInfo())->obj_offset;
-    auto const clone = BaseGenerator::Alloc<Generator>(
-        getClass(), genDataSz + sizeof(ObjectData)
-    );
-    UNUSED auto const genData = new (Native::data<Generator>(clone))
-                                Generator();
-    return clone;
   }
 
   void yield(Offset resumeOffset, const Cell* key, Cell value);
@@ -216,25 +206,6 @@ public:
   static Class* s_class;
   static const StaticString s_className;
 };
-
-template <bool clone>
-ObjectData* Generator::Create(const ActRec* fp, size_t numSlots,
-                              jit::TCA resumeAddr, Offset resumeOffset) {
-  assert(fp);
-  assert(fp->resumed() == clone);
-  assert(fp->func()->isNonAsyncGenerator());
-  const size_t frameSz = Resumable::getFrameSize(numSlots);
-  const size_t genSz = genSize(sizeof(Generator), frameSz);
-  auto const obj = BaseGenerator::Alloc<Generator>(s_class, genSz);
-  auto const genData = new (Native::data<Generator>(obj)) Generator();
-  genData->resumable()->initialize<clone>(fp,
-                                          resumeAddr,
-                                          resumeOffset,
-                                          frameSz,
-                                          genSz);
-  genData->setState(State::Created);
-  return obj;
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 }

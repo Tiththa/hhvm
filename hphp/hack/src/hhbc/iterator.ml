@@ -2,15 +2,12 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
 type t = Id of int
-
-let to_int (Id i) = i
 
 let to_string (Id i) = string_of_int i
 
@@ -30,9 +27,3 @@ let free_iterator () =
 let reset_iterator () =
   next_iterator := 0;
   num_iterators := 0
-
-let is_mutable_iterator iterator =
-  match iterator with
-  | Ast.As_kv (_, (_, Ast.Unop(Ast.Uref, _)))
-  | Ast.As_v (_, Ast.Unop(Ast.Uref, _)) -> true
-  | _ -> false

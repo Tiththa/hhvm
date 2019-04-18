@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class one {
   public function __call($x, $y) {
@@ -34,7 +34,7 @@ function main() {
 
 class base {
   public function __call($x, $y) {
-    echo "base::__call: $x, $y: " . get_called_class() . "\n";
+    echo "base::__call: $x, $y: " . static::class . "\n";
   }
 }
 

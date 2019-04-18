@@ -9,7 +9,7 @@ foreach (array_keys($aTzAbbr) as $sKey) {
         $sTz = $aTzAbbr[$sKey][$iIndex]['timezone_id'];
 
         if (! in_array($sTz, $aTz)) {
-            array_push($aTz, $sTz);
+            array_push(&$aTz, $sTz);
         }
     }
 }
@@ -26,4 +26,3 @@ foreach ($aTz as $sTz) {
 }
 
 var_dump('this should be the only output');
-?>

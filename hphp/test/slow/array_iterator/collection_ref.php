@@ -1,10 +1,12 @@
 <?hh
-function test(Vector $vec) {
-  $a = 0;
-  if ($_ENV['HHVM_ARCH'] == 'x64') $val = &$a;
+function test(Vector $vec, &$val) {
   foreach ($vec as $val) {
     var_dump($val);
   }
 }
 
-test(Vector { 1,2,3 });
+
+<<__EntryPoint>>
+function main_collection_ref() {
+  test(Vector { 1,2,3 }, &$val);
+}

@@ -1,10 +1,5 @@
 <?php
 
-// disable array -> "Array" conversion notice
-error_reporting(error_reporting() & ~E_NOTICE);
-
-print "Test begin\n";
-
 class A {
   const CD = "A::CD";
   const CE = B::CE;
@@ -144,14 +139,6 @@ function main() {
   print "C::\$h: ".C::$h--."\n";
   print "C::\$h: ".--C::$h."\n";
 
-  $x = 1234;
-  C::$h =& $x;
-  print "C::\$h: ".C::$h."\n";
-  $x++;
-  print "C::\$h: ".C::$h."\n";
-  C::$h = 5678;
-  print "x: ".$x."\n";
-
   C::$h = array(0, 1, 2);
   $y = C::$h[1];
   print "\$y: $y\n";
@@ -196,14 +183,6 @@ class D {
     print "C::\$h: ".C::$h--."\n";
     print "C::\$h: ".--C::$h."\n";
 
-    $x = 1234;
-    C::$h =& $x;
-    print "C::\$h: ".C::$h."\n";
-    $x++;
-    print "C::\$h: ".C::$h."\n";
-    C::$h = 5678;
-    print "x: ".$x."\n";
-
     C::$h = array(0, 1, 2);
     $y = C::$h[1];
     print "\$y: $y\n";
@@ -211,14 +190,18 @@ class D {
     $y = C::$h[2];
     print "\$y: $y\n";
 
-    C::$h = 20;
-    $w =& C::$h;
-    $w = 5;
-    print "C::\$h: ".C::$h."\n";
-
     print "Test end\n";
   }
 }
 
+
+// disable array -> "Array" conversion notice
+<<__EntryPoint>>
+function main_static_properties() {
+error_reporting(error_reporting() & ~E_NOTICE);
+
+print "Test begin\n";
+
 main();
 D::main();
+}

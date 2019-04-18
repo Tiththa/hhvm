@@ -1,17 +1,15 @@
-<?hh
+<?hh // partial
 
-abstract class Class {
+abstract class C {
 
   public abstract function providesDarrayOfString(): darray<arraykey, string>;
   public abstract function providesVarrayOfString(): varray<string>;
   public abstract function providesVarrayOfTany(): varray;
   public abstract function providesDarrayOfTany(): darray;
   public abstract function takesDarrayOrVarrayOfString(
-    darray_or_varray<string> $x,
+    varray_or_darray<string> $x,
   ): void;
-  public abstract function takesDarrayOrVarrayOfTany(
-    darray_or_varray $x,
-  ): void;
+  public abstract function takesDarrayOrVarrayOfTany(varray_or_darray $x): void;
 
   public function test() {
     $this->takesDarrayOrVarrayOfString($this->providesDarrayOfString());

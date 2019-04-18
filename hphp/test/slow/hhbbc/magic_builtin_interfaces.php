@@ -9,7 +9,6 @@ function instance_of_test(array $x) {
   var_dump($x instanceof Container);   // false without
                                        // EnableHipHopSyntax or <?hh
   var_dump($x instanceof XHPChild);
-  var_dump($x instanceof Indexish);
   var_dump($x instanceof Stringish);
   var_dump($x instanceof \HH\KeyedTraversable);
   var_dump($x instanceof KeyedTraversable); // false without
@@ -32,6 +31,7 @@ function type_hint_traversable(\HH\KeyedTraversable $x) {
 function type_hint_stringish(Stringish $x) {
   echo '==================== ', __FUNCTION__,' ====================', "\n";
   var_dump($x instanceof Stringish);
+  var_dump($x instanceof XHPChild);
   var_dump(is_string($x));
 }
 
@@ -49,4 +49,8 @@ function main() {
   $c = new C();
   type_hint_stringish($c);
 }
+
+<<__EntryPoint>>
+function main_magic_builtin_interfaces() {
 main();
+}

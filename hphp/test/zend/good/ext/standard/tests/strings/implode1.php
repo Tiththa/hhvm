@@ -1,6 +1,6 @@
 <?php
 /* Prototype: string implode ( string $glue, array $pieces );
-   Description: Returns a string containing a string representation of all the 
+   Description: Returns a string containing a string representation of all the
                 array elements in the same order, with the glue string between each element.
 */
 echo "*** Testing implode() for basic opeartions ***\n";
@@ -21,7 +21,7 @@ foreach ($arrays as $array) {
 echo "\n*** Testing implode() with variations of glue ***\n";
 /* checking possible variations */
 $pieces = array (
-  2, 
+  2,
   0,
   -639,
   true,
@@ -40,7 +40,7 @@ $glues = array (
   "",
   " ",
   "string\x00between",
-  NULL, 
+  NULL,
   -0,
   '\0'
 );
@@ -74,9 +74,7 @@ class foo
 }
 
 $obj = new foo(); //creating new object
-$arr = array();
-$arr[0] = &$obj;
-$arr[1] = &$obj;
+$arr = array($obj, $obj);
 var_dump( implode(",", $arr) );
 var_dump($arr);
 
@@ -95,7 +93,7 @@ var_dump( implode("::", $resources) );
 
 echo "\n*** Testing error conditions ***\n";
 /* zero argument */
-var_dump( implode() );
+try { var_dump( implode() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 /* only glue */
 var_dump( implode("glue") );
@@ -116,11 +114,10 @@ var_dump( implode(12, "pieces") );
 var_dump( implode(NULL, "abcd") );
 
 /* args > than expected */
-var_dump( implode("glue", "pieces", "extra") );
+try { var_dump( implode("glue", "pieces", "extra") ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 /* closing resource handles */
 fclose($file_handle);
 closedir($dir_handle);
 
 echo "Done\n";
-?>

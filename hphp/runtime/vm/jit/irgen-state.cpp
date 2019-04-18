@@ -18,6 +18,7 @@
 #include <sstream>
 
 #include "hphp/runtime/vm/jit/irgen-internal.h"
+#include "hphp/runtime/vm/resumable.h"
 
 namespace HPHP { namespace jit { namespace irgen {
 
@@ -49,6 +50,11 @@ IRGS::IRGS(IRUnit& unit, const RegionDesc* region)
   // Now that we've defined the FP, update the BC marker appropriately.
   updateMarker(*this);
   gen(*this, DefSP, FPInvOffsetData { context.initSpOffset }, frame);
+
+  if (RuntimeOption::EvalHHIRGenerateAsserts) {
+    // Assert that we're in the correct function.
+    gen(*this, DbgAssertFunc, frame, cns(*this, context.func));
+  }
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -59,7 +65,7 @@ std::string show(const IRGS& irgs) {
     out << folly::format("+{:-^102}+\n", str);
   };
 
-  const int32_t frameCells = resumed(irgs)
+  const int32_t frameCells = resumeMode(irgs) != ResumeMode::None
     ? 0
     : curFunc(irgs)->numSlotsInFrame();
   auto const stackDepth = irgs.irb->fs().bcSPOff().offset - frameCells;

@@ -17,19 +17,13 @@
 #ifndef incl_HPHP_EXECUTION_CONTEXT_H_
 #define incl_HPHP_EXECUTION_CONTEXT_H_
 
-#include <list>
-#include <set>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
-#include "hphp/util/lock.h"
-#include "hphp/util/thread-local.h"
-#include "hphp/util/tiny-vector.h"
+#include "hphp/runtime/base/req-list.h"
+#include "hphp/runtime/base/req-tiny-vector.h"
+#include "hphp/runtime/base/req-vector.h"
 #include "hphp/runtime/base/apc-handle.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/ext/stream/ext_stream.h"
 #include "hphp/runtime/server/transport.h"
@@ -38,6 +32,17 @@
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/minstr-state.h"
 #include "hphp/runtime/vm/pc-filter.h"
+
+#include "hphp/util/lock.h"
+#include "hphp/util/logger.h"
+#include "hphp/util/thread-local.h"
+
+#include <list>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace HPHP {
 struct RequestEventHandler;
@@ -56,6 +61,7 @@ struct VMState {
   TypedValue* sp;
   MInstrState mInstrState;
   ActRec* jitCalledFrame;
+  jit::TCA jitReturnAddr;
 };
 
 enum class InclOpFlags {
@@ -126,8 +132,8 @@ struct ExecutionContext {
   friend ThrowAllErrorsSetter;
 
   enum ShutdownType {
-    ShutDown,
-    PostSend,
+    ShutDown = 0,
+    PostSend = 1,
   };
 
   enum class ErrorThrowMode {
@@ -171,11 +177,13 @@ public:
    */
   Transport* getTransport();
   void setTransport(Transport*);
+  void setRequestTrace(rqtrace::Trace*);
   std::string getRequestUrl(size_t szLimit = std::string::npos);
   String getMimeType() const;
   void setContentType(const String& mimetype, const String& charset);
   String getCwd() const;
   void setCwd(const String&);
+  rqtrace::Trace* getRequestTrace();
 
   /**
    * Write to output.
@@ -192,8 +200,12 @@ public:
    */
   void writeTransport(const char* s, int len);
 
-  using PFUNC_STDOUT = void (*)(const char* s, int len, void* data);
-  void setStdout(PFUNC_STDOUT func, void* data);
+  struct StdoutHook {
+    virtual void operator()(const char* s, int len) = 0;
+    virtual ~StdoutHook() {};
+  };
+  void addStdoutHook(StdoutHook*);
+  bool removeStdoutHook(StdoutHook*);
 
   /**
    * Output buffering.
@@ -230,7 +242,6 @@ public:
   void registerShutdownFunction(const Variant& function, Array arguments,
                                 ShutdownType type);
   bool removeShutdownFunction(const Variant& function, ShutdownType type);
-  bool hasShutdownFunctions(ShutdownType type);
   void onRequestShutdown();
   void onShutdownPreSend();
   void onShutdownPostSend();
@@ -251,13 +262,13 @@ public:
                    int errnum,
                    bool callUserHandler,
                    ErrorThrowMode mode,
-                   const std::string &prefix,
+                   const std::string& prefix,
                    bool skipFrame = false);
-  bool callUserErrorHandler(const Exception &e, int errnum,
+  bool callUserErrorHandler(const Exception& e, int errnum,
                             bool swallowExceptions);
-  void recordLastError(const Exception &e, int errnum = 0);
+  void recordLastError(const Exception& e, int errnum = 0);
   void clearLastError();
-  bool onFatalError(const Exception &e); // returns handled
+  bool onFatalError(const Exception& e); // returns handled
   bool onUnhandledException(Object e);
   ErrorState getErrorState() const;
   void setErrorState(ErrorState);
@@ -300,6 +311,18 @@ public:
   void setSandboxId(const String&);
 
   bool hasRequestEventHandlers() const;
+
+  const Variant& getSoftLateInitDefault() const;
+  void setSoftLateInitDefault(Variant);
+
+  const RepoOptions& getRepoOptionsForCurrentFrame() const;
+
+  const RepoOptions* getRepoOptionsForRequest() const;
+
+  // When a file is loaded inside of a request context we perform a consistency
+  // check to ensure that all files loaded within the request use the same
+  // options.
+  void onLoadWithOptions(const char* f, const RepoOptions& options);
 
 private:
   struct OutputBuffer {
@@ -359,16 +382,13 @@ public:
 
   ActRec* getStackFrame();
   ObjectData* getThis();
-  Class* getContextClass();
-  Class* getParentContextClass();
   StringData* getContainingFileName();
   int getLine();
   Array getCallerInfo();
-  bool evalUnit(Unit* unit, PC& pc, int funcType);
-  TypedValue invokeUnit(const Unit* unit);
+  bool evalUnit(Unit* unit, PC callPC, PC& pc, int funcType);
+  TypedValue invokeUnit(const Unit* unit, bool callByHPHPInvoke = false);
   Unit* compileEvalString(StringData* code,
                                 const char* evalFilename = nullptr);
-  StrNR createFunction(const String& args, const String& code);
 
   struct EvaluationResult {
     bool failed;
@@ -383,7 +403,7 @@ public:
 
   void enterDebuggerDummyEnv();
   void exitDebuggerDummyEnv();
-  void destructObjects();
+  void debuggerExecutePsps();
 
   bool isNested() { return m_nesting != 0; }
   void pushVMState(Cell* savedSP);
@@ -404,7 +424,8 @@ public:
   ActRec* getPrevVMState(const ActRec* fp,
                          Offset* prevPc = nullptr,
                          TypedValue** prevSp = nullptr,
-                         bool* fromVMEntry = nullptr);
+                         bool* fromVMEntry = nullptr,
+                         uint64_t* jitReturnAddr = nullptr);
   ActRec* getPrevVMStateSkipFrame(const ActRec* fp,
                                   Offset* prevPc = nullptr,
                                   TypedValue** prevSp = nullptr,
@@ -415,14 +436,12 @@ public:
   const Func* getPrevFunc(const ActRec*);
 
   ActRec* getFrameAtDepth(int frame = 0);
-  VarEnv* getOrCreateVarEnv(int frame = 0);
   VarEnv* hasVarEnv(int frame = 0);
-  void setVar(StringData* name, const TypedValue* v);
-  void bindVar(StringData* name, TypedValue* v);
+  void setVar(StringData* name, tv_rval v);
   Array getLocalDefinedVariables(int frame);
-  const Variant& getEvaledArg(const StringData* val,
-                              const String& namespacedName,
-                              const Unit* funcUnit);
+  Variant getEvaledArg(const StringData* val,
+                       const String& namespacedName,
+                       const Unit* funcUnit);
 
 private:
   template <bool forwarding>
@@ -433,7 +452,6 @@ public:
 
   enum InvokeFlags {
     InvokeNormal,
-    InvokeCuf,
     InvokePseudoMain
   };
 
@@ -444,18 +462,18 @@ public:
                         VarEnv* varEnv = nullptr,
                         StringData* invName = nullptr,
                         InvokeFlags flags = InvokeNormal,
-                        bool useWeakTypes = false);
+                        bool dynamic = true,
+                        bool checkRefAnnot = false);
 
   TypedValue invokeFunc(const CallCtx& ctx,
-                        const Variant& args_,
-                        VarEnv* varEnv = nullptr);
+                        const Variant& args_);
 
   TypedValue invokeFuncFew(const Func* f,
                            void* thisOrCls,
                            StringData* invName,
                            int argc,
                            const TypedValue* argv,
-                           bool useWeakTypes = false);
+                           bool dynamic = true);
 
   TypedValue invokeFuncFew(const Func* f,
                            void* thisOrCls,
@@ -468,13 +486,15 @@ public:
   TypedValue invokeMethod(
     ObjectData* obj,
     const Func* meth,
-    InvokeArgs args = InvokeArgs()
+    InvokeArgs args = InvokeArgs(),
+    bool dynamic = true
   );
 
   Variant invokeMethodV(
     ObjectData* obj,
     const Func* meth,
-    InvokeArgs args = InvokeArgs()
+    InvokeArgs args = InvokeArgs(),
+    bool dynamic = true
   );
 
   void resumeAsyncFunc(Resumable* resumable, ObjectData* freeObj,
@@ -490,10 +510,18 @@ private:
   template<class FStackCheck, class FInitArgs, class FEnterVM>
   TypedValue invokeFuncImpl(const Func* f,
                             ObjectData* thiz, Class* cls, uint32_t argc,
-                            StringData* invName, bool useWeakTypes,
+                            StringData* invName,
+                            bool dynamic,
                             FStackCheck doStackCheck,
                             FInitArgs doInitArgs,
                             FEnterVM doEnterVM);
+
+  struct ExcLoggerHook final : LoggerHook {
+    explicit ExcLoggerHook(ExecutionContext& ec) : ec(ec) {}
+    void operator()(const char* header, const char* msg, const char* ending)
+         override;
+    ExecutionContext& ec;
+  };
 
 ///////////////////////////////////////////////////////////////////////////////
 // only fields past here, please.
@@ -510,14 +538,14 @@ private:
   bool m_insideOBHandler{false};
   bool m_implicitFlush;
   int m_protectedLevel;
-  PFUNC_STDOUT m_stdout;
-  void* m_stdoutData;
+
+  std::unordered_set<StdoutHook*> m_stdoutHooks;
   size_t m_stdoutBytesWritten;
   String m_rawPostData;
 
   // request handlers
   req::vector<RequestEventHandler*> m_requestEventHandlers;
-  Array m_shutdowns;
+  std::array<Array, 2> m_shutdowns;
   bool m_acceptRequestEventHandlers;
 
   // error handling
@@ -534,9 +562,10 @@ private:
   String m_timezone;
   bool m_throwAllErrors;
   req::ptr<StreamContext> m_streamContext;
+  Variant m_softLateInitDefault;
 
   // session backup/restore for RPCRequestHandler
-  Array m_shutdownsBackup;
+  std::array<Array, 2> m_shutdownsBackup;
   req::vector<std::pair<Variant,int>> m_userErrorHandlersBackup;
   req::vector<Variant> m_userExceptionHandlersBackup;
   Variant m_exitCallback;
@@ -545,7 +574,6 @@ private:
   const VirtualHost* m_vhost;
 public:
   DebuggerSettings debuggerSettings;
-  req::set<ObjectData*> m_liveBCObjs; // objects with destructors
 private:
   size_t m_apcMemSize{0};
   std::vector<APCHandle*> m_apcHandles; // gets moved to treadmill
@@ -553,20 +581,21 @@ public:
   // Although the error handlers may want to access dynamic properties,
   // we cannot *call* the error handlers (or their destructors) while
   // destroying the context, so C++ order of destruction is not an issue.
-  req::hash_map<const ObjectData*,ArrayNoDtor> dynPropTable;
+  req::fast_map<const ObjectData*,ArrayNoDtor> dynPropTable;
+  TYPE_SCAN_IGNORE_FIELD(dynPropTable);
   VarEnv* m_globalVarEnv;
   struct FileInfo {
     Unit* unit;
     time_t ts_sec; // timestamp seconds
     unsigned long ts_nsec; // timestamp nanoseconds (or 0 if ns not supported)
   };
-  req::hash_map<const StringData*, FileInfo, string_data_hash, string_data_same>
+  req::fast_map<const StringData*, FileInfo, string_data_hash, string_data_same>
     m_evaledFiles;
   req::vector<const StringData*> m_evaledFilesOrder;
-  req::vector<Unit*> m_createdFuncs;
-  req::vector<Fault> m_faults;
   int m_lambdaCounter;
-  req::TinyVector<VMState, 32> m_nestedVMs;
+  using VMStateVec = req::TinyVector<VMState, 32>;
+  VMStateVec m_nestedVMs;
+  TYPE_SCAN_IGNORE_FIELD(m_nestedVMs); // handled explicitly in heap-scan.h
   int m_nesting;
   bool m_dbgNoBreak;
   bool m_unwindingCppException;
@@ -579,24 +608,35 @@ public:
   Variant m_memThresholdCallback;
   uint64_t m_setprofileFlags;
   bool m_executingSetprofileCallback;
+  hphp_fast_set<std::string> m_setprofileFunctions;
 public:
   Cell m_headerCallback;
   bool m_headerCallbackDone{false}; // used to prevent infinite loops
+private:
+  ExcLoggerHook m_logger_hook;
+  rqtrace::Trace* m_requestTrace{nullptr};
 
-  TYPE_SCAN_CONSERVATIVE_FIELD(m_stdoutData);
-  TYPE_SCAN_IGNORE_FIELD(dynPropTable);
+  folly::Optional<RepoOptions> m_requestOptions;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 
 // MSVC doesn't instantiate this, causing an undefined symbol at link time
 // if the template<> is present, but other compilers require it.
+namespace rds { namespace local {
 #ifndef _MSC_VER
 template<>
 #endif
-void ThreadLocalNoCheck<ExecutionContext>::destroy();
+void RDSLocal<ExecutionContext, Initialize::Explicitly>::destroy();
+}}
 
-extern DECLARE_THREAD_LOCAL_NO_CHECK(ExecutionContext, g_context);
+// Use AliasedRDSLocal for the ExecutionContext since it is accessed so
+// frequently, and AliasedRDSlocal may save up to 1 instruction and 1 load
+// per access.
+extern rds::local::AliasedRDSLocal<ExecutionContext,
+                                   rds::local::Initialize::Explicitly,
+                                   &rds::local::detail::HotRDSLocals::g_context
+                                  > g_context;
 
 ///////////////////////////////////////////////////////////////////////////////
 }

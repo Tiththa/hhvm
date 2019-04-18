@@ -2,9 +2,7 @@
 
 $var = "1";
 
-$data = array();
-$data["test1"] = 1;
-$data["test2"] = &$var;
+$data = array('test1' => 1, 'test2' => $var);
 
 $args = array();
 $args["test1"] = FILTER_VALIDATE_INT;
@@ -16,4 +14,3 @@ var_dump($data); //should be separated, i.e. not reference anymore. looks like w
 var_dump($var); //should be still string(1) "1"
 
 echo "Done\n";
-?>

@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -21,16 +20,25 @@ type t = {
   class_base         : Hhbc_id.Class.t option;
   class_implements   : Hhbc_id.Class.t list;
   class_name         : Hhbc_id.Class.t;
+  class_span         : Hhas_pos.span;
   class_is_final     : bool;
+  class_is_sealed    : bool;
   class_is_abstract  : bool;
   class_is_interface : bool;
   class_is_trait     : bool;
+  class_is_record    : bool;
   class_is_xhp       : bool;
-  class_is_top       : bool;
-  class_uses         : Litstr.id list;
+  class_hoisted      : Closure_convert.hoist_kind;
+  class_is_immutable : bool;
+  class_has_immutable : bool;
+  class_no_dynamic_props : bool;
+  class_needs_no_reifiedinit : bool;
+  class_uses         : string list;
   class_use_aliases  :
-    (Litstr.id option * Litstr.id * Litstr.id option * Ast.kind option) list;
-  class_use_precedences : (Litstr.id * Litstr.id * Litstr.id list) list;
+    (string option * string * string option * Ast.kind list) list;
+  class_use_precedences : (string * string * string list) list;
+  class_method_trait_resolutions:
+    (string * string * string * Ast.kind list * Ast.fun_kind) list;
   class_enum_type    : Hhas_type_info.t option;
   class_methods      : Hhas_method.t list;
   class_properties   : Hhas_property.t list;
@@ -45,15 +53,23 @@ let make
   class_base
   class_implements
   class_name
+  class_span
   class_is_final
+  class_is_sealed
   class_is_abstract
   class_is_interface
   class_is_trait
+  class_is_record
   class_is_xhp
-  class_is_top
+  class_hoisted
+  class_is_immutable
+  class_has_immutable
+  class_no_dynamic_props
+  class_needs_no_reifiedinit
   class_uses
   class_use_aliases
   class_use_precedences
+  class_method_trait_resolutions
   class_enum_type
   class_methods
   class_properties
@@ -66,15 +82,23 @@ let make
     class_base;
     class_implements;
     class_name;
+    class_span;
     class_is_final;
+    class_is_sealed;
     class_is_abstract;
     class_is_interface;
     class_is_trait;
+    class_is_record;
     class_is_xhp;
-    class_is_top;
+    class_hoisted;
+    class_is_immutable;
+    class_has_immutable;
+    class_no_dynamic_props;
+    class_needs_no_reifiedinit;
     class_uses;
     class_use_aliases;
     class_use_precedences;
+    class_method_trait_resolutions;
     class_enum_type;
     class_methods;
     class_properties;
@@ -88,21 +112,30 @@ let attributes hhas_class = hhas_class.class_attributes
 let base hhas_class = hhas_class.class_base
 let implements hhas_class = hhas_class.class_implements
 let name hhas_class = hhas_class.class_name
+let span hhas_class = hhas_class.class_span
 let is_final hhas_class = hhas_class.class_is_final
+let is_sealed hhas_class = hhas_class.class_is_sealed
 let is_abstract hhas_class = hhas_class.class_is_abstract
 let is_interface hhas_class = hhas_class.class_is_interface
 let is_trait hhas_class = hhas_class.class_is_trait
+let is_record hhas_class = hhas_class.class_is_record
 let is_xhp hhas_class = hhas_class.class_is_xhp
-let is_top hhas_class = hhas_class.class_is_top
+let is_top hhas_class =
+  match hhas_class.class_hoisted with
+  | Closure_convert.TopLevel -> true
+  | Closure_convert.Hoisted -> false
+let is_immutable hhas_class = hhas_class.class_is_immutable
+let has_immutable hhas_class = hhas_class.class_has_immutable
+let no_dynamic_props hhas_class = hhas_class.class_no_dynamic_props
+let needs_no_reifiedinit hhas_class = hhas_class.class_needs_no_reifiedinit
 let class_uses hhas_class = hhas_class.class_uses
 let class_use_aliases hhas_class = hhas_class.class_use_aliases
 let class_use_precedences hhas_class = hhas_class.class_use_precedences
+let class_method_trait_resolutions hhas_class = hhas_class.class_method_trait_resolutions
 let enum_type hhas_class = hhas_class.class_enum_type
 let methods hhas_class = hhas_class.class_methods
 let with_methods hhas_class class_methods = { hhas_class with class_methods }
 let properties hhas_class = hhas_class.class_properties
-let with_properties hhas_class properties = { hhas_class with
-  class_properties = hhas_class.class_properties @ properties }
 let constants hhas_class = hhas_class.class_constants
 let type_constants hhas_class = hhas_class.class_type_constants
 let requirements hhas_class = hhas_class.class_requirements

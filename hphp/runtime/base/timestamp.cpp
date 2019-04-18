@@ -28,7 +28,7 @@ extern "C" {
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
-#include "hphp/util/vdso.h"
+#include "hphp/util/timer.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -39,7 +39,7 @@ int64_t TimeStamp::Current() {
 }
 
 double TimeStamp::CurrentSecond() {
-  auto now_ns = vdso::clock_gettime_ns(CLOCK_REALTIME);
+  auto now_ns = gettime_ns(CLOCK_REALTIME);
   using DoubleSeconds =
     std::chrono::duration<double, std::chrono::seconds::period>;
   auto now_double_secs = DoubleSeconds(std::chrono::nanoseconds(now_ns));
@@ -57,7 +57,7 @@ Array TimeStamp::CurrentTime() {
   gettimeofday(&tp, nullptr);
 
   timelib_time_offset *offset =
-    timelib_get_time_zone_info(tp.tv_sec, TimeZone::Current()->get());
+    timelib_get_time_zone_info(tp.tv_sec, TimeZone::Current()->getTZInfo());
 
   auto const ret = make_map_array(
     s_sec, (int)tp.tv_sec,

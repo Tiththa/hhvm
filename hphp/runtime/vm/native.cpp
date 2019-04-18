@@ -19,15 +19,15 @@
 #include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/vm/func-emitter.h"
+#include "hphp/runtime/vm/native-func-table.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/unit.h"
-
-#include "hphp/runtime/ext_zend_compat/hhvm/zend-wrap-func.h"
 
 namespace HPHP { namespace Native {
 //////////////////////////////////////////////////////////////////////////////
 
-BuiltinFunctionMap s_builtinFunctions;
+FuncTable s_systemNativeFuncs;
+const FuncTable s_noNativeFuncs; // always empty
 ConstantMap s_constant_map;
 ClassConstantMapMap s_class_constant_map;
 
@@ -57,15 +57,15 @@ static void nativeArgHelper(const Func* func, int i,
   auto val = arg.m_data.num;
   if (!type) {
     if (func->byRef(i)) {
-      if (arg.m_type != KindOfRef) {
+      if (!isRefType(arg.m_type)) {
         // For OutputArgs, if the param is not a KindOfRef,
         // we give it a nullptr
         val = 0;
       }
     } else {
       GP_args[GP_count++] = val;
-      assert((GP_count + 1) < kMaxBuiltinArgs);
-      val = arg.m_type;
+      assertx((GP_count + 1) < kMaxBuiltinArgs);
+      val = static_cast<data_type_t>(arg.m_type);
     }
   }
   GP_args[GP_count++] = val;
@@ -88,17 +88,16 @@ static void populateArgs(const Func* func,
   int64_t tmp[kMaxBuiltinArgs];
   int ntmp = 0;
 
-  for (size_t i = 0; i < numArgs; ++i) {
+  for (int i = 0; i < numArgs; ++i) {
     const auto& pi = func->params()[i];
     MaybeDataType type = pi.builtinType;
     if (type == KindOfDouble) {
       if (SIMD_count < kNumSIMDRegs) {
         SIMD_args[SIMD_count++] = args[-i].m_data.dbl;
 #if defined(__powerpc64__)
-      // According with ABI, the GP index must be incremented after
-      // a floating point function argument
-      if (GP_count < numGP)
-        GP_args[GP_count++] = 0;
+        // According with ABI, the GP index must be incremented after
+        // a floating point function argument
+        if (GP_count < numGP) GP_args[GP_count++] = 0;
 #endif
       } else if (GP_count < numGP) {
         // We have enough double args to hit the stack
@@ -113,7 +112,7 @@ static void populateArgs(const Func* func,
         GP_args[GP_count++] = args[-i].m_data.num;
       }
     } else {
-      assert((GP_count + 1) < kMaxBuiltinArgs);
+      assertx((GP_count + 1) < kMaxBuiltinArgs);
       if (pi.nativeArg) {
         nativeArgHelper(func, i, type, args[-i], GP_args, GP_count);
       } else if (!type) {
@@ -125,7 +124,7 @@ static void populateArgs(const Func* func,
       }
       if ((GP_count == numGP) && ntmp) {
         // GP regs are now full, bring tmp back to fill the initial stack
-        assert((GP_count + ntmp) <= kMaxBuiltinArgs);
+        assertx((GP_count + ntmp) <= kMaxBuiltinArgs);
         memcpy(GP_args + GP_count, tmp, ntmp * sizeof(int64_t));
         GP_count += ntmp;
         ntmp = 0;
@@ -133,7 +132,7 @@ static void populateArgs(const Func* func,
     }
   }
   if (ntmp) {
-    assert((GP_count + ntmp) <= kMaxBuiltinArgs);
+    assertx((GP_count + ntmp) <= kMaxBuiltinArgs);
     // We had more than kNumSIMDRegs doubles,
     // but less than numGPRegArgs INTs.
     // Push out the count and leave garbage behind.
@@ -149,11 +148,11 @@ static void populateArgs(const Func* func,
 static void populateArgsNoDoubles(const Func* func,
                                   TypedValue* args, int numArgs,
                                   int64_t* GP_args, int& GP_count) {
-  assert(numArgs >= 0);
+  assertx(numArgs >= 0);
   for (int i = 0; i < numArgs; ++i) {
     auto const& pi = func->params()[i];
     auto dt = pi.builtinType;
-    assert(dt != KindOfDouble);
+    assertx(dt != KindOfDouble);
     if (pi.nativeArg) {
       nativeArgHelper(func, i, dt, args[-i], GP_args, GP_count);
     } else if (!dt) {
@@ -181,7 +180,7 @@ void callFunc(const Func* func, void *ctx,
     GP_args[GP_count++] = (int64_t)ctx;
   }
 
-  if (func->attrs() & AttrNumArgs) {
+  if (func->takesNumArgs()) {
     GP_args[GP_count++] = (int64_t)numNonDefault;
   }
 
@@ -192,7 +191,7 @@ void callFunc(const Func* func, void *ctx,
     populateArgsNoDoubles(func, args, numArgs, GP_args, GP_count);
   }
 
-  BuiltinFunction f = func->nativeFuncPtr();
+  auto const f = func->nativeFuncPtr();
 
   if (!retType) {
     // A folly::none return signifies Variant.
@@ -217,6 +216,8 @@ void callFunc(const Func* func, void *ctx,
         callFuncInt64Impl(f, GP_args, GP_count, SIMD_args, SIMD_count) & 1;
       return;
 
+    case KindOfFunc:
+    case KindOfClass:
     case KindOfInt64:
       ret.m_data.num =
         callFuncInt64Impl(f, GP_args, GP_count, SIMD_args, SIMD_count);
@@ -235,12 +236,16 @@ void callFunc(const Func* func, void *ctx,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
+    case KindOfClsMeth:
     case KindOfObject:
     case KindOfResource:
+    case KindOfRecord:
     case KindOfRef: {
-      assert(isBuiltinByRef(ret.m_type));
+      assertx(isBuiltinByRef(ret.m_type));
       if (func->isReturnByValue()) {
         auto val = callFuncInt64Impl(f, GP_args, GP_count, SIMD_args,
                                      SIMD_count);
@@ -266,19 +271,34 @@ void callFunc(const Func* func, void *ctx,
 //////////////////////////////////////////////////////////////////////////////
 
 #define COERCE_OR_CAST(kind, warn_kind)                         \
-  if (paramCoerceMode) {                                        \
+  {                                                             \
+    auto ty = args[-i].m_type;                                  \
     if (!tvCoerceParamTo##kind##InPlace(&args[-i],              \
                                         func->isBuiltin())) {   \
-      raise_param_type_warning(                                 \
+      auto msg = param_type_error_message(                      \
         func->displayName()->data(),                            \
         i+1,                                                    \
         KindOf##warn_kind,                                      \
         args[-i].m_type                                         \
       );                                                        \
-      return false;                                             \
+      if (RuntimeOption::PHP7_EngineExceptions) {               \
+        SystemLib::throwTypeErrorObject(msg);                   \
+      }                                                         \
+      SystemLib::throwRuntimeExceptionObject(msg);              \
+    } else {                                                    \
+      if (RuntimeOption::EvalWarnOnCoerceBuiltinParams &&       \
+          !equivDataTypes(ty, KindOf##warn_kind) &&             \
+          args[-i].m_type != KindOfNull) {                      \
+        raise_warning(                                          \
+          "Argument %i of type %s was passed to %s, "           \
+          "it was coerced to %s",                               \
+          i + 1,                                                \
+          getDataTypeString(ty).data(),                         \
+          func->fullDisplayName()->data(),                      \
+          getDataTypeString(KindOf##warn_kind).data()           \
+        );                                                      \
+      }                                                         \
     }                                                           \
-  } else {                                                      \
-    tvCastTo##kind##InPlace(&args[-i]);                         \
   }
 
 #define CASE(kind)                                      \
@@ -286,12 +306,10 @@ void callFunc(const Func* func, void *ctx,
     COERCE_OR_CAST(kind, kind)                          \
     break; /* end of case */
 
-bool coerceFCallArgs(TypedValue* args,
+void coerceFCallArgs(TypedValue* args,
                      int32_t numArgs, int32_t numNonDefault,
-                     const Func* func, bool useStrictTypes) {
-  assert(numArgs == func->numParams());
-
-  bool paramCoerceMode = func->isParamCoerceMode();
+                     const Func* func) {
+  assertx(numArgs == func->numParams());
 
   for (int32_t i = 0; (i < numNonDefault) && (i < numArgs); i++) {
     const Func::ParamInfo& pi = func->params()[i];
@@ -307,14 +325,44 @@ bool coerceFCallArgs(TypedValue* args,
       // purposes.  The ABI-passed type will still be mixed/Variant.
       targetType = tc.underlyingDataType();
     }
+    if (!targetType && !func->byRef(i)) {
+      targetType = tc.underlyingDataType();
+    }
 
     // Skip tvCoerceParamTo*() call if we're already the right type, or if its a
     // Variant.
-    if (!targetType || equivDataTypes(args[-i].m_type, *targetType)) continue;
+    if (!targetType || equivDataTypes(args[-i].m_type, *targetType)) {
+      auto const c = &args[-i];
+      auto const raise = [&] {
+        if (LIKELY(!RuntimeOption::EvalHackArrCompatTypeHintNotices)) {
+          return false;
+        }
+        if (!tc.isArray()) return false;
+        if (!isArrayOrShapeType(c->m_type)) return false;
+        if (tc.isVArray()) {
+          return !c->m_data.parr->isVArray();
+        } else if (tc.isDArray()) {
+          return !c->m_data.parr->isDArray();
+        } else if (tc.isVArrayOrDArray()) {
+          return c->m_data.parr->isNotDVArray();
+        } else {
+          return !c->m_data.parr->isNotDVArray();
+        }
+      }();
+      if (raise) {
+        raise_hackarr_compat_type_hint_param_notice(
+          func,
+          c->m_data.parr,
+          tc.type(),
+          i
+        );
+      }
+      continue;
+    }
 
-    if (RuntimeOption::PHP7_ScalarTypes && useStrictTypes) {
-      tc.verifyParam(&args[-i], func, i, true);
-      return true;
+    if (RuntimeOption::PHP7_ScalarTypes && call_uses_strict_types(func)) {
+      tc.verifyParam(&args[-i], func, i);
+      return;
     }
 
     switch (*targetType) {
@@ -325,6 +373,7 @@ bool coerceFCallArgs(TypedValue* args,
       CASE(Vec)
       CASE(Dict)
       CASE(Keyset)
+      CASE(Shape)
       CASE(Array)
       CASE(Resource)
 
@@ -337,19 +386,25 @@ bool coerceFCallArgs(TypedValue* args,
         break;
       }
 
+      case KindOfRecord: // TODO (T41031632)
+        raise_error(Strings::RECORD_NOT_SUPPORTED);
       case KindOfUninit:
       case KindOfNull:
       case KindOfPersistentString:
       case KindOfPersistentVec:
       case KindOfPersistentDict:
       case KindOfPersistentKeyset:
+      case KindOfPersistentShape:
       case KindOfPersistentArray:
       case KindOfRef:
+      case KindOfFunc:
+      case KindOfClass:
+      case KindOfClsMeth:
         not_reached();
     }
   }
 
-  return true;
+  return;
 }
 
 #undef CASE
@@ -383,43 +438,41 @@ bool nativeWrapperCheckArgs(ActRec* ar) {
     const Func::ParamInfoVec& paramInfo = func->params();
     for (auto i = numNonDefault; i < numArgs; ++i) {
       if (InvalidAbsoluteOffset == paramInfo[i].funcletOff) {
-        // There's at least one non-default param which wasn't passed
+        // There's at least one non-default param which wasn't passed, throw a
+        // RuntimeException
         throw_wrong_arguments_nr(getInvokeName(ar)->data(),
-              numNonDefault, minNumArgs(ar), numArgs, 1);
-        return false;
+              numNonDefault, minNumArgs(ar), numArgs);
       }
     }
   } else if (numNonDefault > numArgs && !func->hasVariadicCaptureParam()) {
-    // Too many arguments passed, raise a warning ourselves this time
+    // Too many arguments passed, throw a RuntimeException
     throw_wrong_arguments_nr(getInvokeName(ar)->data(),
-      numNonDefault, minNumArgs(ar), numArgs, 1);
-    return false;
+      numNonDefault, minNumArgs(ar), numArgs);
   }
+
   // Looks good
   return true;
 }
 
 template<bool usesDoubles>
 TypedValue* functionWrapper(ActRec* ar) {
-  assert(ar);
+  assertx(ar);
   auto func = ar->m_func;
   auto numArgs = func->numParams();
   auto numNonDefault = ar->numArgs();
-  auto strict = !ar->useWeakTypes();
   TypedValue* args = ((TypedValue*)ar) - 1;
-  TypedValue rv;
-  rv.m_type = KindOfNull;
 
-  if (((numNonDefault == numArgs) ||
-       (nativeWrapperCheckArgs(ar))) &&
-      (coerceFCallArgs(args, numArgs, numNonDefault, func, strict))) {
-    callFunc<usesDoubles>(func, nullptr, args, numNonDefault, rv);
-  } else if (func->attrs() & AttrParamCoerceModeFalse) {
-    rv.m_type = KindOfBoolean;
-    rv.m_data.num = 0;
+  if (numNonDefault != numArgs) {
+    nativeWrapperCheckArgs(ar);
   }
 
-  assert(rv.m_type != KindOfUninit);
+  coerceFCallArgs(args, numArgs, numNonDefault, func);
+
+  TypedValue rv;
+  rv.m_type = KindOfUninit;
+  callFunc<usesDoubles>(func, nullptr, args, numNonDefault, rv);
+
+  assertx(rv.m_type != KindOfUninit);
   frame_free_locals_no_this_inl(ar, func->numLocals(), &rv);
   tvCopy(rv, *ar->retSlot());
   return ar->retSlot();
@@ -427,42 +480,40 @@ TypedValue* functionWrapper(ActRec* ar) {
 
 template<bool usesDoubles>
 TypedValue* methodWrapper(ActRec* ar) {
-  assert(ar);
+  assertx(ar);
   auto func = ar->m_func;
   auto numArgs = func->numParams();
   auto numNonDefault = ar->numArgs();
   bool isStatic = func->isStatic();
-  auto strict = !ar->useWeakTypes();
   TypedValue* args = ((TypedValue*)ar) - 1;
-  TypedValue rv;
-  rv.m_type = KindOfNull;
 
-  if (((numNonDefault == numArgs) ||
-       (nativeWrapperCheckArgs(ar))) &&
-      (coerceFCallArgs(args, numArgs, numNonDefault, func, strict))) {
-    // Prepend a context arg for methods
-    // Class when it's being called statically Foo::bar()
-    // Object when it's being called on an instance $foo->bar()
-    void* ctx;  // ObjectData* or Class*
-    if (ar->hasThis()) {
-      if (isStatic) {
-        throw_instance_method_fatal(getInvokeName(ar)->data());
-      }
-      ctx = ar->getThis();
-    } else {
-      if (!isStatic) {
-        throw_instance_method_fatal(getInvokeName(ar)->data());
-      }
-      ctx = ar->getClass();
-    }
-
-    callFunc<usesDoubles>(func, ctx, args, numNonDefault, rv);
-  } else if (func->attrs() & AttrParamCoerceModeFalse) {
-    rv.m_type = KindOfBoolean;
-    rv.m_data.num = 0;
+  if (numNonDefault != numArgs) {
+    nativeWrapperCheckArgs(ar);
   }
 
-  assert(rv.m_type != KindOfUninit);
+  coerceFCallArgs(args, numArgs, numNonDefault, func);
+
+  // Prepend a context arg for methods
+  // Class when it's being called statically Foo::bar()
+  // Object when it's being called on an instance $foo->bar()
+  void* ctx;  // ObjectData* or Class*
+  if (ar->hasThis()) {
+    if (isStatic) {
+      throw_instance_method_fatal(getInvokeName(ar)->data());
+    }
+    ctx = ar->getThis();
+  } else {
+    if (!isStatic) {
+      throw_instance_method_fatal(getInvokeName(ar)->data());
+    }
+    ctx = ar->getClass();
+  }
+
+  TypedValue rv;
+  rv.m_type = KindOfUninit;
+  callFunc<usesDoubles>(func, ctx, args, numNonDefault, rv);
+
+  assertx(rv.m_type != KindOfUninit);
   if (isStatic) {
     frame_free_locals_no_this_inl(ar, func->numLocals(), &rv);
   } else {
@@ -478,7 +529,7 @@ TypedValue* unimplementedWrapper(ActRec* ar) {
   if (cls) {
     raise_error("Call to unimplemented native method %s::%s()",
                 cls->name()->data(), func->name()->data());
-    tvWriteNull(ar->retSlot());
+    tvWriteNull(*ar->retSlot());
     if (func->isStatic()) {
       frame_free_locals_no_this_inl(ar, func->numParams(), ar->retSlot());
     } else {
@@ -487,27 +538,22 @@ TypedValue* unimplementedWrapper(ActRec* ar) {
   } else {
     raise_error("Call to unimplemented native function %s()",
                 func->displayName()->data());
-    tvWriteNull(ar->retSlot());
+    tvWriteNull(*ar->retSlot());
     frame_free_locals_no_this_inl(ar, func->numParams(), ar->retSlot());
   }
   return ar->retSlot();
 }
 
-void getFunctionPointers(const BuiltinFunctionInfo& info,
-                         int nativeAttrs,
-                         BuiltinFunction& bif,
-                         BuiltinFunction& nif) {
+void getFunctionPointers(const NativeFunctionInfo& info, int nativeAttrs,
+                         ArFunction& bif, NativeFunction& nif) {
   nif = info.ptr;
   if (!nif) {
     bif = unimplementedWrapper;
     return;
   }
-  if (nativeAttrs & AttrZendCompat) {
-    bif = zend_wrap_func;
-    return;
-  }
   if (nativeAttrs & AttrActRec) {
-    bif = nif;
+    // NativeFunction with the ArFunction signature
+    bif = reinterpret_cast<ArFunction>(nif);
     nif = nullptr;
     return;
   }
@@ -544,12 +590,9 @@ void getFunctionPointers(const BuiltinFunctionInfo& info,
 static bool tcCheckNative(const TypeConstraint& tc, const NativeSig::Type ty) {
   using T = NativeSig::Type;
 
-  if (tc.isDict() || tc.isVec() || tc.isKeyset()) {
-    return ty == T::Array || ty == T::ArrayArg;
-  }
-
   if (!tc.hasConstraint() || tc.isNullable() || tc.isCallable() ||
-      tc.isArrayKey() || tc.isNumber()) {
+      tc.isArrayKey() || tc.isNumber() || tc.isVecOrDict() ||
+      tc.isVArrayOrDArray() || tc.isArrayLike()) {
     return ty == T::Mixed || ty == T::MixedTV;
   }
 
@@ -569,6 +612,8 @@ static bool tcCheckNative(const TypeConstraint& tc, const NativeSig::Type ty) {
     case KindOfDict:         return ty == T::Array    || ty == T::ArrayArg;
     case KindOfPersistentKeyset:
     case KindOfKeyset:       return ty == T::Array    || ty == T::ArrayArg;
+    case KindOfPersistentShape:
+    case KindOfShape:        return ty == T::Array    || ty == T::ArrayArg;
     case KindOfPersistentArray:
     case KindOfArray:        return ty == T::Array    || ty == T::ArrayArg;
     case KindOfResource:     return ty == T::Resource || ty == T::ResourceArg;
@@ -576,6 +621,11 @@ static bool tcCheckNative(const TypeConstraint& tc, const NativeSig::Type ty) {
     case KindOfNull:         return ty == T::Void;
     case KindOfRef:          return ty == T::Mixed    || ty == T::OutputArg;
     case KindOfInt64:        return ty == T::Int64    || ty == T::Int32;
+    case KindOfFunc:         return ty == T::Func;
+    case KindOfClass:        return ty == T::Class;
+    case KindOfClsMeth:      return ty == T::ClsMeth;
+    case KindOfRecord: // TODO (T41031632)
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
   }
   not_reached();
 }
@@ -589,25 +639,23 @@ const char* kNeedStaticContextMessage =
   "Static class functions must take a Class* as their first argument";
 const char* kNeedObjectContextMessage =
   "Instance methods must take an ObjectData* as their first argument";
-const char* kInvalidZendFuncMessage =
-  "PHP5 compatibility layer functions must be registered using "
-  "registerBuiltinZendFunction";
 const char* kInvalidActRecFuncMessage =
   "Functions declared as ActRec must return a TypedValue* and take an ActRec* "
   "as their sole argument";
 
+static const StaticString
+  s_native("__Native"),
+  s_actrec("ActRec");
+
 const char* checkTypeFunc(const NativeSig& sig,
                           const TypeConstraint& retType,
-                          const Func* func) {
+                          const FuncEmitter* func) {
   using T = NativeSig::Type;
 
-  if (sig.ret == T::Zend) {
-    return sig.args.empty()
-      ? nullptr
-      : kInvalidZendFuncMessage;
-  }
+  auto dummy = HPHP::AttrNone;
+  auto nativeAttributes = func->parseNativeAttributes(dummy);
 
-  if (!func->nativeFuncPtr()) {
+  if (nativeAttributes & Native::AttrActRec) {
     return
       sig.ret == T::ARReturn &&
       sig.args.size() == 1 &&
@@ -620,27 +668,26 @@ const char* checkTypeFunc(const NativeSig& sig,
 
   auto argIt = sig.args.begin();
   auto endIt = sig.args.end();
-  if (func->preClass()) { // called from the verifier so m_cls is not set yet
+  if (func->pce()) { // called from the verifier so m_cls is not set yet
     if (argIt == endIt) return kInvalidArgCountMessage;
     auto const ctxTy = *argIt++;
-    if (func->attrs() & HPHP::AttrStatic) {
+    if (func->attrs & HPHP::AttrStatic) {
       if (ctxTy != T::Class) return kNeedStaticContextMessage;
     } else {
       if (ctxTy != T::This) return kNeedObjectContextMessage;
     }
   }
 
-  if (func->attrs() & AttrNumArgs) {
+  if (nativeAttributes & Native::AttrTakesNumArgs) {
     if (*argIt++ != T::Int64) return kInvalidNumArgsMessage;
   }
 
-  int index = 0;
-  for (auto const& pInfo : func->params()) {
+  for (auto const& pInfo : func->params) {
     if (argIt == endIt) return kInvalidArgCountMessage;
 
     auto const argTy = *argIt++;
 
-    if (func->byRef(index++)) {
+    if (pInfo.byRef) {
       if (argTy != T::MixedRef &&
           argTy != T::OutputArg) {
         return kInvalidArgTypeMessage;
@@ -659,6 +706,62 @@ const char* checkTypeFunc(const NativeSig& sig,
   }
 
   return argIt == endIt ? nullptr : kInvalidArgCountMessage;
+}
+
+String fullName(const StringData* fname, const StringData* cname,
+                bool isStatic) {
+  return {
+    cname == nullptr ? String{const_cast<StringData*>(fname)} :
+    (String{const_cast<StringData*>(cname)} +
+      (isStatic ? "::" : "->") +
+      String{const_cast<StringData*>(fname)})
+  };
+}
+
+NativeFunctionInfo getNativeFunction(const FuncTable& nativeFuncs,
+                                     const StringData* fname,
+                                     const StringData* cname,
+                                     bool isStatic) {
+  auto const name = fullName(fname, cname, isStatic);
+  if (auto info = nativeFuncs.get(name.get())) {
+    return info;
+  }
+  return NativeFunctionInfo();
+}
+
+NativeFunctionInfo getNativeFunction(const FuncTable& nativeFuncs,
+                                     const char* fname,
+                                     const char* cname,
+                                     bool isStatic) {
+  return getNativeFunction(nativeFuncs,
+                           makeStaticString(fname),
+                           cname ? makeStaticString(cname) : nullptr,
+                           isStatic);
+}
+
+void registerNativeFunc(Native::FuncTable& nativeFuncs,
+                        const StringData* name,
+                        const NativeFunctionInfo& info) {
+  nativeFuncs.insert(name, info);
+}
+
+void FuncTable::insert(const StringData* name,
+                       const NativeFunctionInfo& info) {
+  assert(name->isStatic());
+  DEBUG_ONLY auto it = m_infos.insert(std::make_pair(name, info));
+  assert(it.second || it.first->second == info);
+}
+
+NativeFunctionInfo FuncTable::get(const StringData* name) const {
+  auto const it = m_infos.find(name);
+  if (it != m_infos.end()) return it->second;
+  return NativeFunctionInfo();
+}
+
+void FuncTable::dump() const {
+  for (auto e : m_infos) {
+    fprintf(stderr, "%s\n", e.first->data());
+  }
 }
 
 static std::string nativeTypeString(NativeSig::Type ty) {
@@ -685,7 +788,8 @@ static std::string nativeTypeString(NativeSig::Type ty) {
   case T::This:       return "this";
   case T::Class:      return "class";
   case T::Void:       return "void";
-  case T::Zend:       return "[zend]";
+  case T::Func:       return "func";
+  case T::ClsMeth:    return "clsmeth";
   }
   not_reached();
 }
@@ -724,16 +828,27 @@ std::string NativeSig::toString(const char* classname,
 /////////////////////////////////////////////////////////////////////////////
 
 bool registerConstant(const StringData* cnsName,
-                      NativeConstantCallback callback) {
-  if (!Unit::defSystemConstantCallback(cnsName, callback)) {
-    return false;
-  }
-  TypedValue tv;
+                      ConstantCallback callback) {
+  TypedValueAux tv;
   tv.m_type = KindOfUninit;
   tv.m_data.pref = reinterpret_cast<RefData*>(callback);
+  tv.dynamic() = true;
+  if (!Unit::defNativeConstantCallback(cnsName, tv)) {
+    return false;
+  }
   s_constant_map[cnsName] = tv;
   return true;
 }
+
+template
+void callFunc<true>(const Func* func, void *ctx,
+                    TypedValue *args, int32_t numNonDefault,
+                    TypedValue& ret);
+
+template
+void callFunc<false>(const Func* func, void *ctx,
+                     TypedValue *args, int32_t numNonDefault,
+                     TypedValue& ret);
 
 //////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::Native

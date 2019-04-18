@@ -85,7 +85,7 @@ using std::abs;
    part of GD */
 typedef long gdFixed;
 /* Integer to fixed point */
-#define gd_itofx(x) ((x) << 8)
+#define gd_itofx(x) ((x) * 256)
 
 /* Float to fixed point */
 #define gd_ftofx(x) (long)((x) * 256)
@@ -106,7 +106,7 @@ typedef long gdFixed;
 #define gd_mulfx(x,y) (((x) * (y)) >> 8)
 
 /* Divide a fixed by a fixed */
-#define gd_divfx(x,y) (((x) << 8) / (y))
+#define gd_divfx(x,y) (((x) * 256) / (y))
 
 typedef struct
 {
@@ -1660,8 +1660,8 @@ gdImagePtr gdImageRotateGeneric(gdImagePtr src, const float degrees, const int b
 
   const gdFixed f_slop_y = f_sin;
   const gdFixed f_slop_x = f_cos;
-  const gdFixed f_slop = f_slop_x > 0 && f_slop_x > 0 ?
-              f_slop_x > f_slop_y ? gd_divfx(f_slop_y, f_slop_x) : gd_divfx(f_slop_x, f_slop_y)
+  const gdFixed f_slop = f_slop_x > 0 && f_slop_y > 0 ?
+              (f_slop_x > f_slop_y ? gd_divfx(f_slop_y, f_slop_x) : gd_divfx(f_slop_x, f_slop_y))
             : 0;
 
 

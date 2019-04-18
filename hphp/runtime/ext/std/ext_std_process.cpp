@@ -40,10 +40,10 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/plain-file.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/surprise-flags.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/ext/std/ext_std.h"
@@ -52,10 +52,6 @@
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/server/cli-server.h"
 #include "hphp/runtime/vm/repo.h"
-
-#if !defined(_NSIG) && defined(NSIG)
-# define _NSIG NSIG
-#endif
 
 #ifndef _WIN32
 # define MAYBE_WIFEXITED(var) if (WIFEXITED(var)) { var = WEXITSTATUS(var); }
@@ -213,7 +209,7 @@ struct ShellExecContext final {
   }
 
   FILE *exec(const String& cmd_string) {
-    assert(m_proc == nullptr);
+    assertx(m_proc == nullptr);
     const auto cmd = cmd_string.c_str();
     if (RuntimeOption::WhitelistExec && !check_cmd(cmd)) {
       return nullptr;
@@ -934,7 +930,7 @@ HHVM_FUNCTION(proc_open, const String& cmd, const Array& descriptorspec,
 
     child = LightProcess::proc_open(cmd.c_str(), created, intended,
                                     scwd.c_str(), envs);
-    assert(child);
+    assertx(child);
     return post_proc_open(cmd, pipes, enva, items, child);
   }
 
@@ -954,7 +950,7 @@ HHVM_FUNCTION(proc_open, const String& cmd, const Array& descriptorspec,
     }
   }
 
-  assert(child == 0);
+  assertx(child == 0);
   /* this is the child process */
 
   /* close those descriptors that we just opened for the parent stuff,
@@ -1050,7 +1046,8 @@ Array HHVM_FUNCTION(proc_get_status,
 #ifndef _WIN32
 bool HHVM_FUNCTION(proc_nice,
                    int increment) {
-  if (nice(increment) < 0 && errno) {
+  errno = 0;
+  if (nice(increment) == -1 && errno) {
     raise_warning("Only a super user may attempt to increase the "
                     "priority of a process");
     return false;

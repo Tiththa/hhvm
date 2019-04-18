@@ -37,7 +37,7 @@ SOFTWARE.
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/string-buffer.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/utf8-decode.h"
@@ -299,23 +299,11 @@ enum class Mode {
   ARRAY = 4
 };
 
-/**
- * These are the types of containers that can be returned
- * depending on the options used for json_decode.
- *
- * Objects are not included here.
- */
-enum class ContainerType {
-  PHP_ARRAYS = 1,
-  COLLECTIONS = 2,
-  HACK_ARRAYS = 3,
-};
-
 namespace {
 
 NEVER_INLINE
 static void tvDecRefRange(TypedValue* begin, TypedValue* end) {
-  assert(begin <= end);
+  assertx(begin <= end);
   for (auto tv = begin; tv != end; ++tv) {
     tvDecRefGen(tv);
   }
@@ -342,9 +330,9 @@ struct SimpleParser {
    * Returns false for unsupported or malformed input (does not distinguish).
    */
   static bool TryParse(const char* inp, int length,
-                       TypedValue* buf,
-                       Variant& out) {
-    SimpleParser parser(inp, length, buf);
+                       TypedValue* buf, Variant& out,
+                       JSONContainerType container_type) {
+    SimpleParser parser(inp, length, buf, container_type);
     bool ok = parser.parseValue();
     parser.skipSpace();
     if (!ok || parser.p != inp + length) {
@@ -357,11 +345,14 @@ struct SimpleParser {
   }
 
  private:
-  SimpleParser(const char* input, int length, TypedValue* buffer)
-      : p(input),
-        top(buffer),
-        array_depth(-kMaxArrayDepth) /* Start negative to simplify check. */ {
-    assert(input[length] == 0);  // Parser relies on sentinel to avoid checks.
+  SimpleParser(const char* input, int length, TypedValue* buffer,
+               JSONContainerType container_type)
+    : p(input)
+    , top(buffer)
+    , array_depth(-kMaxArrayDepth) /* Start negative to simplify check. */
+    , container_type(container_type)
+  {
+    assertx(input[length] == 0);  // Parser relies on sentinel to avoid checks.
   }
 
   /*
@@ -386,18 +377,25 @@ struct SimpleParser {
     return ch == ' ' || ch == '\n' || ch == '\t' || ch == '\f';
   }
 
-  bool parseValue() {
+  /*
+   * Variant parser.
+   *
+   * JSON arrays don't permit leading 0's in numbers, so we have to thread that
+   * context through here to parseNumber().
+   */
+  bool parseValue(bool array_elem = false) {
     auto const ch = *p++;
     if (ch == '{') return parseMixed();
     else if (ch == '[') return parsePacked();
     else if (ch == '\"') return parseString();
-    else if ((ch >= '0' && ch <= '9') || ch == '-') return parseNumber(ch);
+    else if ((ch >= '0' && ch <= '9') ||
+              ch == '-') return parseNumber(ch, array_elem);
     else if (ch == 't') return parseRue();
     else if (ch == 'f') return parseAlse();
     else if (ch == 'n') return parseUll();
     else if (isSpace(ch)) {
       skipSpace();
-      return parseValue();
+      return parseValue(array_elem);
     }
     else return false;
   }
@@ -449,13 +447,32 @@ struct SimpleParser {
     if (!matchSeparator(']')) {
       if (++array_depth >= 0) return false;
       do {
-        if (!parseValue()) return false;
+        if (!parseValue(true)) return false;
       } while (matchSeparator(','));
       --array_depth;
       if (!matchSeparator(']')) return false;  // Trailing ',' not supported.
     }
-    auto arr = top == fp ? staticEmptyArray() :
-                           PackedArray::MakePackedNatural(top - fp, fp);
+    auto arr = [&] {
+      if (container_type == JSONContainerType::HACK_ARRAYS) {
+        return top == fp
+          ? staticEmptyVecArray()
+          : PackedArray::MakeVecNatural(top - fp, fp);
+      }
+      if (container_type == JSONContainerType::DARRAYS_AND_VARRAYS) {
+        return top == fp
+          ? staticEmptyVArray()
+          : PackedArray::MakeVArrayNatural(top - fp, fp);
+      }
+      if (container_type == JSONContainerType::DARRAYS) {
+        return top == fp
+          ? staticEmptyDArray()
+          : MixedArray::MakeDArrayNatural(top - fp, fp);
+      }
+      assertx(container_type == JSONContainerType::PHP_ARRAYS);
+      return top == fp
+        ? staticEmptyArray()
+        : PackedArray::MakePackedNatural(top - fp, fp);
+    }();
     top = fp;
     pushArrayData(arr);
     check_non_safepoint_surprise();
@@ -470,23 +487,39 @@ struct SimpleParser {
         if (!matchSeparator('\"')) return false;  // Only support string keys.
         if (!parseString()) return false;
         TypedValue& tv = top[-1];
+
         // PHP array semantics: integer-like keys are converted.
         int64_t num;
-        if (tv.m_data.pstr->isStrictlyInteger(num)) {
+        if (container_type != JSONContainerType::HACK_ARRAYS &&
+            tv.m_data.pstr->isStrictlyInteger(num)) {
           tv.m_type = KindOfInt64;
           tv.m_data.pstr->release();
           tv.m_data.num = num;
         }
         // TODO(14491721): Precompute and save hash to avoid deref in MakeMixed.
         if (!matchSeparator(':')) return false;
-        if (!parseValue()) return false;
+        if (!parseValue(true)) return false;
       } while (matchSeparator(','));
       --array_depth;
       if (!matchSeparator('}')) return false;  // Trailing ',' not supported.
     }
-    auto const arr = top == fp ?
-      staticEmptyArray() :
-      MixedArray::MakeMixed((top - fp) >> 1, fp)->asArrayData();
+    auto arr = [&] {
+      if (container_type == JSONContainerType::HACK_ARRAYS) {
+        return top == fp
+          ? staticEmptyDictArray()
+          : MixedArray::MakeDict((top - fp) >> 1, fp)->asArrayData();
+      }
+      if (container_type == JSONContainerType::DARRAYS ||
+          container_type == JSONContainerType::DARRAYS_AND_VARRAYS) {
+        return top == fp
+          ? staticEmptyDArray()
+          : MixedArray::MakeDArray((top - fp) >> 1, fp)->asArrayData();
+      }
+      assertx(container_type == JSONContainerType::PHP_ARRAYS);
+      return top == fp
+        ? staticEmptyArray()
+        : MixedArray::MakeMixed((top - fp) >> 1, fp)->asArrayData();
+    }();
     // MixedArray::MakeMixed can return nullptr if there are duplicate keys
     if (!arr) return false;
     top = fp;
@@ -498,7 +531,7 @@ struct SimpleParser {
   /*
    * Parse remainder of number after initial character firstChar (maybe '-').
    */
-  bool parseNumber(char firstChar) {
+  bool parseNumber(char firstChar, bool array_elem = false) {
     uint64_t x = 0;
     bool neg = false;
     const char* begin = p - 1;
@@ -516,9 +549,16 @@ struct SimpleParser {
       pushDouble(zend_strtod(begin, &p));
       return true;
     }
+
+    auto len = p - begin;
+
+    // JSON arrays don't permit leading 0's in numbers.
+    if (UNLIKELY(len > 1 && firstChar == '0' && array_elem)) {
+      return false;
+    }
+
     // Now 'x' is the usigned absolute value of a naively parsed integer, but
     // potentially overflowed mod 2^64.
-    auto len = p - begin;
     if (LIKELY(len < 19) || (len == 19 && firstChar <= '8')) {
       int64_t sx = x;
       pushInt64(neg ? -sx : sx);
@@ -565,13 +605,14 @@ struct SimpleParser {
 
   void pushArrayData(ArrayData* data) {
     auto const tv = top++;
-    tv->m_type = KindOfArray;
+    tv->m_type = data->toDataType();
     tv->m_data.parr = data;
   }
 
   const char* p;
   TypedValue* top;
   int array_depth;
+  JSONContainerType container_type;
 };
 
 /*
@@ -583,22 +624,22 @@ struct UncheckedBuffer {
   // Use given buffer with space for 'cap' chars, including '\0'.
   void setBuf(char* buf, size_t cap) {
     begin = p = buf;
-#ifdef DEBUG
+#ifndef NDEBUG
     end = begin + cap;
 #endif
   }
   void append(char c) {
-    assert(p < end);
+    assertx(p < end);
     *p++ = c;
   }
   void shrinkBy(int decrease) {
     p -= decrease;
-    assert(p >= begin);
+    assertx(p >= begin);
   }
   int size() { return p - begin; }
   // NUL-terminates the output before returning it, for backward-compatibility.
   char* data() {
-    assert(p < end);
+    assertx(p < end);
     *p = 0;
     return begin;
   }
@@ -606,7 +647,7 @@ struct UncheckedBuffer {
 
   char* p{nullptr};
   char* begin{nullptr};
-#ifdef DEBUG
+#ifndef NDEBUG
   char* end{nullptr};
 #endif
 };
@@ -652,9 +693,9 @@ struct json_parser {
         tl_buffer.raw = nullptr;
       }
       sb_cap = 0;
-      if (!MM().preAllocOOM(bufSize)) {
+      if (!tl_heap->preAllocOOM(bufSize)) {
         tl_buffer.raw = (char*)malloc(bufSize);
-        if (!tl_buffer.raw) MM().forceOOM();
+        if (!tl_buffer.raw) tl_heap->forceOOM();
       }
       check_non_safepoint_surprise();
       always_assert(tl_buffer.raw);
@@ -678,7 +719,7 @@ struct json_parser {
   }
 };
 
-IMPLEMENT_THREAD_LOCAL(json_parser, s_json_parser);
+RDS_LOCAL(json_parser, s_json_parser);
 
 // In Zend, the json_parser struct is publicly
 // accessible. Thus the fields could be accessed
@@ -775,9 +816,9 @@ static Variant to_double(UncheckedBuffer &buf) {
   return ret;
 }
 
-static void json_create_zval(Variant &z, UncheckedBuffer &buf, int type,
+static void json_create_zval(Variant &z, UncheckedBuffer &buf, DataType type,
                              int64_t options) {
-  switch (DataType(type)) {
+  switch (type) {
     case KindOfBoolean:
       z = (buf.data() && (*buf.data() == 't'));
       return;
@@ -785,7 +826,7 @@ static void json_create_zval(Variant &z, UncheckedBuffer &buf, int type,
     case KindOfInt64: {
       bool bigint = false;
       const char *p = buf.data();
-      assert(p);
+      assertx(p);
       if (p == NULL) {
         z = int64_t(0);
         return;
@@ -832,6 +873,8 @@ static void json_create_zval(Variant &z, UncheckedBuffer &buf, int type,
     case KindOfUninit:
     case KindOfNull:
     case KindOfPersistentString:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfPersistentVec:
@@ -843,6 +886,10 @@ static void json_create_zval(Variant &z, UncheckedBuffer &buf, int type,
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
+    case KindOfFunc:
+    case KindOfClass:
+    case KindOfClsMeth:
+    case KindOfRecord:
       z = uninit_null();
       return;
   }
@@ -893,22 +940,35 @@ static void object_set(Variant &var,
                        const String& key,
                        const Variant& value,
                        int assoc,
-                       ContainerType container_type) {
+                       JSONContainerType container_type) {
   if (!assoc) {
     // We know it is stdClass, and everything is public (and dynamic).
     if (key.empty()) {
-      var.getObjectData()->o_set(s__empty_, value);
+      var.getObjectData()->setProp(nullptr, s__empty_.get(), *value.toCell());
     } else {
       var.getObjectData()->o_set(key, value);
     }
   } else {
-    if (container_type == ContainerType::COLLECTIONS) {
+    if (container_type == JSONContainerType::COLLECTIONS) {
       auto keyTV = make_tv<KindOfString>(key.get());
-      collections::set(var.getObjectData(), &keyTV, value.asCell());
-    } else if (container_type == ContainerType::HACK_ARRAYS) {
+      collections::set(var.getObjectData(), &keyTV, value.toCell());
+    } else if (container_type == JSONContainerType::HACK_ARRAYS) {
       forceToDict(var).set(key, value);
+    } else if (container_type == JSONContainerType::DARRAYS ||
+               container_type == JSONContainerType::DARRAYS_AND_VARRAYS) {
+      int64_t i;
+      if (key.get()->isStrictlyInteger(i)) {
+        forceToDArray(var).set(i, value);
+      } else {
+        forceToDArray(var).set(key, value);
+      }
     } else {
-      forceToArray(var).set(key, value);
+      int64_t i;
+      if (key.get()->isStrictlyInteger(i)) {
+        forceToArray(var).set(i, value);
+      } else {
+        forceToArray(var).set(key, value);
+      }
     }
   }
 }
@@ -916,7 +976,7 @@ static void object_set(Variant &var,
 static void attach_zval(json_parser *json,
                         const String& key,
                         int assoc,
-                        ContainerType container_type) {
+                        JSONContainerType container_type) {
   if (json->top < 1) {
     return;
   }
@@ -926,8 +986,8 @@ static void attach_zval(json_parser *json,
   auto up_mode = json->stack[json->top - 1].mode;
 
   if (up_mode == Mode::ARRAY) {
-    if (container_type == ContainerType::COLLECTIONS) {
-      collections::append(root.getObjectData(), child.asCell());
+    if (container_type == JSONContainerType::COLLECTIONS) {
+      collections::append(root.getObjectData(), child.toCell());
     } else {
       root.toArrRef().append(child);
     }
@@ -936,17 +996,25 @@ static void attach_zval(json_parser *json,
   }
 }
 
-ContainerType get_container_type_from_options(int64_t options) {
+JSONContainerType get_container_type_from_options(int64_t options) {
   if ((options & k_JSON_FB_STABLE_MAPS) ||
       (options & k_JSON_FB_COLLECTIONS)) {
-    return ContainerType::COLLECTIONS;
+    return JSONContainerType::COLLECTIONS;
   }
 
   if (options & k_JSON_FB_HACK_ARRAYS) {
-    return ContainerType::HACK_ARRAYS;
+    return JSONContainerType::HACK_ARRAYS;
   }
 
-  return ContainerType::PHP_ARRAYS;
+  if (options & k_JSON_FB_DARRAYS) {
+    return JSONContainerType::DARRAYS;
+  }
+
+  if (options & k_JSON_FB_DARRAYS_AND_VARRAYS) {
+    return JSONContainerType::DARRAYS_AND_VARRAYS;
+  }
+
+  return JSONContainerType::PHP_ARRAYS;
 }
 
 /**
@@ -957,22 +1025,32 @@ ContainerType get_container_type_from_options(int64_t options) {
  * machine with a stack.
  *
  * The behavior is as follows:
- * Container Type | is_assoc | JSON input => output type
+ * Container Type       | is_assoc | JSON input => output type
  *
- * COLLECTIONS    | true     | "{}"       => c_Map
- * COLLECTIONS    | false    | "{}"       => c_Map
- * COLLECTIONS    | true     | "[]"       => c_Vector
- * COLLECTIONS    | false    | "[]"       => c_Vector
+ * COLLECTIONS          | true     | "{}"       => c_Map
+ * COLLECTIONS          | false    | "{}"       => c_Map
+ * COLLECTIONS          | true     | "[]"       => c_Vector
+ * COLLECTIONS          | false    | "[]"       => c_Vector
  *
- * HACK_ARRAYS    | true     | "{}"       => dict
- * HACK_ARRAYS    | false    | "{}"       => stdClass
- * HACK_ARRAYS    | true     | "[]"       => vec
- * HACK_ARRAYS    | false    | "[]"       => stdClass
+ * HACK_ARRAYS          | true     | "{}"       => dict
+ * HACK_ARRAYS          | false    | "{}"       => stdClass
+ * HACK_ARRAYS          | true     | "[]"       => vec
+ * HACK_ARRAYS          | false    | "[]"       => stdClass
  *
- * PHP_ARRAYS     | true     | "{}"       => array
- * PHP_ARRAYS     | false    | "{}"       => stdClass
- * PHP_ARRAYS     | true     | "[]"       => array
- * PHP_ARRAYS     | false    | "[]"       => stdClass
+ * DARRAYS              | true     | "{}"       => darray
+ * DARRAYS              | false    | "{}"       => stdClass
+ * DARRAYS              | true     | "[]"       => darray
+ * DARRAYS              | false    | "[]"       => stdClass
+ *
+ * PHP_ARRAYS           | true     | "{}"       => array
+ * PHP_ARRAYS           | false    | "{}"       => stdClass
+ * PHP_ARRAYS           | true     | "[]"       => array
+ * PHP_ARRAYS           | false    | "[]"       => stdClass
+ *
+ * DARRAYS_AND_VARRAYS  | true     | "{}"       => darray
+ * DARRAYS_AND_VARRAYS  | false    | "{}"       => stdClass
+ * DARRAYS_AND_VARRAYS  | true     | "[]"       => varray
+ * DARRAYS_AND_VARRAYS  | false    | "[]"       => stdClass
  */
 bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
                  int depth, int64_t options) {
@@ -989,10 +1067,15 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
   // if its array nesting depth check is *more* restrictive than what the user
   // asks for, to ensure that the precise semantics of the general case is
   // applied for all nesting overflows.
-  if (assoc && options == k_JSON_FB_LOOSE &&
+  if (assoc &&
+      options == (options & (k_JSON_FB_LOOSE |
+                             k_JSON_FB_DARRAYS |
+                             k_JSON_FB_DARRAYS_AND_VARRAYS |
+                             k_JSON_FB_HACK_ARRAYS)) &&
       depth >= SimpleParser::kMaxArrayDepth &&
       length <= RuntimeOption::EvalSimpleJsonMaxLength &&
-      SimpleParser::TryParse(p, length, json->tl_buffer.tv, z)) {
+      SimpleParser::TryParse(p, length, json->tl_buffer.tv, z,
+                             get_container_type_from_options(options))) {
     return true;
   }
 
@@ -1003,7 +1086,8 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
 
   /*<fb>*/
   bool const loose = options & k_JSON_FB_LOOSE;
-  ContainerType const container_type = get_container_type_from_options(options);
+  JSONContainerType const container_type =
+    get_container_type_from_options(options);
   int qchr = 0;
   int8_t const *byte_class;
   int8_t const (*next_state_table)[32];
@@ -1020,10 +1104,10 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
   UncheckedBuffer *key = &json->sb_key;
   static const int kMaxPersistentStringBufferCapacity = 256 * 1024;
 
-  int type = -1;
+  DataType type = kInvalidDataType;
   unsigned short utf16 = 0;
 
-  auto reset_type = [&] { type = -1; };
+  auto reset_type = [&] { type = kInvalidDataType; };
 
   json->depth = depth;
   // Since the stack is maintainined on a per request basis, for performance
@@ -1060,7 +1144,7 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
       s_json_parser->error_code = JSON_ERROR_UTF8;
       return false;
     }
-    assert(b >= 0);
+    assertx(b >= 0);
 
     if ((b & 127) == b) {
       /*<fb>*/
@@ -1122,7 +1206,7 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
             top.unset();
           }
           /*<fb>*/
-          if (container_type == ContainerType::COLLECTIONS) {
+          if (container_type == JSONContainerType::COLLECTIONS) {
             // stable_maps is meaningless
             top = req::make<c_Map>();
           } else {
@@ -1130,8 +1214,12 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
             if (!assoc) {
               top = SystemLib::AllocStdClassObject();
             /* <fb> */
-            } else if (container_type == ContainerType::HACK_ARRAYS) {
+            } else if (container_type == JSONContainerType::HACK_ARRAYS) {
               top = Array::CreateDict();
+            } else if (container_type == JSONContainerType::DARRAYS ||
+                       container_type == JSONContainerType::DARRAYS_AND_VARRAYS)
+            {
+              top = Array::CreateDArray();
             /* </fb> */
             } else {
               top = Array::Create();
@@ -1161,7 +1249,7 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
         }
         /*** END Facebook: json_utf8_loose ***/
 
-        if (type != -1 &&
+        if (type != kInvalidDataType &&
             json->stack[json->top].mode == Mode::OBJECT) {
           Variant mval;
           json_create_zval(mval, *buf, type, options);
@@ -1198,10 +1286,14 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
             top.unset();
           }
           /*<fb>*/
-          if (container_type == ContainerType::COLLECTIONS) {
+          if (container_type == JSONContainerType::COLLECTIONS) {
             top = req::make<c_Vector>();
-          } else if (container_type == ContainerType::HACK_ARRAYS) {
+          } else if (container_type == JSONContainerType::HACK_ARRAYS) {
             top = Array::CreateVec();
+          } else if (container_type == JSONContainerType::DARRAYS_AND_VARRAYS) {
+            top = Array::CreateVArray();
+          } else if (container_type == JSONContainerType::DARRAYS) {
+            top = Array::CreateDArray();
           } else {
             top = Array::Create();
           }
@@ -1215,13 +1307,13 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
         */
       case -5:
         {
-          if (type != -1 &&
+          if (type != kInvalidDataType &&
                json->stack[json->top].mode == Mode::ARRAY) {
             Variant mval;
             json_create_zval(mval, *buf, type, options);
             auto& top = json->stack[json->top].val;
-            if (container_type == ContainerType::COLLECTIONS) {
-              collections::append(top.getObjectData(), mval.asCell());
+            if (container_type == JSONContainerType::COLLECTIONS) {
+              collections::append(top.getObjectData(), mval.toCell());
             } else {
               top.toArrRef().append(mval);
             }
@@ -1270,7 +1362,7 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
       case -3:
         {
           Variant mval;
-          if (type != -1 &&
+          if (type != kInvalidDataType &&
               (json->stack[json->top].mode == Mode::OBJECT ||
                json->stack[json->top].mode == Mode::ARRAY)) {
             json_create_zval(mval, *buf, type, options);
@@ -1280,7 +1372,7 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
           case Mode::OBJECT:
             if (pop(json, Mode::OBJECT) &&
                 push(json, Mode::KEY)) {
-              if (type != -1) {
+              if (type != kInvalidDataType) {
                 Variant &top = json->stack[json->top].val;
                 object_set(
                   top,
@@ -1294,10 +1386,10 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
             }
             break;
           case Mode::ARRAY:
-            if (type != -1) {
+            if (type != kInvalidDataType) {
               auto& top = json->stack[json->top].val;
-              if (container_type == ContainerType::COLLECTIONS) {
-                collections::append(top.getObjectData(), mval.asCell());
+              if (container_type == JSONContainerType::COLLECTIONS) {
+                collections::append(top.getObjectData(), mval.toCell());
               } else {
                 top.toArrRef().append(mval);
               }
@@ -1376,26 +1468,27 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
           utf16 += dehexchar(b);
           utf16_to_utf8(*buf, utf16);
         }
-      } else if ((type < 0 || type == KindOfNull) &&
+      } else if ((type == kInvalidDataType || type == KindOfNull) &&
                  (c == S_DIG || c == S_ZER)) {
         type = KindOfInt64;
         buf->append((char)b);
       } else if (type == KindOfInt64 && s == 24) {
         type = KindOfDouble;
         buf->append((char)b);
-      } else if ((type < 0 || type == KindOfNull || type == KindOfInt64) &&
+      } else if ((type == kInvalidDataType || type == KindOfNull ||
+                  type == KindOfInt64) &&
                  c == S_DOT) {
         type = KindOfDouble;
         buf->append((char)b);
       } else if (type != KindOfString && c == S_QUO) {
         type = KindOfString;
         /*<fb>*/qchr = b;/*</fb>*/
-      } else if ((type < 0 || type == KindOfNull || type == KindOfInt64 ||
-                  type == KindOfDouble) &&
+      } else if ((type == kInvalidDataType || type == KindOfNull ||
+                  type == KindOfInt64 || type == KindOfDouble) &&
                  ((state == 12 && s == 9) ||
                   (state == 16 && s == 9))) {
         type = KindOfBoolean;
-      } else if (type < 0 && state == 19 && s == 9) {
+      } else if (type == kInvalidDataType && state == 19 && s == 9) {
         type = KindOfNull;
       } else if (type != KindOfString && c > S_WSP) {
         utf16_to_utf8(*buf, b);

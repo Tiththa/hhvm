@@ -11,8 +11,7 @@ function g1($a1, $a2=null) {
   return $args;
 }
 
-function g2() {
-  $args = func_get_args();
+function g2(...$args) {
   return $args;
 }
 
@@ -27,12 +26,12 @@ function main() {
     array(4),
   );
 
-  // this should end up using the cufiter (hhas) implementation
+  // this should end up using the hack implementation
   $ret = array_map('f_variadic', $a);
   var_dump($ret === array_map('g1', $a));
   var_dump($ret === array_map('g2', $a));
 
-  // using a collection to break out of hhas implementation
+  // using a collection to break out of hack implementation
   $basic_v = array_map('f_variadic', $v);
   var_dump($ret === array_map('g1', $a));
   var_dump($ret === array_map('g2', $a));
@@ -43,4 +42,8 @@ function main() {
   var_dump($ret === array_map('g2', $a, array('a', 'b', 'c', 'd')));
 }
 
+
+<<__EntryPoint>>
+function main_reentry() {
 main();
+}

@@ -1,4 +1,4 @@
-<?hh
+<?php
 // Copyright 2004-present Facebook. All Rights Reserved.
 
 class SomeClass {
@@ -31,18 +31,6 @@ class WakeupThrow {
   }
 }
 
-class Dtor {
-  public $val;
-
-  function __construct($val) {
-    $this->val = $val;
-  }
-
-  function __destruct() {
-    echo "Dtor... " . $this->val . "\n";
-  }
-}
-
 function get_count() {
   $count = apc_fetch("count");
   if (!$count) {
@@ -69,12 +57,6 @@ function read() {
     var_dump($e->getMessage());
   }
 
-  try {
-    var_dump(apc_fetch("val10"));
-  } catch (Exception $e) {
-    var_dump($e->getMessage());
-  }
-
   var_dump(apc_fetch("val11"));
 }
 
@@ -96,7 +78,6 @@ function write($count) {
 
   apc_store("val8", vec[new Wakeup]);
   apc_store("val9", vec[new WakeupThrow]);
-  apc_store("val10", vec[new Dtor(1), new WakeupThrow, new Dtor(2)]);
   apc_store("val11", vec[new Sleep(123)]);
 }
 

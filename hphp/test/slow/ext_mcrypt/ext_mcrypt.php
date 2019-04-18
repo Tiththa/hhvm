@@ -7,8 +7,11 @@ function VS($x, $y) {
 }
 function VERIFY($x) { VS($x != false, true); }
 
+
 //////////////////////////////////////////////////////////////////////
 
+<<__EntryPoint>>
+function main_ext_mcrypt() {
 $td = mcrypt_module_open("rijndael-256", "", "ofb", "");
 $iv = mcrypt_create_iv(mcrypt_enc_get_iv_size($td),
                                 MCRYPT_DEV_RANDOM);
@@ -106,7 +109,7 @@ VS($decrypted, $CC);
 //////////////////////////////////////////////////////////////////////
 
 VS(mcrypt_get_block_size("tripledes", "ecb"), 8);
-mcrypt_get_block_size("tripledes");
+try { mcrypt_get_block_size("tripledes"); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 VS(mcrypt_get_cipher_name(MCRYPT_TRIPLEDES), "3DES");
 VS(mcrypt_get_iv_size(MCRYPT_CAST_256, MCRYPT_MODE_CFB), 16);
 VS(mcrypt_get_iv_size("des", "ecb"), 8);
@@ -142,3 +145,4 @@ VS(mcrypt_enc_is_block_mode($td), true);
 
 $td = mcrypt_module_open("tripledes", "", "ecb", "");
 VS(mcrypt_enc_self_test($td), 0);
+}

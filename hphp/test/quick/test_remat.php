@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class KM {
   private $kSA;
@@ -44,6 +44,7 @@ class KM {
             $l_o
           );
         }
+        $this->dKV = array();
         $this->dKV[$key] = array(
           'sc' => (double)$sc,
           'l_o' => (int)$l_o,

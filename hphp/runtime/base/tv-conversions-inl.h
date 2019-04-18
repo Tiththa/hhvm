@@ -29,10 +29,17 @@
 
 namespace HPHP {
 
+// We want to avoid potential include cycle with func.h/class.h, so putting
+// forward declarations here is more feasible and simpler.
+const StringData* funcToStringHelper(const Func* func);
+const StringData* classToStringHelper(const Class* cls);
+Array clsMethToVecHelper(const ClsMethDataRef clsMeth);
+void raiseClsMethConvertWarningHelper(const char* toType);
+
 ///////////////////////////////////////////////////////////////////////////////
 
 inline bool cellToBool(Cell cell) {
-  assert(cellIsPlausible(cell));
+  assertx(cellIsPlausible(cell));
 
   switch (cell.m_type) {
     case KindOfUninit:
@@ -48,17 +55,27 @@ inline bool cellToBool(Cell cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return !cell.m_data.parr->empty();
     case KindOfObject:        return cell.m_data.pobj->toBoolean();
     case KindOfResource:      return cell.m_data.pres->data()->o_toBoolean();
+    case KindOfRecord:        raise_convert_record_to_type("bool");
     case KindOfRef:           break;
+    case KindOfFunc:
+      return funcToStringHelper(cell.m_data.pfunc)->toBoolean();
+    case KindOfClass:
+      return classToStringHelper(cell.m_data.pclass)->toBoolean();
+    case KindOfClsMeth:
+      raiseClsMethConvertWarningHelper("bool");
+      return true;
   }
   not_reached();
 }
 
 inline int64_t cellToInt(Cell cell) {
-  assert(cellIsPlausible(cell));
+  assertx(cellIsPlausible(cell));
 
   switch (cell.m_type) {
     case KindOfUninit:
@@ -74,11 +91,21 @@ inline int64_t cellToInt(Cell cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return cell.m_data.parr->empty() ? 0 : 1;
     case KindOfObject:        return cell.m_data.pobj->toInt64();
     case KindOfResource:      return cell.m_data.pres->data()->o_toInt64();
+    case KindOfRecord:        raise_convert_record_to_type("int");
     case KindOfRef:           break;
+    case KindOfFunc:
+      return funcToStringHelper(cell.m_data.pfunc)->toInt64(10);
+    case KindOfClass:
+      return classToStringHelper(cell.m_data.pclass)->toInt64(10);
+    case KindOfClsMeth:
+      raiseClsMethConvertWarningHelper("int");
+      return 1;
   }
   not_reached();
 }
@@ -92,22 +119,36 @@ inline double cellToDouble(Cell cell) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+template <IntishCast IC>
 inline Cell cellToKey(Cell cell, const ArrayData* ad) {
   assertx(cellIsPlausible(cell));
 
+  auto coerceKey = [&] (const StringData* str) {
+    int64_t n;
+    if (ad->convertKey<IC>(str, n)) {
+      return make_tv<KindOfInt64>(n);
+    }
+    return make_tv<KindOfString>(const_cast<StringData*>(str));
+  };
+
   if (isStringType(cell.m_type)) {
     int64_t n;
-    if (ad->convertKey(cell.m_data.pstr, n)) {
+    if (ad->convertKey<IC>(cell.m_data.pstr, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return cell;
+  } else if (isFuncType(cell.m_type)) {
+    return coerceKey(funcToStringHelper(cell.m_data.pfunc));
+  } else if (isClassType(cell.m_type)) {
+    return coerceKey(classToStringHelper(cell.m_data.pclass));
   }
+
   if (LIKELY(isIntType(cell.m_type))) return cell;
 
   if (!ad->useWeakKeys()) {
     throwInvalidArrayKeyException(&cell, ad);
   }
-  if (RuntimeOption::EvalHackArrCompatNotices) {
+  if (checkHACArrayKeyCast()) {
     raiseHackArrCompatImplicitArrayKey(&cell);
   }
 
@@ -125,6 +166,9 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
     case KindOfResource:
       return make_tv<KindOfInt64>(cell.m_data.pres->data()->o_toInt64());
 
+    case KindOfClsMeth:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfPersistentVec:
@@ -134,22 +178,27 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
     case KindOfPersistentKeyset:
     case KindOfKeyset:
     case KindOfObject:
+    case KindOfRecord:
       raise_warning("Invalid operand type was used: Invalid type used as key");
       return make_tv<KindOfNull>();
 
     case KindOfInt64:
     case KindOfString:
     case KindOfPersistentString:
+    case KindOfFunc:
+    case KindOfClass:
     case KindOfRef:
       break;
   }
   not_reached();
 }
 
+template <IntishCast IC>
 inline Cell tvToKey(TypedValue tv, const ArrayData* ad) {
   assertx(tvIsPlausible(tv));
-  return cellToKey(tvToCell(tv), ad);
+  return cellToKey<IC>(tvToCell(tv), ad);
 }
+
 
 ///////////////////////////////////////////////////////////////////////////////
 

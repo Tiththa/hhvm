@@ -29,9 +29,12 @@ function test12(keyset $v) { return HH\array_key_cast($v); }
 function test13(stdclass $v) { return HH\array_key_cast($v); }
 
 function func_maker1() { return 'HH\array_key_cast'; }
+
+abstract final class FuncMaker2Statics {
+  public static $x = 1;
+}
 function func_maker2() {
-  static $x = 1;
-  return 'test' . $x++;
+  return 'test' . FuncMaker2Statics::$x++;
 }
 
 function make_tests($func) {
@@ -53,5 +56,9 @@ function make_tests($func) {
   return __hhvm_intrinsics\launder_value($tests);
 }
 
+
+<<__EntryPoint>>
+function main_array_key_cast() {
 run_tests(make_tests('func_maker1'));
 run_tests(make_tests('func_maker2'));
+}

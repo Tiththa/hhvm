@@ -1,0 +1,666 @@
+array(3) {
+  ["%s"]=>
+  array(7) {
+    ["md5sum0"]=>
+    int(710971236120442494)
+    ["md5sum1"]=>
+    int(7581368581380780967)
+    ["sha1sum"]=>
+    string(40) "fe215048b54d55d538c1f82799f9db15f36f3ba6"
+    ["types"]=>
+    array(10) {
+      [0]=>
+      array(4) {
+        ["name"]=>
+        string(3) "CL0"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(0)
+        ["baseTypes"]=>
+        array(0) {
+        }
+      }
+      [1]=>
+      array(4) {
+        ["name"]=>
+        string(3) "CL1"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(0)
+        ["baseTypes"]=>
+        array(0) {
+        }
+      }
+      [2]=>
+      array(4) {
+        ["name"]=>
+        string(3) "CL2"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(5) {
+          [0]=>
+          string(3) "CL0"
+          [1]=>
+          string(2) "I0"
+          [2]=>
+          string(2) "I1"
+          [3]=>
+          string(3) "TR0"
+          [4]=>
+          string(3) "TR1"
+        }
+      }
+      [3]=>
+      array(4) {
+        ["name"]=>
+        string(2) "E0"
+        ["kindOf"]=>
+        string(4) "enum"
+        ["flags"]=>
+        int(2)
+        ["baseTypes"]=>
+        array(1) {
+          [0]=>
+          string(14) "HH\BuiltinEnum"
+        }
+      }
+      [4]=>
+      array(5) {
+        ["name"]=>
+        string(2) "I0"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [5]=>
+      array(5) {
+        ["name"]=>
+        string(2) "I1"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [6]=>
+      array(5) {
+        ["name"]=>
+        string(2) "I2"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(2) {
+          [0]=>
+          string(2) "I0"
+          [1]=>
+          string(2) "I1"
+        }
+        ["requireExtends"]=>
+        array(1) {
+          [0]=>
+          string(3) "CL1"
+        }
+      }
+      [7]=>
+      array(6) {
+        ["name"]=>
+        string(3) "TR0"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireImplements"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [8]=>
+      array(6) {
+        ["name"]=>
+        string(3) "TR1"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireImplements"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [9]=>
+      array(6) {
+        ["name"]=>
+        string(3) "TR2"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(4) {
+          [0]=>
+          string(2) "I0"
+          [1]=>
+          string(2) "I1"
+          [2]=>
+          string(3) "TR0"
+          [3]=>
+          string(3) "TR1"
+        }
+        ["requireImplements"]=>
+        array(1) {
+          [0]=>
+          string(2) "I2"
+        }
+        ["requireExtends"]=>
+        array(1) {
+          [0]=>
+          string(3) "CL1"
+        }
+      }
+    }
+    ["functions"]=>
+    array(1) {
+      [0]=>
+      string(2) "f1"
+    }
+    ["constants"]=>
+    array(5) {
+      [0]=>
+      string(3) "CO0"
+      [1]=>
+      string(3) "CO1"
+      [2]=>
+      string(3) "CO2"
+      [3]=>
+      string(3) "CO3"
+      [4]=>
+      string(3) "CO4"
+    }
+    ["typeAliases"]=>
+    array(3) {
+      [0]=>
+      string(3) "TA0"
+      [1]=>
+      string(3) "TA1"
+      [2]=>
+      string(3) "TA2"
+    }
+  }
+  ["%s"]=>
+  array(7) {
+    ["md5sum0"]=>
+    int(-6166587352886191145)
+    ["md5sum1"]=>
+    int(3538371896544415899)
+    ["sha1sum"]=>
+    string(40) "de7817eb10fce40db6d90ab9ac1234fbbee4469a"
+    ["types"]=>
+    array(10) {
+      [0]=>
+      array(4) {
+        ["name"]=>
+        string(6) "NS\CL0"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(0)
+        ["baseTypes"]=>
+        array(0) {
+        }
+      }
+      [1]=>
+      array(4) {
+        ["name"]=>
+        string(6) "NS\CL1"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(0)
+        ["baseTypes"]=>
+        array(0) {
+        }
+      }
+      [2]=>
+      array(4) {
+        ["name"]=>
+        string(6) "NS\CL2"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(5) {
+          [0]=>
+          string(6) "NS\CL0"
+          [1]=>
+          string(5) "NS\I0"
+          [2]=>
+          string(5) "NS\I1"
+          [3]=>
+          string(6) "NS\TR0"
+          [4]=>
+          string(6) "NS\TR1"
+        }
+      }
+      [3]=>
+      array(4) {
+        ["name"]=>
+        string(5) "NS\E0"
+        ["kindOf"]=>
+        string(4) "enum"
+        ["flags"]=>
+        int(2)
+        ["baseTypes"]=>
+        array(1) {
+          [0]=>
+          string(14) "HH\BuiltinEnum"
+        }
+      }
+      [4]=>
+      array(5) {
+        ["name"]=>
+        string(5) "NS\I0"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [5]=>
+      array(5) {
+        ["name"]=>
+        string(5) "NS\I1"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [6]=>
+      array(5) {
+        ["name"]=>
+        string(5) "NS\I2"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(2) {
+          [0]=>
+          string(5) "NS\I0"
+          [1]=>
+          string(5) "NS\I1"
+        }
+        ["requireExtends"]=>
+        array(1) {
+          [0]=>
+          string(6) "NS\CL1"
+        }
+      }
+      [7]=>
+      array(6) {
+        ["name"]=>
+        string(6) "NS\TR0"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireImplements"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [8]=>
+      array(6) {
+        ["name"]=>
+        string(6) "NS\TR1"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireImplements"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [9]=>
+      array(6) {
+        ["name"]=>
+        string(6) "NS\TR2"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(4) {
+          [0]=>
+          string(5) "NS\I0"
+          [1]=>
+          string(5) "NS\I1"
+          [2]=>
+          string(6) "NS\TR0"
+          [3]=>
+          string(6) "NS\TR1"
+        }
+        ["requireImplements"]=>
+        array(1) {
+          [0]=>
+          string(5) "NS\I2"
+        }
+        ["requireExtends"]=>
+        array(1) {
+          [0]=>
+          string(6) "NS\CL1"
+        }
+      }
+    }
+    ["functions"]=>
+    array(1) {
+      [0]=>
+      string(5) "NS\f1"
+    }
+    ["constants"]=>
+    array(5) {
+      [0]=>
+      string(6) "NS\CO0"
+      [1]=>
+      string(6) "NS\CO1"
+      [2]=>
+      string(6) "NS\CO2"
+      [3]=>
+      string(6) "NS\CO3"
+      [4]=>
+      string(6) "NS\CO4"
+    }
+    ["typeAliases"]=>
+    array(3) {
+      [0]=>
+      string(6) "NS\TA0"
+      [1]=>
+      string(6) "NS\TA1"
+      [2]=>
+      string(6) "NS\TA2"
+    }
+  }
+  ["%s"]=>
+  array(7) {
+    ["md5sum0"]=>
+    int(3932987630331472577)
+    ["md5sum1"]=>
+    int(-7802989863953681645)
+    ["sha1sum"]=>
+    string(40) "2a8128c198b86655f2eb28d7b95f894f2df78608"
+    ["types"]=>
+    array(10) {
+      [0]=>
+      array(4) {
+        ["name"]=>
+        string(9) "NS\NS\CL0"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(0)
+        ["baseTypes"]=>
+        array(0) {
+        }
+      }
+      [1]=>
+      array(4) {
+        ["name"]=>
+        string(9) "NS\NS\CL1"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(0)
+        ["baseTypes"]=>
+        array(0) {
+        }
+      }
+      [2]=>
+      array(4) {
+        ["name"]=>
+        string(9) "NS\NS\CL2"
+        ["kindOf"]=>
+        string(5) "class"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(5) {
+          [0]=>
+          string(9) "NS\NS\CL0"
+          [1]=>
+          string(8) "NS\NS\I0"
+          [2]=>
+          string(8) "NS\NS\I1"
+          [3]=>
+          string(9) "NS\NS\TR0"
+          [4]=>
+          string(9) "NS\NS\TR1"
+        }
+      }
+      [3]=>
+      array(4) {
+        ["name"]=>
+        string(8) "NS\NS\E0"
+        ["kindOf"]=>
+        string(4) "enum"
+        ["flags"]=>
+        int(2)
+        ["baseTypes"]=>
+        array(1) {
+          [0]=>
+          string(14) "HH\BuiltinEnum"
+        }
+      }
+      [4]=>
+      array(5) {
+        ["name"]=>
+        string(8) "NS\NS\I0"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [5]=>
+      array(5) {
+        ["name"]=>
+        string(8) "NS\NS\I1"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [6]=>
+      array(5) {
+        ["name"]=>
+        string(8) "NS\NS\I2"
+        ["kindOf"]=>
+        string(9) "interface"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(2) {
+          [0]=>
+          string(8) "NS\NS\I0"
+          [1]=>
+          string(8) "NS\NS\I1"
+        }
+        ["requireExtends"]=>
+        array(1) {
+          [0]=>
+          string(9) "NS\NS\CL1"
+        }
+      }
+      [7]=>
+      array(6) {
+        ["name"]=>
+        string(9) "NS\NS\TR0"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireImplements"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [8]=>
+      array(6) {
+        ["name"]=>
+        string(9) "NS\NS\TR1"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(0) {
+        }
+        ["requireImplements"]=>
+        array(0) {
+        }
+        ["requireExtends"]=>
+        array(0) {
+        }
+      }
+      [9]=>
+      array(6) {
+        ["name"]=>
+        string(9) "NS\NS\TR2"
+        ["kindOf"]=>
+        string(5) "trait"
+        ["flags"]=>
+        int(1)
+        ["baseTypes"]=>
+        array(4) {
+          [0]=>
+          string(8) "NS\NS\I0"
+          [1]=>
+          string(8) "NS\NS\I1"
+          [2]=>
+          string(9) "NS\NS\TR0"
+          [3]=>
+          string(9) "NS\NS\TR1"
+        }
+        ["requireImplements"]=>
+        array(1) {
+          [0]=>
+          string(8) "NS\NS\I2"
+        }
+        ["requireExtends"]=>
+        array(1) {
+          [0]=>
+          string(9) "NS\NS\CL1"
+        }
+      }
+    }
+    ["functions"]=>
+    array(1) {
+      [0]=>
+      string(8) "NS\NS\f1"
+    }
+    ["constants"]=>
+    array(5) {
+      [0]=>
+      string(9) "NS\NS\CO0"
+      [1]=>
+      string(9) "NS\NS\CO1"
+      [2]=>
+      string(9) "NS\NS\CO2"
+      [3]=>
+      string(9) "NS\NS\CO3"
+      [4]=>
+      string(9) "NS\NS\CO4"
+    }
+    ["typeAliases"]=>
+    array(3) {
+      [0]=>
+      string(9) "NS\NS\TA0"
+      [1]=>
+      string(9) "NS\NS\TA1"
+      [2]=>
+      string(9) "NS\NS\TA2"
+    }
+  }
+}
+PASSED md5sum
+array(3) {
+  ["%s"]=>
+  NULL
+  ["garbage_filename"]=>
+  NULL
+  ["/tmp"]=>
+  NULL
+}
+PASSED erroneous files test
+PASSED path mangling test
+PASSED multi-threaded test
+PASSED version get test
+string(60) "HH\facts_parse() expects parameter 2 to be array, null given"
+string(87) "HH\facts_parse expects a varray<string> but was given an array with a non-string value."
+string(87) "HH\facts_parse expects a varray<string> but was given an array with a non-string value."

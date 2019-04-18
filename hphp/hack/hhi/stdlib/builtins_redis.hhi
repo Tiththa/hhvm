@@ -1,14 +1,14 @@
-<?hh // decl /* -*- php -*- */
+<?hh /* -*- php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the 'hack' directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the 'hack' directory of this source tree.
  *
  */
 
+<<__PHPStdLib>>
 class Redis {
   const int REDIS_NOT_FOUND = 0;
   const int REDIS_STRING = 1;
@@ -196,9 +196,11 @@ class Redis {
   public function time() {}
 }
 
+<<__PHPStdLib>>
 class RedisException extends RuntimeException {
 }
 
+<<__PHPStdLib>>
 class RedisArray {
   public function __call($function_name, $arguments) {}
   public function __construct($name = '', array $hosts = array(), array $opts = array()) {}

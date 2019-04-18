@@ -9,6 +9,9 @@ function autoload_second($name) {
 function __autoload($name) {
   echo __METHOD__ . "\n";
 }
+
+<<__EntryPoint>>
+function main_1231() {
 echo "**************\n";
 class_exists('A');
 echo "**************\n";
@@ -23,15 +26,9 @@ echo "**************\n";
 spl_autoload_unregister('spl_autoload_call');
 class_exists('D');
 echo "**************\n";
-// hphpc won't call the autoloader unless there exists a 
+// hphpc won't call the autoloader unless there exists a
 // definition for the class somewhere
 if (true) {
-  class A {
-}
-  class B {
-}
-  class C {
-}
-  class D {
+  include '1231.inc';
 }
 }

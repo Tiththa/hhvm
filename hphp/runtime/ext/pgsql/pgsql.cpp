@@ -38,12 +38,12 @@
   name##_decrefs.reserve(params.size());              \
                                                       \
   for (ArrayIter iter(params); iter; ++iter) {        \
-    auto const param = tvToCell(iter.secondRval());   \
+    auto const param = iter.secondRval().unboxed();   \
     if (isNullType(param.type())) {                   \
       name.push_back(nullptr);                        \
     } else {                                          \
       name##_decrefs.push_back(                       \
-        String::attach(tvCastToString(param.tv()))    \
+        tvCastToString(param.tv())                    \
       );                                              \
       name.push_back(name##_decrefs.back().c_str());  \
     }                                                 \
@@ -363,7 +363,7 @@ bool PGSQLResult::convertFieldRow(const Variant& row, const Variant& field,
   Variant actual_field;
   int actual_row;
 
-  assert(out_row && out_field && "Output parameters cannot be null");
+  assertx(out_row && out_field && "Output parameters cannot be null");
 
   if (!fn_name) {
     fn_name = "__internal_pgsql_func";

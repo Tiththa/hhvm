@@ -5,7 +5,7 @@ class foo {
 	public $a3;
 	public $o1;
 	public $o2;
-	
+
 	public function f1() {
 		return $this->a1;
 	}
@@ -28,20 +28,13 @@ class foo {
 		return $this->o2;
 	}
 
-	public function &f6() {
-		return $this->a1;
-	}
-
 	public function f7(&$x) {
-		$x = 2;
+		$x[0] = 2;
 	}
 
 }
 
 $foo = new foo;
-
-$foo->f1()[0] = 1;
-var_dump($foo->a1);
 
 $foo->f2()[0] = 1;
 var_dump($foo->a2);
@@ -55,10 +48,10 @@ var_dump($foo->o1);
 $foo->f5()->a = 1;
 var_dump($foo->o2);
 
-$foo->a1[0] = 1;
-$foo->f7($foo->f6()[0]);
+$foo->a1 = [1];
+$foo->f7(&$foo->a1);
 var_dump($foo->a1[0]);
 $foo->f1()[0]++;
 var_dump($foo->a1[0]);
-$foo->f6()[0]++;
+$foo->a1[0]++;
 var_dump($foo->a1[0]);

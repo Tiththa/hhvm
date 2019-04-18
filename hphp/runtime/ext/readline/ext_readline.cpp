@@ -16,6 +16,7 @@
 */
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/util/lock.h"
@@ -34,7 +35,7 @@ struct ReadlineVars {
   Array array;
 };
 
-IMPLEMENT_THREAD_LOCAL(ReadlineVars, s_readline);
+RDS_LOCAL(ReadlineVars, s_readline);
 
 static Variant HHVM_FUNCTION(readline, const Variant& prompt /* = null */) {
   auto result = readline(
@@ -43,7 +44,7 @@ static Variant HHVM_FUNCTION(readline, const Variant& prompt /* = null */) {
   if (result == nullptr) {
     return false;
   } else {
-    auto str = String::FromCStr(result);
+    auto str = Variant{result};
     free(result);
     return str;
   }
@@ -73,7 +74,7 @@ static char* _readline_command_generator(const char* text, int state) {
   }
   auto text_str = String(text);
   while (iter) {
-    auto value = String::attach(tvCastToString(iter.secondVal()));
+    auto value = tvCastToString(iter.secondVal());
     ++iter;
     if (text_str == value.substr(0, text_str.length())) {
       // readline frees this using free(), so we must use malloc() and not new
@@ -90,7 +91,7 @@ static char** readline_completion_cb(const char* text, int start, int end) {
   char** matches = nullptr;
   auto completion = vm_call_user_func(
       s_readline->completion,
-      make_packed_array(text, start, end));
+      make_vec_array(text, start, end));
   if (completion.isArray()) {
     s_readline->array = completion.toArrRef();
     if (s_readline->array.length() > 0) {

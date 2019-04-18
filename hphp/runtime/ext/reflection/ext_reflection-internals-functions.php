@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /**
  * hphp_get_extension_info() - Internally used for getting extension's
@@ -8,7 +8,7 @@
  * @return array - A map containing the extension's name, version, info string
  *                 ini settings, constants, functions and classes.
  */
-<<__Native("NoInjection"), __HipHopSpecific>>
+<<__Native("NoInjection"), __HipHopSpecific, __Rx>>
 function hphp_get_extension_info(string $name): array<string, mixed>;
 
 /**
@@ -45,7 +45,7 @@ function hphp_invoke_method(?object $obj, string $cls, string $name,
  * @return object - The newly created object
  */
 <<__Native("NoInjection"), __HipHopSpecific>>
-function hphp_create_object(string $name, ?array $params): object;
+function hphp_create_object(string $name, ?varray<mixed> $params): object;
 
 /**
  * hphp_create_object_without_constructor() - Used by ReflectionClass to create

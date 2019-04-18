@@ -6,7 +6,7 @@ if (!$fp) {
 }
 
 //write header
-$c = 0;
+$c = '0';
 fputs($fp, chr($c), 1);
 fputs($fp, $c, 1);
 
@@ -32,4 +32,3 @@ for ($i=0; $i<10000; $i++) {
 fclose($fp);
 $im = imagecreatefromwbmp($filename);
 unlink($filename);
-?>

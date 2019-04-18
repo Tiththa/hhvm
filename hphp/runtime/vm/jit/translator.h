@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/srckey.h"
 
 #include "hphp/runtime/vm/jit/location.h"
@@ -31,7 +32,7 @@
 #include "hphp/runtime/vm/jit/type.h"
 #include "hphp/runtime/vm/jit/types.h"
 
-#include "hphp/util/hash-map-typedefs.h"
+#include "hphp/util/hash-map.h"
 #include "hphp/util/mutex.h"
 
 #include <folly/Format.h>
@@ -107,7 +108,8 @@ using BlockIdToIRBlockMap = hphp_hash_map<RegionDesc::BlockId, Block*>;
  */
 struct TransContext {
   TransContext(TransID id, TransKind kind, TransFlags flags,
-               SrcKey sk, FPInvOffset spOff, Op callerFPushOp = Op::Nop);
+               SrcKey sk, FPInvOffset spOff, int optIndex,
+               Op callerFPushOp = Op::Nop);
 
   /*
    * The SrcKey for this translation.
@@ -120,6 +122,7 @@ struct TransContext {
    * The contents of SrcKey are re-laid out to avoid func table lookups.
    */
   TransID transID;  // May be kInvalidTransID if not for a real translation.
+  int optIndex;
   TransKind kind{TransKind::Invalid};
   TransFlags flags;
   FPInvOffset initSpOffset;
@@ -128,7 +131,7 @@ struct TransContext {
   Offset initBcOffset;
   bool hasThis;
   bool prologue;
-  bool resumed;
+  ResumeMode resumeMode;
 };
 
 
@@ -158,7 +161,7 @@ enum class ControlFlowInfo {
 /*
  * Return the ControlFlowInfo for `instr'.
  */
-ControlFlowInfo opcodeControlFlowInfo(const Op op);
+ControlFlowInfo opcodeControlFlowInfo(const Op op, bool inlining);
 
 /*
  * Return true if the instruction can potentially set PC to point to something
@@ -172,7 +175,12 @@ bool opcodeChangesPC(const Op op);
  * Most instructions that change PC will break the tracelet, though some do not
  * (e.g., FCall).
  */
-bool opcodeBreaksBB(const Op op);
+bool opcodeBreaksBB(const Op op, bool inlining);
+
+/*
+ * Return true if the instruction doesn't care about the inner types.
+ */
+bool opcodeIgnoresInnerType(const Op op);
 
 /*
  * Similar to opcodeBreaksBB but more strict.  We break profiling blocks after
@@ -209,24 +217,16 @@ public:
 };
 
 /*
- * Vector of InputInfo with some flags and a pretty-printer.
+ * Vector of InputInfo with a pretty-printer.
  */
 struct InputInfoVec : public std::vector<InputInfo> {
-  InputInfoVec()
-    : needsRefCheck(false)
-  {}
-
   std::string pretty() const;
-
-public:
-  bool needsRefCheck;
 };
 
 /*
- * Get input location info and flags for a NormalizedInstruction.  Some flags
- * on `ni' may be updated.
+ * Get input location info and flags for a NormalizedInstruction.
  */
-InputInfoVec getInputs(NormalizedInstruction&, FPInvOffset bcSPOff);
+InputInfoVec getInputs(const NormalizedInstruction&, FPInvOffset bcSPOff);
 
 /*
  * Return the index of op's local immediate.
@@ -252,6 +252,8 @@ enum OutTypeConstraints {
   OutInt64,
   OutArray,
   OutArrayImm,
+  OutVArray,
+  OutDArray,
   OutVec,
   OutVecImm,
   OutDict,
@@ -259,6 +261,7 @@ enum OutTypeConstraints {
   OutKeyset,
   OutKeysetImm,
   OutObject,
+  OutRecord,
   OutResource,
   OutThisObject,        // Object from current environment
   OutFDesc,             // Blows away the current function desc
@@ -269,25 +272,27 @@ enum OutTypeConstraints {
   OutVUnknown,          // type is V(unknown)
 
   OutSameAsInput1,      // type is the same as the first stack input
+  OutSameAsInput2,      // type is the same as the second stack input
+  OutModifiedInput2,    // type is the same as the second stack input, but
+                        // counted and unspecialized
   OutModifiedInput3,    // type is the same as the third stack input, but
                         // counted and unspecialized
   OutCInput,            // type is C(input)
   OutVInput,            // type is V(input)
   OutCInputL,           // type is C(type) of local input
   OutVInputL,           // type is V(type) of local input
-  OutFInputL,           // type is V(type) of local input if current param is
-                        //   by ref, else type is C(type) of local input
-  OutFInputR,           // Like FInputL, but for R's on the stack.
 
   OutArith,             // For Add, Sub, Mul
   OutArithO,            // For AddO, SubO, MulO
   OutBitOp,             // For BitAnd, BitOr, BitXor
   OutSetOp,             // For SetOpL
   OutIncDec,            // For IncDecL
-  OutFPushCufSafe,      // FPushCufSafe pushes two values of different
-                        // types and an ActRec
 
   OutIsTypeL,           // output for IsTypeL instructions
+
+  OutFunc,              // for function pointers
+  OutClass,             // for class pointers
+  OutClsMeth,           // For ClsMeth pointers
 
   OutNone,
 };
@@ -306,13 +311,10 @@ enum Operands {
   Stack2          = 1 << 1,
   Stack1          = 1 << 2,
   StackIns1       = 1 << 3,  // Insert an element under top of stack
-  FuncdRef        = 1 << 4,  // Input to FPass*
   FStack          = 1 << 5,  // output of FPushFuncD and friends
   Local           = 1 << 6,  // Writes to a local
   Iter            = 1 << 7,  // Iterator in imm[0]
-  AllLocals       = 1 << 8, // All locals (used by RetC)
   DontGuardStack1 = 1 << 9, // Dont force a guard on behalf of stack1 input
-  IgnoreInnerType = 1 << 10, // Instruction doesnt care about the inner types
   DontGuardAny    = 1 << 11, // Dont force a guard for any input
   This            = 1 << 12, // Input to CheckThis
   StackN          = 1 << 13, // pop N cells from stack; n = imm[0].u_IVA
@@ -355,7 +357,7 @@ const InstrInfo& getInstrInfo(Op op);
  *
  * This is used to avoid generating guards for interpreted instructions.
  */
-bool dontGuardAnyInputs(Op op);
+bool dontGuardAnyInputs(const NormalizedInstruction& ni);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Other instruction information.
@@ -364,7 +366,7 @@ bool dontGuardAnyInputs(Op op);
 * Some bytecodes are always no-ops but kept around for various reasons (mostly
 * stack flavor safety).
  */
-bool isAlwaysNop(Op op);
+bool isAlwaysNop(const NormalizedInstruction& ni);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Completely unrelated functionality.

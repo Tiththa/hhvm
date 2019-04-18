@@ -56,6 +56,11 @@ struct FPIInfo {
   FPInvOffset returnSPOff;
 
   /*
+   * Offset relative to IR SP where this frame is located.
+   */
+  IRSPRelOffset irSPOff;
+
+  /*
    * Union of observed context Class* types, and its value if known.
    */
   Type ctxType;
@@ -71,6 +76,11 @@ struct FPIInfo {
    */
   const Func* func;
 
+  /*
+   * Whether this func was pushed as part of a dynamic call
+   */
+  SSATmp* dynamicCall;
+
   bool inlineEligible;
   bool spansCall;
 };
@@ -85,12 +95,20 @@ struct LocationState {
   static_assert(tag == LTag::Stack ||
                 tag == LTag::Local ||
                 tag == LTag::MBase ||
-                tag == LTag::CSlot ||
+                tag == LTag::CSlotCls ||
+                tag == LTag::CSlotTS ||
                 false,
                 "invalid LTag for LocationState");
 
   static constexpr Type default_type() {
-    return (tag == LTag::CSlot) ? TCls : TGen;
+    switch (tag) {
+      case LTag::CSlotCls:
+        return TCls;
+      case LTag::CSlotTS:
+        return RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+      default:
+        return TGen;
+    }
   }
 
   template<LTag other>
@@ -146,7 +164,8 @@ struct LocationState {
 using LocalState = LocationState<LTag::Local>;
 using StackState = LocationState<LTag::Stack>;
 using MBaseState = LocationState<LTag::MBase>;
-using CSlotState = LocationState<LTag::CSlot>;
+using CSlotClsState = LocationState<LTag::CSlotCls>;
+using CSlotTSState = LocationState<LTag::CSlotTS>;
 
 /*
  * MBRState tracks the value and type of the member base register pointer.
@@ -157,7 +176,7 @@ using CSlotState = LocationState<LTag::CSlot>;
 struct MBRState {
   SSATmp* ptr{nullptr};
   AliasClass pointee{AEmpty}; // defaults to "invalid", not "Top"
-  Type ptrType{TPtrToGen};
+  Type ptrType{TLvalToGen};
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -235,7 +254,8 @@ struct FrameState {
    * Vector of class-ref slot information; sized for numClsRefSlots on the
    * curFunc (if the state is initialized).
    */
-  jit::vector<CSlotState> clsRefSlots;
+  jit::vector<CSlotClsState> clsRefClsSlots;
+  jit::vector<CSlotTSState> clsRefTSSlots;
 
   /*
    * Values and types of the member base register and its pointee.
@@ -248,7 +268,7 @@ struct FrameState {
    * point. Used to preserve predictions for values that move between different
    * slots.
    */
-  jit::hash_map<SSATmp*, Type> predictedTypes;
+  jit::fast_map<SSATmp*, Type> predictedTypes;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -391,6 +411,7 @@ struct FrameStateMgr final {
   void setBCSPOff(FPInvOffset o)        { cur().bcSPOff = o; }
   void incBCSPDepth(int32_t n = 1)      { cur().bcSPOff += n; }
   void decBCSPDepth(int32_t n = 1)      { cur().bcSPOff -= n; }
+  void clearTopFunc();
 
   /*
    * Return the LocationState for local `id' or stack element at `off' in the
@@ -399,7 +420,8 @@ struct FrameStateMgr final {
   const LocalState& local(uint32_t id) const;
   const StackState& stack(IRSPRelOffset off) const;
   const StackState& stack(FPInvOffset off) const;
-  const CSlotState& clsRefSlot(uint32_t slot) const;
+  const CSlotClsState& clsRefClsSlot(uint32_t slot) const;
+  const CSlotTSState& clsRefTSSlot(uint32_t slot) const;
 
   /*
    * Generic accessors for LocationState members.
@@ -442,15 +464,20 @@ private:
    */
   Location loc(uint32_t) const;
   Location stk(IRSPRelOffset) const;
-  Location cslot(uint32_t) const;
+  Location cslotcls(uint32_t) const;
+  Location cslotts(uint32_t) const;
 
   LocalState& localState(uint32_t);
   LocalState& localState(Location l); // @requires: l.tag() == LTag::Local
   StackState& stackState(IRSPRelOffset);
   StackState& stackState(FPInvOffset);
   StackState& stackState(Location l); // @requires: l.tag() == LTag::Stack
-  CSlotState& clsRefSlotState(uint32_t);
-  CSlotState& clsRefSlotState(Location l); // @requires: l.tag() == LTag::CSlot
+  CSlotClsState& clsRefClsSlotState(uint32_t);
+  // @requires: l.tag() == LTag::CSlotCls
+  CSlotClsState& clsRefClsSlotState(Location l);
+  CSlotTSState& clsRefTSSlotState(uint32_t);
+  // @requires: l.tag() == LTag::CSlotTS
+  CSlotTSState& clsRefTSSlotState(Location l);
 
   /*
    * Helpers for update().
@@ -460,7 +487,7 @@ private:
   void updateMBase(const IRInstruction*);
   void trackDefInlineFP(const IRInstruction* inst);
   void trackInlineReturn();
-  void trackCall(bool writeLocals);
+  void trackCall();
 
   /*
    * Per-block state helpers.
@@ -502,7 +529,7 @@ private:
   /*
    * Stack state update helpers.
    */
-  void spillFrameStack(IRSPRelOffset, FPInvOffset, const IRInstruction*);
+  void spillFrameStack(const IRInstruction*);
   void writeToSpilledFrame(IRSPRelOffset, const SSATmp*);
 
   /*

@@ -7,9 +7,10 @@ function main() {
   );
   $herp->derp = 'foobar';
   var_dump($herp);
-  print('As should $undef->foo["bar"]:'."\n");
-  $foo->bar['baz'] = 'herpderp';
-  var_dump($foo);
 }
 
+
+<<__EntryPoint>>
+function main_null_promotion_hh() {
 main();
+}

@@ -58,14 +58,7 @@ inline bool IRInstruction::consumesReferences() const {
 }
 
 inline bool IRInstruction::mayRaiseError() const {
-  if (opcodeHasFlags(op(), MayRaiseError)) {
-    // AKExistsArr, ArrayIdx, and ArrayIsset are only marked as Er because of
-    // EvalHackArrCompatNotices. So, if its not enabled, treat them as if they
-    // aren't.
-    return !is(AKExistsArr, ArrayIdx, ArrayIsset) ||
-      RuntimeOption::EvalHackArrCompatNotices;
-  }
-  return false;
+  return opcodeMayRaise(op());
 }
 
 inline bool IRInstruction::isTerminal() const {
@@ -86,7 +79,9 @@ inline bool IRInstruction::producesReference() const {
 
 inline SSATmp* IRInstruction::getPassthroughValue() const {
   assertx(isPassthrough());
-  assertx(is(CheckType, AssertType, AssertNonNull, Mov));
+  assertx(is(CheckType, CheckVArray, CheckDArray,
+             AssertType, AssertNonNull, Mov,
+             ConvPtrToLval));
   return src(0);
 }
 

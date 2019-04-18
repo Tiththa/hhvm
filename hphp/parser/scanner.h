@@ -202,7 +202,6 @@ struct TokenStore {
 struct Scanner {
   enum Type {
     AllowShortTags       = 0x01, // allow <?
-    AllowAspTags         = 0x02, // allow <% %>
     ReturnAllTokens      = 0x04, // return comments and whitespaces
     AllowXHPSyntax       = 0x08, // allow XHP syntax
     AllowHipHopSyntax    = 0x18, // allow HipHop-specific syntax (which
@@ -210,15 +209,15 @@ struct Scanner {
   };
 
 public:
-  Scanner(const std::string& filename, int type, bool md5 = false);
+  Scanner(const std::string& filename, int type, bool sha1 = false);
   Scanner(std::istream &stream, int type, const char *fileName = "",
-          bool md5 = false);
+          bool sha1 = false);
   Scanner(const char *source, int len, int type, const char *fileName = "",
-          bool md5 = false);
+          bool sha1 = false);
   ~Scanner();
 
-  const std::string &getMd5() const {
-    return m_md5;
+  const std::string &getSha1() const {
+    return m_sha1;
   }
 
   int scanToken(ScannerToken &t, Location &l);
@@ -255,7 +254,6 @@ public:
    * Called by scanner rules.
    */
   bool shortTags() const { return (m_type & AllowShortTags) == AllowShortTags;}
-  bool aspTags() const { return (m_type & AllowAspTags) == AllowAspTags;}
   bool full() const { return (m_type & ReturnAllTokens) == ReturnAllTokens;}
   int lastToken() const { return m_lastToken;}
   void setToken(const char *rawText, int rawLeng, int type = -1) {
@@ -345,7 +343,7 @@ private:
 
   bool nextIfToken(TokenStore::iterator& pos, int tok);
 
-  void computeMd5();
+  void computeSha1();
 
   std::string m_filename;
   bool m_streamOwner;
@@ -354,7 +352,7 @@ private:
   const char *m_source;
   int m_len;
   int m_pos;
-  std::string m_md5;
+  std::string m_sha1;
 
   enum State {
     Start = -1,

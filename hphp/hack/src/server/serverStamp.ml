@@ -2,13 +2,22 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-(* Used for integration with HHVM *)
+(* The contract of this stamp "/tmp/hh_server/stamp" file is:
+ * If someone wants to keep a cache of whether a given file typechecks
+ * cleanly, then they can look for changes to the file to know that
+ * their cache might have become invalid and should be re-checked.
+ *
+ * Only known consumer is ext_hh_client, an HHVM client which
+ * exposes some APIs in the namespace HH\Client for typechecking a file.
+ *
+ * Note that there's only one stamp file on a system, even though there
+ * might be several separate instances of hh_server.
+ *)
 
 let stamp_file = Filename.concat GlobalConfig.tmp_dir "stamp"
 

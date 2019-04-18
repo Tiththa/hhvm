@@ -1,7 +1,7 @@
-<?php
+<?hh
 class B {
   public function f1() {
-    var_dump(get_called_class());
+    var_dump(static::class);
     if ($this !== null) {
       var_dump(get_class($this));
     } else {
@@ -13,7 +13,6 @@ class B {
 class C extends B {
   public function g() {
     $obj = new B;
-    forward_static_call(array('B', 'f1'));
     call_user_func(array('B', 'f1'));
   }
 }

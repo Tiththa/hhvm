@@ -1,0 +1,10 @@
+Linearization for class \I:
+[\I]
+Linearization for class \C:
+[\C]
+Linearization for class \T:
+[\T(copy_private_members), \I, \I(synthesized, consts_only), \C(synthesized)]
+Linearization for class \T2:
+[\T2(copy_private_members)]
+Linearization for class \D:
+[\D, \I(consts_only), \T(copy_private_members), \I, \C, \I(synthesized, consts_only), \C(synthesized)]

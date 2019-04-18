@@ -22,6 +22,8 @@
 #include "hphp/util/data-block.h"
 #include "hphp/util/trace.h"
 
+#include "hphp/runtime/base/rds-local.h"
+
 namespace HPHP {
 namespace Stats {
 
@@ -41,10 +43,6 @@ namespace Stats {
   STAT(TC_CatchTrace) \
   STAT(TC_CatchSideExit) \
   STAT(TC_DecRef_NZ) \
-  STAT(TC_DecRef_Normal_Decl) \
-  STAT(TC_DecRef_Normal_Destroy) \
-  STAT(TC_DecRef_Likely_Decl) \
-  STAT(TC_DecRef_Likely_Destroy) \
   STAT(TC_DecRef_Profiled_100) \
   STAT(TC_DecRef_Profiled_0) \
   /* Execute pseudomain */ \
@@ -65,6 +63,7 @@ namespace Stats {
   STAT(UnitMerge_mergeable_unique_persistent) \
   STAT(UnitMerge_mergeable_unique_persistent_cache) \
   STAT(UnitMerge_mergeable_define) \
+  STAT(UnitMerge_mergeable_persistent_define) \
   STAT(UnitMerge_mergeable_global) \
   STAT(UnitMerge_mergeable_class) \
   STAT(UnitMerge_mergeable_require) \
@@ -73,10 +72,6 @@ namespace Stats {
   /* stub reuse stats */ \
   STAT(Astub_New) \
   STAT(Astub_Reused) \
-  /* Switches */ \
-  STAT(Switch_Generic) \
-  STAT(Switch_Integer) \
-  STAT(Switch_String) \
   /* ObjectData construction */ \
   STAT(ObjectData_new_dtor_yes) \
   STAT(ObjectData_new_dtor_no) \
@@ -96,7 +91,12 @@ enum StatCounter {
 #undef O
 
 extern const char* g_counterNames[kNumStatCounters];
-extern __thread uint64_t tl_counters[kNumStatCounters];
+
+struct StatCounters {
+  uint64_t counters[kNumStatCounters];
+};
+
+extern RDS_LOCAL(StatCounters, rl_counters);
 
 inline bool enabled() {
   return Trace::moduleEnabled(Trace::stats, 1);
@@ -112,7 +112,7 @@ inline bool enableInstrCount() {
 
 inline void inc(StatCounter stat, int n = 1) {
   if (enabled()) {
-    tl_counters[stat] += n;
+    rl_counters->counters[stat] += n;
   }
 }
 

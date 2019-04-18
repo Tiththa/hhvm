@@ -13,7 +13,7 @@ struct BaseMap;
 struct c_Vector;
 
 namespace collections {
-void deepCopy(TypedValue*);
+void deepCopy(tv_lval);
 struct PairIterator;
 }
 
@@ -28,7 +28,8 @@ struct c_Pair : ObjectData {
 
   c_Pair() = delete;
   explicit c_Pair(const TypedValue& e0, const TypedValue& e1)
-    : ObjectData(c_Pair::classof(), collections::objectFlags, HeaderKind::Pair)
+    : ObjectData(c_Pair::classof(), NoInit{}, collections::objectFlags,
+                 HeaderKind::Pair)
     , m_size(2)
   {
     cellDup(e0, elm0);
@@ -36,7 +37,8 @@ struct c_Pair : ObjectData {
   }
   enum class NoIncRef {};
   explicit c_Pair(const TypedValue& e0, const TypedValue& e1, NoIncRef)
-    : ObjectData(c_Pair::classof(), collections::objectFlags, HeaderKind::Pair)
+    : ObjectData(c_Pair::classof(), NoInit{}, collections::objectFlags,
+                 HeaderKind::Pair)
     , m_size(2)
   {
     cellCopy(e0, elm0);
@@ -76,10 +78,16 @@ struct c_Pair : ObjectData {
     assertx(obj->getVMClass() == c_Pair::classof());
     return true;
   }
-  static Array ToArray(const ObjectData* obj);
+  template <IntishCast intishCast = IntishCast::None>
+  static Array ToArray(const ObjectData* obj) {
+    auto pair = static_cast<const c_Pair*>(obj);
+    check_collection_cast_to_array();
+    return pair->toPHPArrayImpl();
+  }
+
   template <bool throwOnMiss>
   static TypedValue* OffsetAt(ObjectData* obj, const TypedValue* key) {
-    assertx(key->m_type != KindOfRef);
+    assertx(!isRefType(key->m_type));
     auto pair = static_cast<c_Pair*>(obj);
     if (key->m_type == KindOfInt64) {
       return throwOnMiss ? pair->at(key->m_data.num)
@@ -101,14 +109,14 @@ struct c_Pair : ObjectData {
 
  private:
   Variant php_at(const Variant& key) const {
-    auto* k = key.asCell();
+    auto* k = key.toCell();
     if (k->m_type == KindOfInt64) {
       return Variant(tvAsCVarRef(at(k->m_data.num)), Variant::CellDup());
     }
     throwBadKeyType();
   }
   Variant php_get(const Variant& key) const {
-    auto* k = key.asCell();
+    auto* k = key.toCell();
     if (k->m_type == KindOfInt64) {
       if (auto tv = get(k->m_data.num)) {
         return Variant(tvAsCVarRef(tv), Variant::CellDup());
@@ -119,32 +127,33 @@ struct c_Pair : ObjectData {
     throwBadKeyType();
   }
 
-  Array toArrayImpl() const;
+  Array toPHPArrayImpl() const;
+  Array toPHPArray() const;
+
+  Array toVArrayImpl() const;
+  Array toDArrayImpl() const;
+
   Object getIterator();
-  int getVersion() const { return 0; }
 
   [[noreturn]] static void throwBadKeyType();
 
   TypedValue* getElms() { return &elm0; }
   const TypedValue* getElms() const { return &elm0; }
 
-#ifndef USE_LOWPTR
-  // Add 4 bytes here to keep m_size aligned the same way as in BaseVector and
-  // HashCollection.
-  UNUSED uint32_t dummy;
-#endif
-  uint32_t m_size;
+  // make sure we're aligned to 8 bytes, otherwise in non-lowptr
+  // builds, m_size will fill a hole in ObjectData, and won't be at
+  // collections::FAST_SIZE_OFFSET (see static_assert below).
+  alignas(8) uint32_t m_size;
 
   TypedValue elm0;
   TypedValue elm1;
 
-  friend void collections::deepCopy(TypedValue*);
+  friend void collections::deepCopy(tv_lval);
   friend struct collections::PairIterator;
   friend struct collections::CollectionsExtension;
   friend struct c_Vector;
   friend struct BaseVector;
   friend struct BaseMap;
-  friend struct ArrayIter;
 
   static void compileTimeAssertions() {
     // For performance, all native collection classes have their m_size field

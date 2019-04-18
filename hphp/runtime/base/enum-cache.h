@@ -42,14 +42,14 @@ struct EnumCache {
   // TBB hash and compare struct
   struct clsCompare {
     bool equal(intptr_t key1, intptr_t key2) const {
-      assert(key1 && key2);
+      assertx(key1 && key2);
       bool equal = (key1 == key2);
-      assert(!equal || getClass(key1)->name()->equal(getClass(key2)->name()));
+      assertx(!equal || getClass(key1)->name()->equal(getClass(key2)->name()));
       return equal;
     }
 
     size_t hash(intptr_t key) const {
-      assert(key);
+      assertx(key);
       return static_cast<size_t>(hash_int64(key));
     }
   };
@@ -93,7 +93,8 @@ private:
     Array&& names,
     Array&& values);
 
-  const EnumValues* getEnumValuesIfDefined(intptr_t key) const;
+  const EnumValues* getEnumValuesIfDefined(intptr_t key,
+    bool checkLocal = true) const;
   const EnumValues* getEnumValues(const Class* klass, bool recurse);
   const EnumValues* loadEnumValues(const Class* klass, bool recurse);
   void deleteEnumValues(intptr_t key);
@@ -105,15 +106,14 @@ private:
     const EnumValues*,
     clsCompare>;
 
-  using ReqEnumValuesMap = req::hash_map<
+  using ReqEnumValuesMap = req::fast_map<
     intptr_t,
     const EnumValues*>;
 
   // Persistent values, recursive case. Non-recursive are cached in Class.
   EnumValuesMap m_enumValuesMap;
 
-  rds::Link<ReqEnumValuesMap*,true /* normal_only */>
-    m_nonScalarEnumValuesMap{rds::kInvalidHandle};
+  rds::Link<ReqEnumValuesMap*, rds::Mode::Normal> m_nonScalarEnumValuesMap;
 };
 
 //////////////////////////////////////////////////////////////////////

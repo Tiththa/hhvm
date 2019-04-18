@@ -59,7 +59,7 @@ namespace HPHP { namespace jit {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-rds::Link<UnwindRDS,true> g_unwind_rds(rds::kInvalidHandle);
+rds::Link<UnwindRDS,rds::Mode::Normal> g_unwind_rds;
 
 namespace {
 
@@ -72,7 +72,6 @@ enum class ExceptionKind {
   PhpException,
   CppException,
   InvalidSetMException,
-  TVCoercionException,
 };
 
 struct TIHash {
@@ -174,7 +173,7 @@ bool install_catch_trace(_Unwind_Context* ctx, TCA rip, _Unwind_Exception* exn,
   // things to the handler using the RDS. This also simplifies the handler code
   // because it doesn't have to worry about saving its arguments somewhere
   // while executing the exit trace.
-  assert(g_unwind_rds.isInit());
+  assertx(g_unwind_rds.isInit());
   if (do_side_exit) {
     g_unwind_rds->exn = nullptr;
 #ifndef _MSC_VER
@@ -213,9 +212,6 @@ void unknownExceptionHandler() {
       std::rethrow_exception(exn);
     } catch (const InvalidSetMException&) {
       ek = ExceptionKind::InvalidSetMException;
-      throw;
-    } catch (const TVCoercionException&) {
-      ek = ExceptionKind::TVCoercionException;
       throw;
     } catch (const req::root<Object>&) {
       ek = ExceptionKind::PhpException;
@@ -293,7 +289,6 @@ tc_unwind_personality(int version,
   }();
 
   InvalidSetMException* ism = nullptr;
-  TVCoercionException* tce = nullptr;
 
   switch (exceptionKind) {
     case ExceptionKind::InvalidSetMException:
@@ -301,13 +296,6 @@ tc_unwind_personality(int version,
       if (actions & _UA_SEARCH_PHASE) {
         FTRACE(1, "thrown value: {} returning _URC_HANDLER_FOUND\n ",
                ism->tv().pretty());
-        return _URC_HANDLER_FOUND;
-      }
-      break;
-    case ExceptionKind::TVCoercionException:
-      tce = static_cast<TVCoercionException*>(exceptionFromUE(ue));
-      if (actions & _UA_SEARCH_PHASE) {
-        FTRACE(1, "TVCoercionException thrown, returning _URC_HANDLER_FOUND\n");
         return _URC_HANDLER_FOUND;
       }
       break;
@@ -372,18 +360,18 @@ tc_unwind_personality(int version,
       sync_regstate(ip, context);
     }
 
-    TypedValue tv = ism ? ism->tv() : tce ? tce->tv() : TypedValue();
+    TypedValue tv = ism ? ism->tv() : TypedValue();
     // If we have a catch trace at the IP in the frame given by `context',
     // install it.
-    if (install_catch_trace(context, ip, ue, ism || tce, tv)) {
+    if (install_catch_trace(context, ip, ue, bool(ism), tv)) {
       // Note that we should always have a catch trace for the special runtime
       // helper exceptions above.
-      always_assert((ism || tce) == bool(actions & _UA_HANDLER_FRAME));
+      always_assert(bool(ism) == bool(actions & _UA_HANDLER_FRAME));
       return _URC_INSTALL_CONTEXT;
     }
     always_assert(!(actions & _UA_HANDLER_FRAME));
 
-    assert(g_unwind_rds.isInit());
+    assertx(g_unwind_rds.isInit());
 
     if (ip == stubs.endCatchHelperPast) {
       FTRACE(1, "rip == endCatchHelperPast, continuing unwind\n");
@@ -449,7 +437,7 @@ TCUnwindInfo tc_unwind_resume(ActRec* fp) {
     // actually an ActRec, so it's actually required that we skip it above).
     unwindPreventReturnToTC(fp);
 
-    assert(g_unwind_rds.isInit());
+    assertx(g_unwind_rds.isInit());
     auto catchTrace = lookup_catch_trace(savedRip, g_unwind_rds->exn);
 
     if (isDebuggerReturnHelper(savedRip)) {

@@ -23,6 +23,7 @@
 #include <folly/ScopeGuard.h>
 #include <folly/Hash.h>
 
+#include "hphp/util/bitset-utils.h"
 #include "hphp/util/functional.h"
 #include "hphp/util/either.h"
 #include "hphp/util/dataflow-worklist.h"
@@ -105,11 +106,10 @@ struct State {
   ALocBits avail;
 
   /*
-   * If we know a class' sprops or props are already initialized at this
+   * If we know whether various RDS entries have been initialized at this
    * position.
    */
-  jit::flat_set<const Class*> initSProps{};
-  jit::flat_set<const Class*> initProps{};
+  jit::flat_set<rds::Handle> initRDS{};
 };
 
 struct BlockInfo {
@@ -223,23 +223,10 @@ DEBUG_ONLY std::string show(const State& state) {
 
   folly::format(
     &ret,
-    "  initSProps: {}\n",
+    "  initRDS : {}\n",
     [&] {
       using namespace folly::gen;
-      return from(state.initSProps)
-        | map([&] (const Class* cls) { return cls->name()->toCppString(); })
-        | unsplit<std::string>(",");
-    }()
-  );
-
-  folly::format(
-    &ret,
-    "  initProps: {}\n",
-    [&] {
-      using namespace folly::gen;
-      return from(state.initProps)
-        | map([&] (const Class* cls) { return cls->name()->toCppString(); })
-        | unsplit<std::string>(",");
+      return from(state.initRDS) | unsplit<std::string>(",");
     }()
   );
 
@@ -283,6 +270,11 @@ struct FRefinableLoad { Type refinedType; };
 struct FResolvable { const Func* callee; };
 
 /*
+ * The instruction can be replaced with a nop.
+ */
+struct FRemovable {};
+
+/*
  * The instruction can be legally replaced with a Jmp to either its next or
  * taken edge.
  */
@@ -290,7 +282,7 @@ struct FJmpNext {};
 struct FJmpTaken {};
 
 using Flags = boost::variant<FNone,FRedundant,FReducible,FRefinableLoad,
-                             FResolvable,FJmpNext,FJmpTaken>;
+                             FResolvable,FRemovable,FJmpNext,FJmpTaken>;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -300,10 +292,7 @@ bool refinable_load_eligible(const IRInstruction& inst) {
     case LdLoc:
     case LdStk:
     case LdMBase:
-    case LdClsRef:
-    case LdCufIterFunc:
-    case LdCufIterCtx:
-    case LdCufIterInvName:
+    case LdClsRefCls:
     case LdMem:
     case LdARFuncPtr:
     case LdARCtx:
@@ -338,7 +327,7 @@ Flags load(Local& env,
 
   auto const meta = env.global.ainfo.find(acls);
   if (!meta) return FNone{};
-  assert(meta->index < kMaxTrackedALocs);
+  assertx(meta->index < kMaxTrackedALocs);
 
   auto& tracked = env.state.tracked[meta->index];
 
@@ -461,14 +450,9 @@ Flags handle_general_effects(Local& env,
     if (auto flags = handleCheck(TInitGen)) return *flags;
     break;
 
-  case CastStk:
   case CoerceStk:
     {
-      auto const stkOffset = [&]{
-        if (inst.is(CastStk)) return inst.extra<CastStk>()->offset;
-        if (inst.is(CoerceStk)) return inst.extra<CoerceStk>()->offset;
-        always_assert(false);
-      }();
+      auto const stkOffset = inst.extra<CoerceStk>()->offset;
       auto const stk =
         canonicalize(AliasClass { AStack { inst.src(0), stkOffset, 1 } });
       always_assert(stk <= canonicalize(m.loads));
@@ -476,39 +460,39 @@ Flags handle_general_effects(Local& env,
       auto const meta = env.global.ainfo.find(stk);
       auto const tloc = find_tracked(env, meta);
       if (!tloc) break;
-      if (inst.op() == CastStk &&
-          inst.typeParam() == TNullableObj &&
-          tloc->knownType <= TNull) {
-        // If we're casting Null to NullableObj, we still need to call
-        // tvCastToNullableObjectInPlace.  See comment there and t3879280 for
-        // details.
-        break;
-      }
       if (tloc->knownType <= inst.typeParam()) {
         return FJmpNext{};
       }
     }
     break;
 
-  case CheckInitSProps:
   case InitSProps: {
-    auto cls = inst.extra<ClassData>()->cls;
-    if (env.state.initSProps.count(cls) > 0) return FJmpNext{};
-    do {
-      // If we initialized a class' sprops, then it implies that all of its
-      // parent's sprops are initialized as well.
-      env.state.initSProps.insert(cls);
-      cls = cls->parent();
-    } while (cls);
+    auto const handle = inst.extra<ClassData>()->cls->sPropInitHandle();
+    if (env.state.initRDS.count(handle) > 0) return FJmpNext{};
+    env.state.initRDS.insert(handle);
     break;
   }
 
-  case CheckInitProps:
   case InitProps: {
-    auto cls = inst.extra<ClassData>()->cls;
-    if (env.state.initProps.count(cls) > 0) return FJmpNext{};
-    // Unlike InitSProps, InitProps implies nothing about the class' parent.
-    env.state.initProps.insert(cls);
+    auto const handle = inst.extra<ClassData>()->cls->propHandle();
+    if (env.state.initRDS.count(handle) > 0) return FJmpNext{};
+    env.state.initRDS.insert(handle);
+    break;
+  }
+
+  case CheckRDSInitialized: {
+    auto const handle = inst.extra<CheckRDSInitialized>()->handle;
+    if (env.state.initRDS.count(handle) > 0) return FJmpNext{};
+    // set this unconditionally; we record taken state before every
+    // instruction, and next state after each instruction
+    env.state.initRDS.insert(handle);
+    break;
+  }
+
+  case MarkRDSInitialized: {
+    auto const handle = inst.extra<MarkRDSInitialized>()->handle;
+    if (env.state.initRDS.count(handle) > 0) return FRemovable{};
+    env.state.initRDS.insert(handle);
     break;
   }
 
@@ -529,12 +513,11 @@ Flags handle_call_effects(Local& env,
   // frame.
   auto const knownCallee = [&]() -> const Func* {
     if (inst.is(Call)) return inst.extra<Call>()->callee;
-    if (inst.is(CallArray)) return inst.extra<CallArray>()->callee;
+    if (inst.is(CallUnpack)) return inst.extra<CallUnpack>()->callee;
     return nullptr;
   }();
 
   Flags flags = FNone{};
-  auto writesLocals = effects.writes_locals;
   if (!knownCallee) {
     if (auto const meta = env.global.ainfo.find(canonicalize(effects.callee))) {
       assertx(meta->index < kMaxTrackedALocs);
@@ -542,16 +525,10 @@ Flags handle_call_effects(Local& env,
         auto const& tracked = env.state.tracked[meta->index];
         if (tracked.knownType.hasConstVal(TFunc)) {
           auto const callee = tracked.knownType.funcVal();
-          if (writesLocals) writesLocals = funcWritesLocals(callee);
           flags = FResolvable { callee };
         }
       }
     }
-  }
-
-  if (writesLocals) {
-    clear_everything(env);
-    return flags;
   }
 
   /*
@@ -559,12 +536,10 @@ Flags handle_call_effects(Local& env,
    * away the values.  We are just doing this to avoid extending lifetimes
    * across php calls, which currently always leads to spilling.
    */
-  auto const keep = env.global.ainfo.all_stack       |
-                    env.global.ainfo.all_frame       |
-                    env.global.ainfo.all_clsRefSlot  |
-                    env.global.ainfo.all_cufIterFunc |
-                    env.global.ainfo.all_cufIterCtx  |
-                    env.global.ainfo.all_cufIterInvName;
+  auto const keep = env.global.ainfo.all_stack          |
+                    env.global.ainfo.all_frame          |
+                    env.global.ainfo.all_clsRefClsSlot  |
+                    env.global.ainfo.all_clsRefTSSlot;
   env.state.avail &= keep;
   for (auto aloc = uint32_t{0};
       aloc < env.global.ainfo.locations.size();
@@ -572,6 +547,9 @@ Flags handle_call_effects(Local& env,
     if (!env.state.avail[aloc]) continue;
     env.state.tracked[aloc].knownValue = nullptr;
   }
+
+  // Any stack locations modified by the callee are no longer valid
+  store(env, effects.stack, nullptr);
 
   return flags;
 }
@@ -657,6 +635,8 @@ Flags analyze_inst(Local& env, const IRInstruction& inst) {
   switch (inst.op()) {
   case CheckType:
   case CheckNonNull:
+  case CheckVArray:
+  case CheckDArray:
     refine_value(env, inst.dst(), inst.src(0));
     break;
   case AssertLoc:
@@ -891,20 +871,16 @@ void resolve_call(Global& env,
     auto& extra = *inst.extra<Call>();
     assertx(extra.callee == nullptr);
     extra.callee = flags.callee;
-    extra.writeLocals = funcWritesLocals(flags.callee);
-    extra.readLocals = funcReadsLocals(flags.callee);
     extra.needsCallerFrame = funcNeedsCallerFrame(flags.callee);
     retypeDests(&inst, &env.unit);
     ++env.callsResolved;
     return;
   }
 
-  if (inst.is(CallArray)) {
-    auto& extra = *inst.extra<CallArray>();
+  if (inst.is(CallUnpack)) {
+    auto& extra = *inst.extra<CallUnpack>();
     assertx(extra.callee == nullptr);
     extra.callee = flags.callee;
-    extra.writeLocals = funcWritesLocals(flags.callee);
-    extra.readLocals = funcReadsLocals(flags.callee);
     retypeDests(&inst, &env.unit);
     ++env.callsResolved;
     return;
@@ -941,6 +917,12 @@ void optimize_inst(Global& env, IRInstruction& inst, Flags flags) {
     [&] (FRefinableLoad f) { refine_load(env, inst, f); },
 
     [&] (FResolvable f) { resolve_call(env, inst, f); },
+
+    [&] (FRemovable) {
+      FTRACE(2, "      removable\n");
+      assertx(!inst.isControlFlow());
+      inst.convertToNop();
+    },
 
     [&] (FJmpNext) {
       FTRACE(2, "      unnecessary\n");
@@ -1064,18 +1046,9 @@ void merge_into(Global& genv, Block* target, State& dst, const State& src) {
     }
   );
 
-  // Properties must be initialized along both paths
-  for (auto it = dst.initSProps.begin(); it != dst.initSProps.end();) {
-    if (!src.initSProps.count(*it)) {
-      it = dst.initSProps.erase(it);
-    } else {
-      ++it;
-    }
-  }
-
-  for (auto it = dst.initProps.begin(); it != dst.initProps.end();) {
-    if (!src.initProps.count(*it)) {
-      it = dst.initProps.erase(it);
+  for (auto it = dst.initRDS.begin(); it != dst.initRDS.end();) {
+    if (!src.initRDS.count(*it)) {
+      it = dst.initRDS.erase(it);
     } else {
       ++it;
     }

@@ -21,6 +21,7 @@
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/srckey.h"
 
 #include "hphp/runtime/vm/jit/extra-data.h"
@@ -35,6 +36,8 @@
 #include "hphp/runtime/vm/jit/translator.h"
 #include "hphp/runtime/vm/jit/type.h"
 
+#include "hphp/util/text-util.h"
+
 namespace HPHP { namespace jit { namespace irgen {
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -43,7 +46,7 @@ namespace {
 
 ///////////////////////////////////////////////////////////////////////////////
 template <class Body>
-void prologDispatch(IRGS& env, const Func* func, Body body) {
+void prologueDispatch(IRGS& env, const Func* func, Body body) {
   assertx(env.irb->curMarker().prologue());
 
   if (!func->mayHaveThis()) {
@@ -72,6 +75,87 @@ void prologDispatch(IRGS& env, const Func* func, Body body) {
   );
 }
 
+// Check if HasReifiedGenerics flag is set
+SSATmp* emitARHasReifiedGenericsTest(IRGS& env) {
+  auto const flags = gen(env, LdARNumArgsAndFlags, fp(env));
+  auto const test = gen(
+    env, AndInt, flags,
+    cns(env, static_cast<int32_t>(ActRec::Flags::HasReifiedGenerics))
+  );
+  return test;
+}
+
+// Load the reified generics from ActRec if the bit is set otherwise set
+// it uninit. We will error at the end of the prologue
+SSATmp* emitLdARReifiedGenericsSafe(IRGS& env) {
+  return cond(
+    env,
+    [&] (Block* taken) {
+      auto const test = emitARHasReifiedGenericsTest(env);
+      gen(env, JmpZero, taken, test);
+    },
+    [&] { return gen(env, LdARReifiedGenerics, fp(env)); },
+    // taken
+    [&] { return cns(env, TUninit); }
+  );
+}
+
+// Check whether HasReifiedGenerics is set on the ActRec
+void emitARHasReifiedGenericsCheck(IRGS& env) {
+  auto const func = curFunc(env);
+  // It is possible to create a reified function and call it with reified
+  // parameters but then, on sandboxes, make this function unreified yet
+  // still call it with reified parameters. We need to catch this, hence
+  // the following check has to happen not only on reified functions but
+  // on all functions when we are not in repo mode.
+  if (!func->hasReifiedGenerics() &&
+      (func->cls() ? func->cls()->attrs() & AttrUnique : func->isUnique()) &&
+      RuntimeOption::RepoAuthoritative) {
+    return;
+  }
+  if (!func->hasReifiedGenerics()) return;
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      auto const test = emitARHasReifiedGenericsTest(env);
+      gen(env, JmpZero, taken, test);
+    },
+    [&] {
+      if (!func->hasReifiedGenerics()) return;
+      hint(env, Block::Hint::Unlikely);
+      auto const msg = folly::sformat(
+        "Cannot call the reified function '{}' without the reified generics",
+        func->fullName());
+      gen(env, RaiseError, cns(env, makeStaticString(msg)));
+    }
+  );
+  // Now that we know that first local is not Tuninit,
+  // lets tell that to the JIT
+  gen(
+    env,
+    AssertLoc,
+    RuntimeOption::EvalHackArrDVArrs ? TVec : TArr,
+    LocalId{func->numParams()},
+    fp(env)
+  );
+}
+
+// Checks whether the reified generics matches the one we expect
+void emitCorrectNumOfReifiedGenericsCheck(IRGS& env) {
+  auto const func = curFunc(env);
+  if (!func->hasReifiedGenerics()) return;
+  // First local contains the reified generics
+  auto const reified_generics =
+    gen(
+      env,
+      LdLoc,
+      RuntimeOption::EvalHackArrDVArrs ? TVec : TArr,
+      LocalId{func->numParams()},
+      fp(env)
+    );
+  gen(env, CheckFunReifiedGenericMismatch, FuncData{func}, reified_generics);
+}
+
 /*
  * Initialize parameters.
  *
@@ -85,6 +169,15 @@ void init_params(IRGS& env, const Func* func, uint32_t argc) {
   constexpr auto kMaxParamsInitUnroll = 5;
 
   auto const nparams = func->numNonVariadicParams();
+
+  if (func->hasReifiedGenerics()) {
+    // Currently does not work with closures
+    assertx(!func->isClosureBody());
+    auto const reified_generics = emitLdARReifiedGenericsSafe(env);
+    gen(env, KillARReifiedGenerics, fp(env));
+    // $0ReifiedGenerics is the first local
+    gen(env, StLoc, LocalId{func->numParams()}, fp(env), reified_generics);
+  }
 
   if (argc < nparams) {
     // Too few arguments; set everything else to Uninit.
@@ -101,11 +194,12 @@ void init_params(IRGS& env, const Func* func, uint32_t argc) {
   if (argc <= nparams && func->hasVariadicCaptureParam()) {
     // Need to initialize `...$args'.
     gen(env, StLoc, LocalId{nparams}, fp(env),
-        cns(env, staticEmptyArray()));
+        cns(env, staticEmptyVArray()));
   }
 
   if (!env.inlineLevel) {
     // Null out or initialize the frame's ExtraArgs.
+    env.irb->exceptionStackBoundary();
     gen(env, InitExtraArgs, FuncEntryData{func, argc}, fp(env));
   }
 }
@@ -156,18 +250,18 @@ void init_use_vars(IRGS& env, const Func* func, SSATmp* closure) {
 
   assertx(func->isClosureBody());
 
-  // Closure object properties are the use vars followed by the static locals
-  // (which are per-instance).
-  auto const nuse = cls->numDeclProperties() - func->numStaticLocals();
+  // Closure object properties are the use vars.
+  auto const nuse = cls->numDeclProperties();
   ptrdiff_t use_var_off = sizeof(ObjectData);
 
   for (auto i = 0; i < nuse; ++i, use_var_off += sizeof(Cell)) {
-    auto const ty = typeFromRAT(cls->declPropRepoAuthType(i), func->cls());
+    auto const ty =
+      typeFromRAT(cls->declPropRepoAuthType(i), func->cls()) & TCell;
     auto const addr = gen(
       env,
       LdPropAddr,
       ByteOffsetData { use_var_off },
-      ty.ptr(Ptr::Prop),
+      ty.lval(Ptr::Prop),
       closure
     );
     auto const prop = gen(env, LdMem, ty, addr);
@@ -194,10 +288,11 @@ void init_locals(IRGS& env, const Func* func) {
   auto num_inited = func->numParams();
 
   if (func->isClosureBody()) {
-    auto const nuse = func->implCls()->numDeclProperties() -
-                      func->numStaticLocals();
+    auto const nuse = func->implCls()->numDeclProperties();
     num_inited += 1 + nuse;
   }
+
+  if (func->hasReifiedGenerics()) num_inited++;
 
   // We set to Uninit all locals beyond any params and any closure use vars.
   if (num_inited < nlocals) {
@@ -213,9 +308,9 @@ void init_locals(IRGS& env, const Func* func) {
 }
 
 /*
- * Emit raise-warnings for any missing arguments.
+ * Emit raise-warnings for any missing or too many arguments.
  */
-void warn_missing_args(IRGS& env, uint32_t argc) {
+void warn_argument_arity(IRGS& env, uint32_t argc) {
   auto const func = env.context.func;
   auto const nparams = func->numNonVariadicParams();
 
@@ -229,6 +324,9 @@ void warn_missing_args(IRGS& env, uint32_t argc) {
         break;
       }
     }
+  }
+  if (!func->hasVariadicCaptureParam() && argc > nparams) {
+    gen(env, RaiseTooManyArg, FuncArgData { func, argc });
   }
 }
 
@@ -244,7 +342,7 @@ enum class StackCheck {
 };
 
 StackCheck stack_check_kind(const Func* func, uint32_t argc) {
-  if (func->attrs() & AttrPhpLeafFn &&
+  if (func->isPhpLeafFn() &&
       func->maxStackCells() < kStackCheckLeafPadding) {
     return StackCheck::None;
   }
@@ -302,7 +400,7 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
   auto const func = env.context.func;
 
   // Increment profiling counter.
-  if (env.context.kind == TransKind::ProfPrologue) {
+  if (isProfiling(env.context.kind)) {
     gen(env, IncProfCounter, TransIDData{transID});
     profData()->setProfiling(func->getFuncId());
   }
@@ -316,7 +414,7 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
   for (uint32_t slot = 0; slot < func->numClsRefSlots(); ++slot) {
     killClsRef(env, slot);
   }
-  warn_missing_args(env, argc);
+  warn_argument_arity(env, argc);
 
   // Check surprise flags in the same place as the interpreter: after setting
   // up the callee's frame but before executing any of its code.
@@ -327,7 +425,12 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
     gen(env, CheckSurpriseFlagsEnter, FuncEntryData { func, argc }, fp(env));
   }
 
-  prologDispatch(
+  emitARHasReifiedGenericsCheck(env);
+  emitCorrectNumOfReifiedGenericsCheck(env);
+  emitCalleeDynamicCallCheck(env);
+  emitCallMCheck(env);
+
+  prologueDispatch(
     env, func,
     [&] (bool hasThis) {
       // Emit the bindjmp for the function body.
@@ -335,7 +438,8 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
         env,
         ReqBindJmp,
         ReqBindJmpData {
-          SrcKey { func, func->getEntryForNumArgs(argc), false, hasThis },
+          SrcKey { func, func->getEntryForNumArgs(argc), ResumeMode::None,
+                   hasThis },
           FPInvOffset { func->numSlotsInFrame() },
           spOffBCFromIRSP(env),
           TransFlags{}
@@ -375,7 +479,7 @@ void emitMagicFuncPrologue(IRGS& env, uint32_t argc, TransID transID) {
   // Pack the passed args into an array, then store it as the second param.
   // This has to happen before we write the first param.
   auto const args_arr = (argc == 0)
-    ? cns(env, staticEmptyArray())
+    ? cns(env, staticEmptyVArray())
     : gen(env, PackMagicArgs, fp(env));
   gen(env, StLoc, LocalId{1}, fp(env), args_arr);
 
@@ -385,8 +489,21 @@ void emitMagicFuncPrologue(IRGS& env, uint32_t argc, TransID transID) {
   gen(env, StLoc, LocalId{0}, fp(env), inv_name);
   gen(env, StARInvName, fp(env), cns(env, nullptr));
 
-  // We set m_numArgsAndFlags even if `argc == 2' in order to reset the flags.
-  gen(env, StARNumArgsAndFlags, fp(env), cns(env, 2));
+  // Reset all the flags except for the dynamic call flag and set the argument
+  // count to 2.
+  auto const flag = gen(
+    env,
+    AndInt,
+    gen(env, LdARNumArgsAndFlags, fp(env)),
+    cns(env, static_cast<int32_t>(ActRec::Flags::DynamicCall))
+  );
+  auto combined = gen(
+    env,
+    OrInt,
+    flag,
+    cns(env, ActRec::encodeNumArgsAndFlags(2, ActRec::Flags::None))
+  );
+  gen(env, StARNumArgsAndFlags, fp(env), combined);
 
   // Jmp to the two-argument prologue, or emit it if it doesn't exist yet.
   if (two_arg_prologue) {
@@ -424,7 +541,11 @@ void emitFuncBodyDispatch(IRGS& env, const DVFuncletsVec& dvs) {
   auto const func = env.context.func;
   auto const num_args = gen(env, LdARNumParams, fp(env));
 
-  prologDispatch(
+  if (isProfiling(env.context.kind)) {
+    profData()->setProfiling(func->getFuncId());
+  }
+
+  prologueDispatch(
     env, func,
     [&] (bool hasThis) {
       for (auto const& dv : dvs) {
@@ -439,7 +560,7 @@ void emitFuncBodyDispatch(IRGS& env, const DVFuncletsVec& dvs) {
               env,
               ReqBindJmp,
               ReqBindJmpData {
-                SrcKey { func, dv.second, false, hasThis },
+                SrcKey { func, dv.second, ResumeMode::None, hasThis },
                 FPInvOffset { func->numSlotsInFrame() },
                 spOffBCFromIRSP(env),
                 TransFlags{}
@@ -455,7 +576,7 @@ void emitFuncBodyDispatch(IRGS& env, const DVFuncletsVec& dvs) {
         env,
         ReqBindJmp,
         ReqBindJmpData {
-          SrcKey { func, func->base(), false, hasThis },
+          SrcKey { func, func->base(), ResumeMode::None, hasThis },
           FPInvOffset { func->numSlotsInFrame() },
           spOffBCFromIRSP(env),
           TransFlags{}
@@ -466,6 +587,69 @@ void emitFuncBodyDispatch(IRGS& env, const DVFuncletsVec& dvs) {
     }
   );
 }
+
+void emitCalleeDynamicCallCheck(IRGS& env) {
+  auto const func = curFunc(env);
+
+  if (!(RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin())) {
+    return;
+  }
+
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      auto flags = gen(env, LdARNumArgsAndFlags, fp(env));
+      auto test = gen(
+        env, AndInt, flags,
+        cns(env, static_cast<int32_t>(ActRec::Flags::DynamicCall))
+      );
+      gen(env, JmpNZero, taken, test);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+
+      std::string str;
+      string_printf(
+        str,
+        Strings::FUNCTION_CALLED_DYNAMICALLY,
+        func->fullDisplayName()->data()
+      );
+      auto const msg = cns(env, makeStaticString(str));
+
+      if (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin()) {
+        gen(env, RaiseNotice, msg);
+      }
+    }
+  );
+}
+
+const StaticString
+  s_inoutError("In/out function called dynamically without inout annotations");
+
+void emitCallMCheck(IRGS& env) {
+  auto const func = curFunc(env);
+
+  if (!func->takesInOutParams()) {
+    return;
+  }
+
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      auto flags = gen(env, LdARNumArgsAndFlags, fp(env));
+      auto test = gen(
+        env, AndInt, flags,
+        cns(env, static_cast<int32_t>(ActRec::Flags::MultiReturn))
+      );
+      gen(env, JmpZero, taken, test);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, RaiseError, cns(env, s_inoutError.get()));
+    }
+  );
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -55,7 +55,7 @@ function test_create_instance_with_no_locale_fails() {
 
 function test_create_instance_with_null_locale_fails() {
   EXPECT_NO_LOCALE(function () {
-    IntlDatePatternGenerator::createInstance(null);
+    IntlDatePatternGenerator::createInstance('');
   });
 }
 
@@ -84,7 +84,7 @@ function test_get_skeleton() {
   $skeleton = "";
   $gen = IntlDatePatternGenerator::createInstance('en_US');
 
-  VS($gen->getSkeleton(null), '');
+  VS($gen->getSkeleton(''), '');
   VS($gen->getSkeleton('dd/MM/yyyy'), 'yyyyMMdd');
 
   EXPECT_INVALID_STR($gen, function () use ($gen) {
@@ -95,7 +95,7 @@ function test_get_skeleton() {
 function test_get_base_skeleton() {
   $gen = IntlDatePatternGenerator::createInstance('en_US');
 
-  VS($gen->getBaseSkeleton(null), '');
+  VS($gen->getBaseSkeleton(''), '');
   VS($gen->getBaseSkeleton('dd/MM/yyyy'), 'yMd');
 
   EXPECT_INVALID_STR($gen, function () use ($gen) {
@@ -299,6 +299,9 @@ function test_get_error() {
   });
 }
 
+
+<<__EntryPoint>>
+function main_date_pattern_gen() {
 $tests = array(
   'test_create_instance_with_no_locale_fails',
   'test_create_instance_with_null_locale_fails',
@@ -322,4 +325,5 @@ $tests = array(
 foreach ($tests as $test) {
   echo "Running $test\n";
   $test();
+}
 }

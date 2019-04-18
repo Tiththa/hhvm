@@ -1,18 +1,24 @@
-<?hh
+<?hh // partial
 
-  function f () {
-    return 1;
+  function f (bool $b) {
+    if ($b) {
+      return 1;
+    }
     return 1.0;
   }
 
-  function g () {
-    return 'str';
+  function g (bool $b) {
+    if ($b) {
+      return 'str';
+    }
     return 1;
     }
 
   class C  {
-    public function meth1 () {
-      return 'one';
+    public function meth1 (bool $b) {
+      if ($b) {
+        return 'one';
+      }
       return 'two';
     }
 

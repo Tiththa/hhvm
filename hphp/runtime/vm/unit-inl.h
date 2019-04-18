@@ -20,8 +20,10 @@
 
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/type-string.h"
+#include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/litstr-table.h"
+#include "hphp/runtime/vm/unit-util.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -110,11 +112,6 @@ Unit::MergeInfo::MutableFuncRange Unit::MergeInfo::nonMainFuncs() const {
   return { funcBegin() + 1, funcEnd() };
 }
 
-inline
-Unit::MergeInfo::MutableFuncRange Unit::MergeInfo::hoistableFuncs() const {
-  return { funcHoistableBegin(), funcEnd() };
-}
-
 inline void*& Unit::MergeInfo::mergeableObj(int idx) {
   return m_mergeables[idx];
 }
@@ -126,6 +123,16 @@ inline void** Unit::MergeInfo::mergeableData(int idx) {
 ///////////////////////////////////////////////////////////////////////////////
 // Basic accessors.
 
+inline UnitExtended* Unit::getExtended() {
+  assertx(m_extended);
+  return static_cast<UnitExtended*>(this);
+}
+
+inline const UnitExtended* Unit::getExtended() const {
+  assertx(m_extended);
+  return static_cast<const UnitExtended*>(this);
+}
+
 inline int Unit::repoID() const {
   return m_repoId;
 }
@@ -134,18 +141,22 @@ inline int64_t Unit::sn() const {
   return m_sn;
 }
 
-inline MD5 Unit::md5() const {
-  return m_md5;
+inline SHA1 Unit::sha1() const {
+  return m_sha1;
 }
 
 inline const StringData* Unit::filepath() const {
-  assert(m_filepath);
+  assertx(m_filepath);
   return m_filepath;
 }
 
 inline const StringData* Unit::dirpath() const {
-  assert(m_dirpath);
+  assertx(m_dirpath);
   return m_dirpath;
+}
+
+inline bool Unit::isICE() const {
+  return m_ICE;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -160,12 +171,12 @@ inline Offset Unit::bclen() const {
 }
 
 inline PC Unit::at(Offset off) const {
-  assert(off >= 0 && off <= Offset(m_bclen));
+  assertx(off >= 0 && off <= Offset(m_bclen));
   return m_bc + off;
 }
 
 inline Offset Unit::offsetOf(PC pc) const {
-  assert(contains(pc));
+  assertx(contains(pc));
   return pc - m_bc;
 }
 
@@ -174,7 +185,7 @@ inline bool Unit::contains(PC pc) const {
 }
 
 inline Op Unit::getOp(Offset instrOffset) const {
-  assert(instrOffset < m_bclen);
+  assertx(instrOffset < m_bclen);
   return peek_op(m_bc + instrOffset);
 }
 
@@ -182,7 +193,8 @@ inline Op Unit::getOp(Offset instrOffset) const {
 // Litstrs and NamedEntitys.
 
 inline size_t Unit::numLitstrs() const {
-  return m_namedInfo.size();
+  if (!m_extended) return 0;
+  return getExtended()->m_namedInfo.size();
 }
 
 inline bool Unit::isLitstrId(Id id) const {
@@ -190,7 +202,7 @@ inline bool Unit::isLitstrId(Id id) const {
     auto globalID = decodeGlobalLitstrId(id);
     return LitstrTable::get().contains(globalID);
   }
-  return m_namedInfo.contains(id);
+  return m_extended && getExtended()->m_namedInfo.contains(id);
 }
 
 inline StringData* Unit::lookupLitstrId(Id id) const {
@@ -198,19 +210,19 @@ inline StringData* Unit::lookupLitstrId(Id id) const {
     auto globalID = decodeGlobalLitstrId(id);
     return LitstrTable::get().lookupLitstrId(globalID);
   }
-  return m_namedInfo.lookupLitstr(id);
+  return getExtended()->m_namedInfo.lookupLitstr(id);
 }
 
 inline const NamedEntity* Unit::lookupNamedEntityId(Id id) const {
   return lookupNamedEntityPairId(id).second;
 }
 
-inline const NamedEntityPair& Unit::lookupNamedEntityPairId(Id id) const {
+inline NamedEntityPair Unit::lookupNamedEntityPairId(Id id) const {
   if (isGlobalLitstrId(id)) {
     auto globalID = decodeGlobalLitstrId(id);
     return LitstrTable::get().lookupNamedEntityPairId(globalID);
   }
-  return m_namedInfo.lookupNamedEntityPair(id);
+  return getExtended()->m_namedInfo.lookupNamedEntityPair(id);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -221,25 +233,36 @@ inline size_t Unit::numArrays() const {
 }
 
 inline const ArrayData* Unit::lookupArrayId(Id id) const {
-  assert(id < m_arrays.size());
+  assertx(id < m_arrays.size());
   return m_arrays[id];
 }
 
+inline const RepoAuthType::Array* Unit::lookupArrayTypeId(Id id) const {
+  return RuntimeOption::RepoAuthoritative ?
+    globalArrayTypeTable().lookup(id) :
+    getExtended()->m_arrayTypeTable.lookup(id);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
-// Funcs and PreClasses.
+// Funcs and PreClasses and Records.
 
 inline Func* Unit::lookupFuncId(Id id) const {
-  assert(id < Id(m_mergeInfo->m_firstHoistablePreClass));
-  return m_mergeInfo->funcBegin()[id];
+  assertx(id < Id(mergeInfo()->m_firstHoistablePreClass));
+  return mergeInfo()->funcBegin()[id];
 }
 
 inline PreClass* Unit::lookupPreClassId(Id id) const {
-  assert(id < Id(m_preClasses.size()));
+  assertx(id < Id(m_preClasses.size()));
   return m_preClasses[id].get();
 }
 
+inline Record* Unit::lookupRecordId(Id id) const {
+  assertx(id < Id(m_records.size()));
+  return m_records[id].get();
+}
+
 inline Unit::FuncRange Unit::funcs() const {
-  return m_mergeInfo->funcs();
+  return mergeInfo()->funcs();
 }
 
 inline folly::Range<PreClassPtr*> Unit::preclasses() {
@@ -250,8 +273,12 @@ inline folly::Range<const PreClassPtr*> Unit::preclasses() const {
   return { m_preClasses.data(), m_preClasses.size() };
 }
 
-inline Func* Unit::firstHoistable() const {
-  return *m_mergeInfo->funcHoistableBegin();
+inline folly::Range<RecordPtr*> Unit::records() {
+  return { m_records.data(), m_records.size() };
+}
+
+inline folly::Range<const RecordPtr*> Unit::records() const {
+  return { m_records.data(), m_records.size() };
 }
 
 template<class Fn> void Unit::forEachFunc(Fn fn) const {
@@ -275,6 +302,24 @@ inline folly::Range<TypeAlias*> Unit::typeAliases() {
 
 inline folly::Range<const TypeAlias*> Unit::typeAliases() const {
   return { m_typeAliases.begin(), m_typeAliases.end() };
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// File attributes
+
+inline const UserAttributeMap& Unit::fileAttributes() const {
+  return m_fileAttributes;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Record lookup.
+
+inline Record* Unit::lookupRecord(const NamedEntity* ne) {
+  return ne->getCachedRecord();
+}
+
+inline Record* Unit::lookupRecord(const StringData* name) {
+  return lookupRecord(NamedEntity::get(name));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -308,7 +353,21 @@ inline Class* Unit::loadClass(const StringData* name) {
   if (normStr) {
     name = normStr.get();
   }
-  return loadClass(ne, name);
+  auto class_ = loadClass(ne, name);
+  if (LIKELY(class_ != nullptr) || !isReifiedName(name)) return class_;
+  // We are loading a reified class for the first time
+  name = stripTypeFromReifiedName(name);
+  auto generic_ne = NamedEntity::get(name, true, &normStr);
+  if (normStr) {
+    name = normStr.get();
+  }
+  class_ = loadClass(generic_ne, name);
+  // If the class still does not exists, return null
+  if (!class_) return nullptr;
+  ne->m_cachedClass.bind(
+    classHasPersistentRDS(class_) ? rds::Mode::Persistent : rds::Mode::Normal);
+  ne->setCachedClass(class_);
+  return class_;
 }
 
 inline Class* Unit::getClass(const StringData* name, bool tryAutoload) {
@@ -328,11 +387,11 @@ inline bool Unit::isMergeOnly() const {
 }
 
 inline bool Unit::isEmpty() const {
-  return m_mergeState & MergeState::Empty;
+  return m_mergeState.load(std::memory_order_relaxed) & MergeState::Empty;
 }
 
 inline const TypedValue* Unit::getMainReturn() const {
-  assert(isMergeOnly());
+  assertx(isMergeOnly());
   return &m_mainReturn;
 }
 
@@ -357,6 +416,10 @@ inline bool Unit::useStrictTypes() const {
 
 inline bool Unit::useStrictTypesForBuiltins() const {
   return m_useStrictTypesForBuiltins;
+}
+
+inline UserAttributeMap Unit::metaData() const {
+  return m_metaData;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

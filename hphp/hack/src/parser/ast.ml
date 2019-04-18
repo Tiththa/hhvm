@@ -2,9 +2,8 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -15,6 +14,34 @@ include Ast_defs
 (*****************************************************************************)
 
 type program = def list
+[@@deriving show { with_path = false },
+            visitors {
+              variety = "endo";
+              nude=true;
+              visit_prefix="on_";
+              ancestors=["endo_defs"];
+            },
+            visitors {
+              variety = "reduce";
+              nude=true;
+              visit_prefix="on_";
+              ancestors=["reduce_defs"];
+            },
+            visitors {
+              variety = "map";
+              nude=true;
+              visit_prefix="on_";
+              ancestors=["map_defs"];
+            },
+            visitors {
+              variety = "iter";
+              nude=true;
+              visit_prefix="on_";
+              ancestors=["iter_defs"];
+            }]
+
+and nsenv = Namespace_env.env [@opaque]
+and fimode = FileInfo.mode [@visitors.opaque]
 
 and def =
   | Fun of fun_
@@ -24,7 +51,27 @@ and def =
   | Constant of gconst
   | Namespace of id * program
   | NamespaceUse of (ns_kind * id * id) list
-  | SetNamespaceEnv of Namespace_env.env
+  | SetNamespaceEnv of nsenv
+  | FileAttributes of file_attributes
+
+and ns_kind =
+  | NSNamespace
+  | NSClass
+  | NSClassAndNamespace
+  | NSFun
+  | NSConst
+
+and trait_req_kind =
+  | MustExtend
+  | MustImplement
+
+and kind =
+  | Final
+  | Static
+  | Abstract
+  | Private
+  | Public
+  | Protected
 
 and typedef = {
   t_id: id;
@@ -32,20 +79,36 @@ and typedef = {
   t_constraint: tconstraint;
   t_kind: typedef_kind;
   t_user_attributes: user_attribute list;
-  t_namespace: Namespace_env.env;
-  t_mode: FileInfo.mode;
+  t_namespace: nsenv;
+  t_mode: fimode;
+}
+
+and file_attributes = {
+  fa_user_attributes: user_attribute list;
+  fa_namespace: nsenv;
 }
 
 and gconst = {
-  cst_mode: FileInfo.mode;
-  cst_kind: cst_kind;
+  cst_mode: fimode;
   cst_name: id;
   cst_type: hint option;
   cst_value: expr;
-  cst_namespace: Namespace_env.env;
+  cst_namespace: nsenv;
+  cst_span: pos;
 }
 
-and tparam = variance * id * (constraint_kind * hint) list
+and targ = hint
+and collection_targ =
+  | CollectionTV of targ
+  | CollectionTKV of targ * targ
+
+and tparam = {
+  tp_variance: variance;
+  tp_name: id;
+  tp_constraints: (constraint_kind * hint) list;
+  tp_reified: reified;
+  tp_user_attributes: user_attribute list;
+}
 
 and tconstraint = hint option
 
@@ -54,8 +117,9 @@ and typedef_kind =
   | NewType of hint
 
 and class_ = {
-  c_mode: FileInfo.mode;
+  c_mode: fimode;
   c_user_attributes: user_attribute list;
+  c_file_attributes: file_attributes list;
   c_final: bool;
   c_kind: class_kind;
   c_is_xhp: bool;
@@ -64,9 +128,9 @@ and class_ = {
   c_extends: hint list;
   c_implements: hint list;
   c_body: class_elt list;
-  c_namespace: Namespace_env.env;
+  c_namespace: nsenv;
   c_enum: enum_ option;
-  c_span: Pos.t;
+  c_span: pos;
   c_doc_comment : string option;
 }
 
@@ -87,17 +151,29 @@ and class_elt =
   | TypeConst of typeconst
   | ClassUse of hint
   (* as expressions *)
-  | ClassUseAlias of id option * pstring * id option * kind option
+  | ClassUseAlias of id option * pstring * id option * kind list
   (* insteadof expressions *)
   | ClassUsePrecedence of id * pstring * id list
   | XhpAttrUse of hint
   | ClassTraitRequire of trait_req_kind * hint
-  | ClassVars of kind list * hint option * class_var list
+  | ClassVars of class_vars_
   | XhpAttr of hint option * class_var * bool *
-               ((Pos.t * expr list) option)
+               ((pos * bool * expr list) option)
   | Method of method_
-  | XhpCategory of pstring list
-  | XhpChild of xhp_child
+  | MethodTraitResolution of method_trait_resolution
+  | XhpCategory of pos * (pstring list)
+  | XhpChild of pos * xhp_child
+  (* Pocket Universes definition embedded in a class *)
+  | ClassEnum of bool * id * pufield list
+
+and pufield =
+  | PUAtomDecl of id * pumapping list
+  | PUCaseType of id
+  | PUCaseTypeExpr of hint * id
+
+and pumapping =
+  | PUMappingID of id * expr
+  | PUMappingType of id * hint
 
 and xhp_child =
   | ChildName of id
@@ -165,7 +241,16 @@ and ca_type =
  * The "lowest common denominator" of all those cases is to treat the property
  * extent as span of name + initializer, if present.
  *)
-and class_var = Pos.t * id * expr option
+and class_var = pos * id * expr option
+
+and class_vars_ = {
+  cv_kinds: kind list;
+  cv_hint: hint option;
+  cv_is_promoted_variadic: is_variadic;
+  cv_names: class_var list;
+  cv_doc_comment: string option;
+  cv_user_attributes: user_attribute list;
+}
 
 and method_ = {
   m_kind: kind list ;
@@ -176,18 +261,32 @@ and method_ = {
   m_body: block;
   m_user_attributes : user_attribute list;
   m_ret: hint option;
-  m_ret_by_ref: bool;
   m_fun_kind: fun_kind;
-  m_span: Pos.t;
+  m_span: pos;
   m_doc_comment: string option;
+  m_external: bool;
+}
+
+and method_trait_resolution = {
+  mt_kind: kind list ;
+  mt_tparams: tparam list;
+  mt_constrs: (hint * constraint_kind * hint) list;
+  mt_name: id;
+  mt_params: fun_param list;
+  mt_user_attributes : user_attribute list;
+  mt_ret: hint option;
+  mt_fun_kind: fun_kind;
+  mt_trait: hint;
+  mt_method: pstring;
 }
 
 and typeconst = {
+  tconst_user_attributes: user_attribute list;
   tconst_abstract: bool;
   tconst_name: id;
   tconst_constraint: hint option;
   tconst_type: hint option;
-  tconst_span: Pos.t;
+  tconst_span: pos;
 }
 
 and is_reference = bool
@@ -204,33 +303,41 @@ and fun_param = {
    * can be only Public or Protected or Private.
    *)
   param_modifier: kind option;
+  param_callconv: param_kind option;
   param_user_attributes: user_attribute list;
 }
 
 and fun_ = {
-  f_mode            : FileInfo.mode;
+  f_mode            : fimode;
   f_tparams         : tparam list;
   f_constrs         : (hint * constraint_kind * hint) list;
   f_ret             : hint option;
-  f_ret_by_ref      : bool;
   f_name            : id;
   f_params          : fun_param list;
   f_body            : block;
   f_user_attributes : user_attribute list;
+  f_file_attributes : file_attributes list;
   f_fun_kind        : fun_kind;
-  f_namespace       : Namespace_env.env;
-  f_span            : Pos.t;
+  f_namespace       : nsenv;
+  f_span            : pos;
   f_doc_comment     : string option;
   f_static          : bool;
+  f_external        : bool;
 }
 
-and hint = Pos.t * hint_
+and is_coroutine = bool
+and hint = pos * hint_
+and variadic_hint =
+  | Hvariadic of hint option
+  | Hnon_variadic
 and hint_ =
   | Hoption of hint
-  | Hfun of hint list * bool * hint
+  | Hlike of hint
+  | Hfun of is_coroutine * hint list * param_kind option list * variadic_hint * hint
   | Htuple of hint list
   | Happly of id * hint list
   | Hshape of shape_info
+
  (* This represents the use of a type const. Type consts are accessed like
   * regular consts in Hack, i.e.
   *
@@ -258,73 +365,83 @@ and shape_field = {
   sf_hint : hint;
 }
 
-and stmt =
+and using_stmt = {
+  us_is_block_scoped: bool;
+  us_has_await: bool;
+  us_expr: expr;
+  us_block: block;
+}
+
+and stmt = pos * stmt_
+and stmt_ =
   | Unsafe
   | Fallthrough
   | Expr of expr
   | Block of block
-  | Break of Pos.t * int option
-  | Continue of Pos.t * int option
+  | Break of expr option
+  | Continue of expr option
   | Throw of expr
-  | Return of Pos.t * expr option
+  | Return of expr option
   | GotoLabel of pstring
   | Goto of pstring
-  | Static_var of expr list
-  | Global_var of expr list
   | If of expr * block * block
   | Do of block * expr
   | While of expr * block
   | For of expr * expr * expr * block
   | Switch of expr * case list
-  | Foreach of expr * Pos.t option (* await as *) * as_expr * block
+  | Foreach of expr * pos option (* await as *) * as_expr * block
   | Try of block * catch list * block
   | Def_inline of def
   | Noop
   | Markup of pstring * expr option
+  | Using of using_stmt
+  | Declare of (* is_block *) bool * expr * block
+  | Let of id * hint option * expr
+  | Awaitall of (id option * expr) list * block
 
 and as_expr =
   | As_v of expr
   | As_kv of expr * expr
 
+and xhp_attribute =
+  | Xhp_simple of id * expr
+  | Xhp_spread of expr
+
 and block = stmt list
 
-and expr = Pos.t * expr_
+and expr = pos * expr_
 and expr_ =
   | Array of afield list
-  | Varray of expr list
-  | Darray of (expr * expr) list
+  | Varray of targ option * expr list
+  | Darray of (targ * targ) option * (expr * expr) list
   | Shape of (shape_field_name * expr) list
-  | Collection of id * afield list
+  | Collection of id * collection_targ option * afield list
   | Null
   | True
   | False
   | Omitted
   | Id of id
-  | Id_type_arguments of id * hint list
   (* Special case: the pipe variable $$ *)
   | Lvar of id
-  (**
-   * PHP's Variable variable. The int is number of variable indirections
-   * (i.e. number of extra $ signs.)
-   *
-   * Example:
-     * $$$sample has int = 2.
-   * *)
-  | Lvarvar of int * id
   | Clone of expr
   | Obj_get of expr * expr * og_null_flavor
   | Array_get of expr * expr option
-  | Class_get of id * expr
-  | Class_const of id * pstring
-  | Call of expr * hint list * expr list * expr list
-  | Int of pstring
-  | Float of pstring
-  | String of pstring
+  | Class_get of expr * expr
+  | Class_const of expr * pstring
+  (* Call expression:
+   *   callee * type arguments * normal arguments * unpack arguments
+   *)
+  | Call of expr * targ list * expr list * expr list
+  | Int of string
+  | Float of string
+  | String of string
   | String2 of expr list
+  | PrefixedString of string * expr
   | Yield of afield
   | Yield_break
   | Yield_from of expr
   | Await of expr
+  | Suspend of expr
   | List of expr list
   | Expr_list of expr list
   | Cast of hint * expr
@@ -332,21 +449,32 @@ and expr_ =
   | Binop of bop * expr * expr
   | Pipe of expr * expr
   | Eif of expr * expr option * expr
-  | NullCoalesce of expr * expr
   | InstanceOf of expr * expr
+  | Is of expr * hint
+  | As of expr * hint * (* is nullable *) bool
+  (* Braced expression exists so we can distinguish $f->${x} from $f->{x}
+   * and $f->$x, each of which has different semantics.
+   *)
   | BracedExpr of expr
-  | New of expr * expr list * expr list
+  | ParenthesizedExpr of expr
+  | New of expr * targ list * expr list * expr list
+  | Record of expr * (expr * expr) list
   (* Traditional PHP-style closure with a use list. Each use element is
-    a name and a bool indicating if its a reference or value *)
-  | Efun of fun_ * (id * bool) list
+    a variable name. *)
+  | Efun of fun_ * id list
   (*
    * Hack-style lambda expressions (no id list, we'll find the captures
    * during name resolution).
    *)
   | Lfun of fun_
-  | Xml of id * (id * expr) list * expr list
+  | Xml of id * xhp_attribute list * expr list
   | Unsafeexpr of expr
   | Import of import_flavor * expr
+  | Callconv of param_kind * expr
+  (* Pocket Universe citizen, :@foo *)
+  | PU_atom of id
+  (* Pocket Universe invocation, ClassName:@FieldName::PUExpression *)
+  | PU_identifier of expr * id * id
 
 and import_flavor =
   | Include
@@ -379,3 +507,11 @@ type any =
   | AProgram of program
 
  (* with tarzan *)
+
+let string_of_kind = function
+  | Final -> "final"
+  | Static -> "static"
+  | Abstract -> "abstract"
+  | Private -> "private"
+  | Public -> "public"
+  | Protected -> "protected"

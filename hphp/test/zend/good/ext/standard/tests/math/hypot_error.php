@@ -7,11 +7,9 @@
 echo "*** Testing hypot() : error conditions ***\n";
 
 echo "\n-- Testing hypot() function with less than expected no. of arguments --\n";
-hypot();
-hypot(36);
+try { hypot(); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+try { hypot(36); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "\n-- Testing hypot() function with more than expected no. of arguments --\n";
-hypot(36,25,0);
-
-?>
-===Done===
+try { hypot(36,25,0); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+echo "===Done===";

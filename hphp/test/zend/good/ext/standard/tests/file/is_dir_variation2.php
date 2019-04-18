@@ -7,7 +7,7 @@
 /* Testing is_dir() with dir, soft & hard link to dir,
      and with file, soft & hard link to file */
 
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 echo "*** Testing is_dir() with dir and links to dir ***\n";
 echo "-- With dir --\n";
@@ -44,10 +44,8 @@ var_dump( is_dir($file_path."/is_dir_variation2_link.tmp") );
 clearstatcache();
 
 echo "\n*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
-$file_path = dirname(__FILE__);
+error_reporting(0);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 if(file_exists($file_path."/is_dir_variation2_symlink")) {
   unlink($file_path."/is_dir_variation2_symlink");
 }
@@ -66,4 +64,3 @@ if(file_exists($file_path."/is_dir_variation2.tmp")) {
 if(file_exists($file_path."/is_dir_variation2")) {
   rmdir($file_path."/is_dir_variation2");
 }
-?>

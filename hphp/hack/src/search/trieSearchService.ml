@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Hh_core
 open String_utils
 open Utils
 
@@ -19,14 +18,14 @@ module Make(S : SearchUtils.Searchable) = struct
   (* Shared memory for workers to put lists of pairs of keys and results
     * of our index. Indexed on file name. Cached because we read from here
     * every time the user searches *)
-  module SearchUpdates = SharedMem.WithCache (Relative_path.S) (struct
+  module SearchUpdates = SharedMem.WithCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
     type t = (string * (FileInfo.pos, S.t) term) list
     let prefix = Prefix.make()
     let description = "SearchUpdates"
   end)
   (* Maps file name to a list of keys that the file has results for *)
   (* This is only read once per update, so cache gives us no advantage *)
-  module SearchKeys = SharedMem.NoCache (Relative_path.S) (struct
+  module SearchKeys = SharedMem.NoCache (SharedMem.ProfiledImmediate) (Relative_path.S) (struct
     type t = string list
     let prefix = Prefix.make()
     let description = "SearchKeys"
@@ -76,7 +75,7 @@ module Make(S : SearchUtils.Searchable) = struct
 
     let process_term_for_search key =
       (* When performing user searches, we want them to be case-insensitive *)
-      process_term (String.lowercase key)
+      process_term (String.lowercase_ascii key)
 
     let update fn trie_defs =
       SearchUpdates.add fn trie_defs;
@@ -219,10 +218,12 @@ module Make(S : SearchUtils.Searchable) = struct
       let str = Utils.strip_ns input in
       let short_key = simplify_key str in
       (* get all the keys beneath short_key in the trie *)
+      let trie_limit = 25 in
       let keys =
-        try Trie.find_prefix_limit 25 trie short_key (fun k _ -> k)
+        try Trie.find_prefix_limit trie_limit trie short_key (fun k _ -> k)
         with Not_found -> []
       in
+      let is_complete = List.length keys < trie_limit in
 
       let results = ref [] in
       let results_count = ref 0 in
@@ -240,12 +241,12 @@ module Make(S : SearchUtils.Searchable) = struct
             end
           end
         end;
-        { With_complete_flag.is_complete = true; value = !results; }
+        { With_complete_flag.is_complete; value = !results; }
       with Search_limit ->
         { With_complete_flag.is_complete = false; value = !results; }
 
     let search_query input type_ =
-      let input = String.lowercase input in
+      let input = String.lowercase_ascii input in
       (* We allow all None classes through the filter *)
       let compute_score str key res =
         match type_ with
@@ -253,7 +254,7 @@ module Make(S : SearchUtils.Searchable) = struct
           None
         | _ -> begin
           let score =
-            if string_starts_with (String.lowercase res.name) str
+            if string_starts_with (String.lowercase_ascii res.name) str
             then get_score res str
             else (String.length key) * 2
           in Some (res, score)

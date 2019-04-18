@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -17,70 +16,30 @@
  *
  *)
 
+open Core_kernel
+
 module SourceText = Full_fidelity_source_text
-module Parser = Full_fidelity_parser
+module Env = Full_fidelity_parser_env
 module SyntaxError = Full_fidelity_syntax_error
-module TK = Full_fidelity_token_kind
-open Full_fidelity_minimal_syntax
+
+module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
+module WithSmartConstructors(SCI : SmartConstructors.SmartConstructors_S
+  with type r = Syntax.t
+  with module Token = Syntax.Token
+) = struct
+
+module Parser_ = Full_fidelity_parser.WithSyntax(Syntax)
+module Parser = Parser_.WithSmartConstructors(SCI)
+
+open Syntax
 
 type t = {
   text : SourceText.t;
-  root : Full_fidelity_minimal_syntax.t;
+  root : Syntax.t;
   errors : SyntaxError.t list;
-  language : string;
-  mode : string
-}
-
-let strip_comment_start s =
-  let len = String.length s in
-  if len >= 2 && (String.get s 0) = '/' && (String.get s 1) = '/' then
-    String.sub s 2 (len - 2)
-  else
-    s
-
-let analyze_header text script =
-  match syntax script.script_declarations with
-  | SyntaxList ({
-      syntax = MarkupSection { markup_prefix; markup_text; markup_suffix; _ }
-    ; _}::_) ->
-    begin match syntax markup_suffix with
-    | MarkupSuffix {
-        markup_suffix_name = {
-          syntax = Missing | Token { MinimalToken.kind = TK.Equal; _ }
-        ; _ }
-      ; _ } -> "", ""
-    | MarkupSuffix {
-        markup_suffix_less_than_question = ltq;
-        markup_suffix_name = name;
-        _
-      } ->
-      let prefix_width = full_width markup_prefix in
-      let text_width = full_width markup_text in
-      let ltq_width = full_width ltq in
-      let name_leading = leading_width name in
-      let name_width = width name in
-      let name_trailing = trailing_width name in
-      let language = SourceText.sub text (prefix_width + text_width +
-        ltq_width + name_leading) name_width
-      in
-      let mode = SourceText.sub text (prefix_width + text_width +
-        ltq_width + name_leading + name_width) name_trailing
-      in
-      let mode = String.trim mode in
-      let mode = strip_comment_start mode in
-      let mode = String.trim mode in
-      language, mode
-    | _ -> "", ""
-    end
-  | _ -> failwith "unexpected: script content should be list"
-  (* The parser never produces a leading markup section; it fills one in with zero
-     width tokens if it needs to. *)
-
-let get_language_and_mode text root =
-  match syntax root with
-  | Script s -> analyze_header text s
-  | _ -> failwith "unexpected missing script node"
-    (* The parser never produces a missing script, even if the file is empty *)
+  mode : FileInfo.mode option;
+  state : SCI.t;
+} [@@deriving show]
 
 let remove_duplicates errors equals =
   (* Assumes the list is sorted so that equal items are together. *)
@@ -100,19 +59,40 @@ let remove_duplicates errors equals =
   let result = aux errors [] in
   List.rev result
 
-let make text =
-  let parser = Parser.make text in
-  let (parser, root) = Parser.parse_script parser in
+let build
+    (text: SourceText.t)
+    (root: Syntax.t)
+    (errors: SyntaxError.t list)
+    (mode: FileInfo.mode option)
+    (state: SCI.t): t =
+  { text; root; errors; mode; state }
+
+let process_errors errors =
   (* We've got the lexical errors and the parser errors together, both
   with lexically later errors earlier in the list. We want to reverse the
   list so that later errors come later, and then do a stable sort to put the
   lexical and parser errors together. *)
-  let errors = Parser.errors parser in
   let errors = List.rev errors in
   let errors = List.stable_sort SyntaxError.compare errors in
-  let errors = remove_duplicates errors SyntaxError.exactly_equal in
-  let (language, mode) = get_language_and_mode text root in
-  { text; root; errors; language; mode }
+  remove_duplicates errors SyntaxError.exactly_equal
+
+let create text root errors mode state =
+  let errors = process_errors errors in
+  build text root errors mode state
+
+let make_impl ?(env = Env.default) text =
+  let mode = Full_fidelity_parser.parse_mode text in
+  let parser = Parser.make env text in
+  let (parser, root) = Parser.parse_script parser in
+  let errors = Parser.errors parser in
+  let state = Parser.sc_state parser in
+  create text root errors mode state
+
+let make ?(env = Env.default) text =
+  Stats_container.wrap_nullary_fn_timing
+    ?stats:(Env.stats env)
+    ~key:"Syntax_tree.make"
+    ~f:(fun () -> make_impl ~env text)
 
 let root tree =
   tree.root
@@ -127,28 +107,29 @@ let remove_cascading errors =
   let equals e1 e2 = (SyntaxError.compare e1 e2) = 0 in
   remove_duplicates errors equals
 
-let language tree =
-  tree.language
-
 let mode tree =
   tree.mode
 
+let sc_state tree =
+  tree.state
+
 let is_hack tree =
-  tree.language = "hh"
+  tree.mode <> Some FileInfo.Mphp
 
 let is_php tree =
-  tree.language = "php"
+  tree.mode = Some FileInfo.Mphp
 
 let is_strict tree =
-  (is_hack tree) && tree.mode = "strict"
+  match tree.mode with
+  | Some mode -> FileInfo.is_strict mode
+  | None -> false
 
-let is_decl tree =
-  (is_hack tree) && tree.mode = "decl"
+let is_decl tree = tree.mode = Some FileInfo.Mdecl
 
 let errors_no_bodies tree =
   let not_in_body error =
     not (is_in_body tree.root error.SyntaxError.start_offset) in
-  List.filter not_in_body tree.errors
+  List.filter ~f:not_in_body tree.errors
 
 (* By default we strip out (1) all cascading errors, and (2) in decl mode,
 all errors that happen in a body. *)
@@ -161,12 +142,23 @@ let errors tree =
       all_errors tree in
   remove_cascading e
 
-let to_json tree =
+let to_json ?with_value tree =
   let version = Full_fidelity_schema.full_fidelity_schema_version_number in
-  let root = to_json tree.root in
-  let text = Hh_json.JSON_String tree.text.SourceText.text in
+  let root = Syntax.to_json ?with_value tree.root in
+  let text = Hh_json.JSON_String (SourceText.text tree.text) in
   Hh_json.JSON_Object [
     "parse_tree", root;
     "program_text", text;
     "version", Hh_json.JSON_String version
   ]
+end (* WithSmartConstructors *)
+
+include WithSmartConstructors(SyntaxSmartConstructors.WithSyntax(Syntax))
+
+let create text root errors mode =
+  create text root errors mode ()
+
+let build text root errors mode =
+  build text root errors mode ()
+
+end (* WithSyntax *)

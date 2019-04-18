@@ -2,17 +2,15 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 open Reordered_argument_collections
 open SymbolDefinition
-
-type outline = string SymbolDefinition.t list
+module Parser = Full_fidelity_ast
 
 let modifiers_of_ast_kinds l =
   List.map l begin function
@@ -46,6 +44,7 @@ let summarize_property class_name kinds var =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let maybe_summarize_property class_name ~skip kinds var =
@@ -68,6 +67,7 @@ let summarize_const class_name ((pos, name), (expr_pos, _)) =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let summarize_abs_const class_name (pos, name) =
@@ -85,10 +85,15 @@ let summarize_abs_const class_name (pos, name) =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let modifier_of_fun_kind acc = function
   | Ast.FAsync | Ast.FAsyncGenerator -> Async :: acc
+  | _ -> acc
+
+let modifier_of_param_kind acc = function
+  | Some Ast.Pinout -> Inout :: acc
   | _ -> acc
 
 let summarize_typeconst class_name t =
@@ -107,14 +112,16 @@ let summarize_typeconst class_name t =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let summarize_param param =
   let pos, name = param.Ast.param_id in
   let param_start = Option.value_map param.Ast.param_hint ~f:fst ~default:pos in
   let param_end = Option.value_map param.Ast.param_expr ~f:fst ~default:pos in
-  let modifiers =
-    modifiers_of_ast_kinds (Option.to_list param.Ast.param_modifier) in
+  let modifiers = modifier_of_param_kind [] param.Ast.param_callconv in
+  let param_vis = Option.to_list param.Ast.param_modifier in
+  let modifiers = (modifiers_of_ast_kinds param_vis) @ modifiers in
   let kind = Param in
   let id = get_symbol_id kind None name in
   let full_name = get_full_name None name in
@@ -129,7 +136,30 @@ let summarize_param param =
     modifiers;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
+
+let get_reactivity_attributes attrs =
+  let rec go attrs acc =
+    match attrs with
+    | [] -> acc
+    | { Ast.ua_name = (_, n); _ } :: tl ->
+      let module SNUA = Naming_special_names.UserAttributes in
+      let acc =
+        if n = SNUA.uaReactive
+        then Rx :: acc
+        else if n = SNUA.uaShallowReactive
+        then Shallow :: acc
+        else if n = SNUA.uaLocalReactive
+        then Local :: acc
+        else if n = SNUA.uaOnlyRxIfImpl
+        then OnlyRxIfImpl :: acc
+        else if n = SNUA.uaAtMostRxAsArgs
+        then AtMostRxAsArgs :: acc
+        else acc in
+      go tl acc in
+  go attrs []
+
 
 let summarize_method class_name m =
   let modifiers = modifier_of_fun_kind [] m.Ast.m_fun_kind in
@@ -150,6 +180,7 @@ let summarize_method class_name m =
     children = None;
     params;
     docblock = None;
+    reactivity_attributes = get_reactivity_attributes m.Ast.m_user_attributes;
   }
 
 (* Parser synthesizes AST nodes for implicit properties (defined in constructor
@@ -185,7 +216,7 @@ let summarize_class class_ ~no_children =
     in
     Some (List.concat_map class_.Ast.c_body ~f:begin function
       | Ast.Method m -> [summarize_method class_name m]
-      | Ast.ClassVars (kinds, _, vars) ->
+      | Ast.ClassVars { Ast.cv_kinds = kinds; Ast.cv_names = vars; _ } ->
           List.concat_map vars
             ~f:(maybe_summarize_property class_name ~skip:implicit_props kinds)
       | Ast.XhpAttr (_, var, _, _) ->
@@ -216,6 +247,7 @@ let summarize_class class_ ~no_children =
     children;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let typedef_kind_pos tk =
@@ -243,6 +275,7 @@ let summarize_typedef tdef =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let summarize_fun f =
@@ -263,6 +296,7 @@ let summarize_fun f =
     children = None;
     params;
     docblock = None;
+    reactivity_attributes = get_reactivity_attributes f.Ast.f_user_attributes;
   }
 
 let summarize_gconst cst =
@@ -284,6 +318,7 @@ let summarize_gconst cst =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let summarize_local name span =
@@ -301,6 +336,7 @@ let summarize_local name span =
     children = None;
     params = None;
     docblock = None;
+    reactivity_attributes = [];
   }
 
 let outline_ast ast =
@@ -327,7 +363,7 @@ let add_def_docblock finder previous_def_line def =
 let add_docblocks defs comments =
   let finder = Docblock_finder.make_docblock_finder comments in
 
-  let rec map_def f acc def =
+  let rec map_def f (acc : int) (def : string SymbolDefinition.t) =
     let acc, def = f acc def in
     let acc, children = Option.value_map def.children
       ~f:(fun defs ->
@@ -337,7 +373,7 @@ let add_docblocks defs comments =
     in
     acc, { def with children }
 
-  and map_def_list f acc defs =
+  and map_def_list f (acc : int) (defs : string SymbolDefinition.t list) =
     let acc, defs = List.fold_left defs
       ~f:(fun (acc, defs) def ->
         let acc, def = map_def f acc def in
@@ -349,21 +385,26 @@ let add_docblocks defs comments =
   snd (map_def_list (add_def_docblock finder) 0 defs)
 
 let outline popt content =
-  let {Parser_hack.ast; comments; _} =
-    Parser_hack.program
-      popt
-      Relative_path.default
-      content
+  let {Parser_return.ast; comments; _} = if Ide_parser_cache.is_enabled () then
+    Ide_parser_cache.(with_ide_cache @@
+      fun () -> get_ast popt Relative_path.default content
+    )
+  else begin
+    let env = Parser.make_env
+      ~parser_options:popt
       ~include_line_comments:true
       ~keep_errors:false
-  in
+      Relative_path.default
+    in
+    Parser.from_text_with_legacy env content
+  end in
   let result = outline_ast ast in
   add_docblocks result comments
 
 let rec print_def ~short_pos indent def =
   let
     {name; kind; id; pos; span; modifiers; children; params; docblock;
-      full_name=_} = def
+      full_name=_; reactivity_attributes=_} = def
   in
   let print_pos, print_span = if short_pos
     then Pos.string_no_file, Pos.multiline_string_no_file

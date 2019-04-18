@@ -20,21 +20,30 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/file-stream-wrapper.h"
+#include "hphp/runtime/base/request-tracing.h"
+#include "hphp/runtime/base/stream-wrapper-registry.h"
 #include "hphp/runtime/base/unit-cache.h"
 #include "hphp/runtime/ext/fb/ext_fb.h"
 #include "hphp/runtime/ext/collections/ext_collections-pair.h"
+#include "hphp/runtime/vm/class-meth-data-ref.h"
+#include "hphp/runtime/vm/extern-compiler.h"
+#include "hphp/runtime/vm/memo-cache.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/vm-regs.h"
+#include "hphp/util/file.h"
+#include "hphp/util/match.h"
 
 namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
 const StaticString
-  s_86metadata("86metadata"),
+  s_set_frame_metadata("HH\\set_frame_metadata"),
   // The following are used in serialize_memoize_tv to serialize objects that
   // implement the IMemoizeParam interface
   s_IMemoizeParam("HH\\IMemoizeParam"),
@@ -70,7 +79,8 @@ bool HHVM_FUNCTION(autoload_set_paths,
 }
 
 bool HHVM_FUNCTION(could_include, const String& file) {
-  return lookupUnit(file.get(), "", nullptr /* initial_opt */) != nullptr;
+  return lookupUnit(file.get(), "", nullptr /* initial_opt */,
+                    Native::s_noNativeFuncs) != nullptr;
 }
 
 namespace {
@@ -134,7 +144,7 @@ const uint64_t kCodePrefix          = 0xf0;
 
 ALWAYS_INLINE void serialize_memoize_code(StringBuffer& sb,
                                           SerializeMemoizeCode code) {
-  assert(code == (code & kCodeMask));
+  assertx(code == (code & kCodeMask));
   uint8_t v = (kCodePrefix | code);
   sb.append(reinterpret_cast<char*>(&v), 1);
 }
@@ -172,32 +182,53 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, const TypedValue *tv) {
   serialize_memoize_tv(sb, depth, *tv);
 }
 
+ALWAYS_INLINE void serialize_memoize_arraykey(StringBuffer& sb,
+                                              const Cell& c) {
+  switch (c.m_type) {
+    case KindOfPersistentString:
+    case KindOfString:
+      serialize_memoize_code(sb, SER_MC_STRING);
+      serialize_memoize_string_data(sb, c.m_data.pstr);
+      break;
+    case KindOfInt64:
+      serialize_memoize_int64(sb, c.m_data.num);
+      break;
+    default:
+      always_assert(false);
+  }
+}
+
 void serialize_memoize_array(StringBuffer& sb, int depth, const ArrayData* ad) {
   serialize_memoize_code(sb, SER_MC_CONTAINER);
   IterateKV(ad, [&] (Cell k, TypedValue v) {
-    serialize_memoize_tv(sb, depth, k);
+    serialize_memoize_arraykey(sb, k);
     serialize_memoize_tv(sb, depth, v);
     return false;
   });
   serialize_memoize_code(sb, SER_MC_STOP);
 }
 
+ALWAYS_INLINE
+void serialize_memoize_col(StringBuffer& sb, int depth, ObjectData* obj) {
+  assertx(obj->isCollection());
+  auto const ad = collections::asArray(obj);
+  if (LIKELY(ad != nullptr)) {
+    serialize_memoize_array(sb, depth, ad);
+  } else {
+    assertx(obj->collectionType() == CollectionType::Pair);
+    auto const pair = reinterpret_cast<const c_Pair*>(obj);
+    serialize_memoize_code(sb, SER_MC_CONTAINER);
+    serialize_memoize_int64(sb, 0);
+    serialize_memoize_tv(sb, depth, pair->get(0));
+    serialize_memoize_int64(sb, 1);
+    serialize_memoize_tv(sb, depth, pair->get(1));
+    serialize_memoize_code(sb, SER_MC_STOP);
+  }
+}
+
 void serialize_memoize_obj(StringBuffer& sb, int depth, ObjectData* obj) {
   if (obj->isCollection()) {
-    const ArrayData* ad = collections::asArray(obj);
-    if (ad) {
-      serialize_memoize_array(sb, depth, ad);
-    } else {
-      assertx(obj->collectionType() == CollectionType::Pair);
-
-      auto const pair = reinterpret_cast<c_Pair*>(obj);
-      serialize_memoize_code(sb, SER_MC_CONTAINER);
-      serialize_memoize_int64(sb, 0);
-      serialize_memoize_tv(sb, depth, pair->get(0));
-      serialize_memoize_int64(sb, 1);
-      serialize_memoize_tv(sb, depth, pair->get(1));
-      serialize_memoize_code(sb, SER_MC_STOP);
-    }
+    serialize_memoize_col(sb, depth, obj);
   } else if (obj->instanceof(s_IMemoizeParam)) {
     Variant ser = obj->o_invoke_few_args(s_getInstanceKey, 0);
     serialize_memoize_code(sb, SER_MC_OBJECT);
@@ -237,6 +268,16 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       sb.append(reinterpret_cast<const char*>(&tv.m_data.dbl), 8);
       break;
 
+    case KindOfFunc:
+      serialize_memoize_code(sb, SER_MC_STRING);
+      serialize_memoize_string_data(sb, funcToStringHelper(tv.m_data.pfunc));
+      break;
+
+    case KindOfClass:
+      serialize_memoize_code(sb, SER_MC_STRING);
+      serialize_memoize_string_data(sb, classToStringHelper(tv.m_data.pclass));
+      break;
+
     case KindOfPersistentString:
     case KindOfString:
       serialize_memoize_code(sb, SER_MC_STRING);
@@ -249,16 +290,24 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
       serialize_memoize_array(sb, depth, tv.m_data.parr);
       break;
 
+    case KindOfClsMeth:
+      raiseClsMethToVecWarningHelper();
+      serialize_memoize_array(
+        sb, depth, clsMethToVecHelper(tv.m_data.pclsmeth).get());
+      break;
     case KindOfObject:
       serialize_memoize_obj(sb, depth, tv.m_data.pobj);
       break;
 
     case KindOfResource:
+    case KindOfRecord: // TODO(T41025646)
     case KindOfRef: {
       auto msg = folly::format(
         "Cannot Serialize unexpected type {}",
@@ -270,28 +319,64 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
   }
 }
 
+ALWAYS_INLINE TypedValue serialize_memoize_string_top(StringData* str) {
+  if (str->empty()) {
+    return make_tv<KindOfPersistentString>(staticEmptyString());
+  } else if ((unsigned char)str->data()[0] < 0xf0) {
+    // serialize_memoize_string_data always returns a string with the first
+    // character >= 0xf0, so anything less than that can't collide. There's no
+    // worry about int-like strings because we won't perform key coercion.
+    str->incRefCount();
+    return make_tv<KindOfString>(str);
+  }
+
+  StringBuffer sb;
+  serialize_memoize_code(sb, SER_MC_STRING);
+  serialize_memoize_string_data(sb, str);
+  return make_tv<KindOfString>(sb.detach().detach());
+}
+
 } // end anonymous namespace
+
+TypedValue serialize_memoize_param_arr(ArrayData* arr) {
+  StringBuffer sb;
+  serialize_memoize_array(sb, 0, arr);
+  return tvReturn(sb.detach());
+}
+
+TypedValue serialize_memoize_param_obj(ObjectData* obj) {
+  StringBuffer sb;
+  serialize_memoize_obj(sb, 0, obj);
+  return tvReturn(sb.detach());
+}
+
+TypedValue serialize_memoize_param_col(ObjectData* obj) {
+  StringBuffer sb;
+  serialize_memoize_col(sb, 0, obj);
+  return tvReturn(sb.detach());
+}
+
+TypedValue serialize_memoize_param_str(StringData* str) {
+  return serialize_memoize_string_top(str);
+}
+
+TypedValue serialize_memoize_param_dbl(double val) {
+  StringBuffer sb;
+  serialize_memoize_code(sb, SER_MC_DOUBLE);
+  sb.append(reinterpret_cast<const char*>(&val), 8);
+  return tvReturn(sb.detach());
+}
 
 TypedValue HHVM_FUNCTION(serialize_memoize_param, TypedValue param) {
   // Memoize throws in the emitter if any function parameters are references, so
   // we can just assert that the param is cell here
-  assertx(param.m_type != KindOfRef);
+  assertx(cellIsPlausible(param));
   auto const type = param.m_type;
 
   if (type == KindOfInt64) {
     return param;
   } else if (isStringType(type)) {
-    auto const str = param.m_data.pstr;
-    if (str->empty()) {
-      return make_tv<KindOfPersistentString>(staticEmptyString());
-    } else if ((unsigned char)str->data()[0] < 0xf0) {
-      // serialize_memoize_tv always returns a string with the first character
-      // >= 0xf0, so anything less than that can't collide. There's no worry
-      // about int-like strings because the key returned from this function is
-      // used in dicts (which don't perform key coercion).
-      str->incRefCount();
-      return param;
-    }
+    return serialize_memoize_string_top(param.m_data.pstr);
   } else if (type == KindOfUninit || type == KindOfNull) {
     return make_tv<KindOfPersistentString>(s_nullMemoKey.get());
   } else if (type == KindOfBoolean) {
@@ -305,25 +390,195 @@ TypedValue HHVM_FUNCTION(serialize_memoize_param, TypedValue param) {
   return tvReturn(sb.detach());
 }
 
-void HHVM_FUNCTION(set_frame_metadata, const Variant& metadata) {
-  VMRegAnchor _;
-  auto fp = vmfp();
-  if (UNLIKELY(!fp)) return;
-  if (fp->skipFrame()) fp = g_context->getPrevVMStateSkipFrame(fp);
-  if (UNLIKELY(!fp)) return;
+namespace {
 
-  if (LIKELY(!(fp->func()->attrs() & AttrMayUseVV)) ||
-      LIKELY(!fp->hasVarEnv())) {
-    auto const local = fp->func()->lookupVarId(s_86metadata.get());
-    if (LIKELY(local != kInvalidId)) {
-      cellSet(*metadata.asCell(), *tvAssertCell(frame_local(fp, local)));
-    } else {
-      SystemLib::throwInvalidArgumentExceptionObject(
-        "Unsupported dynamic call of set_frame_metadata()");
-    }
-  } else {
-    fp->getVarEnv()->set(s_86metadata.get(), metadata.asTypedValue());
+void clearValueLink(rds::Link<Cell, rds::Mode::Normal> valLink) {
+  if (valLink.bound() && valLink.isInit()) {
+    auto oldVal = *valLink;
+    valLink.markUninit();
+    tvDecRefGen(oldVal);
   }
+}
+
+void clearCacheLink(rds::Link<MemoCacheBase*, rds::Mode::Normal> cacheLink) {
+    if (cacheLink.bound() && cacheLink.isInit()) {
+      auto oldCache = *cacheLink;
+      cacheLink.markUninit();
+      if (oldCache) req::destroy_raw(oldCache);
+    }
+}
+
+} // end anonymous namespace
+
+bool HHVM_FUNCTION(clear_static_memoization,
+                   TypedValue clsStr, TypedValue funcStr) {
+  auto clear = [] (const Func* func) {
+    if (!func->isMemoizeWrapper()) return false;
+    clearValueLink(rds::attachStaticMemoValue(func));
+    clearCacheLink(rds::attachStaticMemoCache(func));
+    return true;
+  };
+
+  if (isStringType(clsStr.m_type)) {
+    auto const cls = Unit::loadClass(clsStr.m_data.pstr);
+    if (!cls) return false;
+    if (isStringType(funcStr.m_type)) {
+      auto const func = cls->lookupMethod(funcStr.m_data.pstr);
+      return func && func->isStatic() && clear(func);
+    }
+    auto ret = false;
+    for (auto i = cls->numMethods(); i--; ) {
+      auto const func = cls->getMethod(i);
+      if (func->isStatic()) {
+        if (clear(func)) ret = true;
+      }
+    }
+    return ret;
+  }
+
+  if (isStringType(funcStr.m_type)) {
+    auto const func = Unit::loadFunc(funcStr.m_data.pstr);
+    return func && clear(func);
+  }
+
+  return false;
+}
+
+String HHVM_FUNCTION(ffp_parse_string_native, const String& str) {
+  std::string program = str.get()->data();
+
+  auto result = ffp_parse_file("", program.c_str(), program.size());
+
+  FfpJSONString res;
+  match<void>(
+    result,
+    [&](FfpJSONString& r) {
+      res = std::move(r);
+    },
+    [&](std::string& err) {
+      SystemLib::throwInvalidArgumentExceptionObject(
+        "FFP failed to parse string");
+    }
+  );
+  return res.value;
+}
+
+bool HHVM_FUNCTION(clear_lsb_memoization,
+                   const String& clsStr, TypedValue funcStr) {
+  auto const clear = [](const Class* cls, const Func* func) {
+    if (!func->isStatic()) return false;
+    if (!func->isMemoizeWrapperLSB()) return false;
+    clearValueLink(rds::attachLSBMemoValue(cls, func));
+    clearCacheLink(rds::attachLSBMemoCache(cls, func));
+    return true;
+  };
+
+  auto const cls = Unit::loadClass(clsStr.get());
+  if (!cls) return false;
+
+  if (isStringType(funcStr.m_type)) {
+    auto const func = cls->lookupMethod(funcStr.m_data.pstr);
+    return func && clear(cls, func);
+  }
+
+  auto ret = false;
+  for (auto i = cls->numMethods(); i--; ) {
+    auto const func = cls->getMethod(i);
+    if (clear(cls, func)) ret = true;
+  }
+  return ret;
+}
+
+bool HHVM_FUNCTION(clear_instance_memoization, const Object& obj) {
+  auto const cls = obj->getVMClass();
+  if (!cls->hasMemoSlots()) return false;
+
+  if (!obj->getAttribute(ObjectData::UsedMemoCache)) return true;
+
+  auto const nSlots = cls->numMemoSlots();
+  for (Slot i = 0; i < nSlots; ++i) {
+    auto slot = UNLIKELY(obj->hasNativeData())
+      ? obj->memoSlotNativeData(i, cls->getNativeDataInfo()->sz)
+      : obj->memoSlot(i);
+    if (slot->isCache()) {
+      if (auto cache = slot->getCache()) {
+        slot->resetCache();
+        req::destroy_raw(cache);
+      }
+    } else {
+      auto const oldVal = *slot->getValue();
+      tvWriteUninit(*slot->getValue());
+      tvDecRefGen(oldVal);
+    }
+  }
+
+  return true;
+}
+
+void HHVM_FUNCTION(set_frame_metadata, const Variant&) {
+  SystemLib::throwInvalidArgumentExceptionObject(
+    "Unsupported dynamic call of set_frame_metadata()");
+}
+
+namespace {
+
+ArrayData* from_stats(rqtrace::EventStats stats) {
+  return make_dict_array(
+    "duration", stats.total_duration, "count", stats.total_count).detach();
+}
+
+template<class T>
+ArrayData* from_stats_list(T stats) {
+  DictInit init(stats.size());
+  for (auto& pair : stats) {
+    init.set(String(pair.first), Array::attach(from_stats(pair.second)));
+  }
+  return init.create();
+}
+
+bool HHVM_FUNCTION(is_enabled) {
+  return g_context->getRequestTrace() != nullptr;
+}
+
+void HHVM_FUNCTION(force_enable) {
+  if (g_context->getRequestTrace()) return;
+  if (auto const transport = g_context->getTransport()) {
+    transport->forceInitRequestTrace();
+    g_context->setRequestTrace(transport->getRequestTrace());
+  }
+}
+
+TypedValue HHVM_FUNCTION(all_request_stats) {
+  if (auto const trace = g_context->getRequestTrace()) {
+    return tvReturn(from_stats_list(trace->stats()));
+  }
+  return tvReturn(staticEmptyDArray());
+}
+
+TypedValue HHVM_FUNCTION(all_process_stats) {
+  req::vector<std::pair<StringData*, rqtrace::EventStats>> stats;
+
+  rqtrace::visit_process_stats(
+    [&] (const StringData* name, rqtrace::EventStats s) {
+      stats.emplace_back(const_cast<StringData*>(name), s);
+    }
+  );
+
+  return tvReturn(from_stats_list(stats));
+}
+
+TypedValue HHVM_FUNCTION(request_event_stats, StringArg event) {
+  if (auto const trace = g_context->getRequestTrace()) {
+    auto const stats = folly::get_default(trace->stats(), event->data());
+    return tvReturn(from_stats(stats));
+  }
+  return tvReturn(from_stats({}));
+}
+
+TypedValue HHVM_FUNCTION(process_event_stats, StringArg event) {
+  return tvReturn(from_stats(rqtrace::process_stats_for(event->data())));
+}
+
 }
 
 static struct HHExtension final : Extension {
@@ -333,7 +588,24 @@ static struct HHExtension final : Extension {
     HHVM_NAMED_FE(HH\\could_include, HHVM_FN(could_include));
     HHVM_NAMED_FE(HH\\serialize_memoize_param,
                   HHVM_FN(serialize_memoize_param));
+    HHVM_NAMED_FE(HH\\clear_static_memoization,
+                  HHVM_FN(clear_static_memoization));
+    HHVM_NAMED_FE(HH\\ffp_parse_string_native,
+                  HHVM_FN(ffp_parse_string_native));
+    HHVM_NAMED_FE(HH\\clear_lsb_memoization,
+                  HHVM_FN(clear_lsb_memoization));
+    HHVM_NAMED_FE(HH\\clear_instance_memoization,
+                  HHVM_FN(clear_instance_memoization));
     HHVM_NAMED_FE(HH\\set_frame_metadata, HHVM_FN(set_frame_metadata));
+
+    HHVM_NAMED_FE(HH\\rqtrace\\is_enabled, HHVM_FN(is_enabled));
+    HHVM_NAMED_FE(HH\\rqtrace\\force_enable, HHVM_FN(force_enable));
+    HHVM_NAMED_FE(HH\\rqtrace\\all_request_stats, HHVM_FN(all_request_stats));
+    HHVM_NAMED_FE(HH\\rqtrace\\all_process_stats, HHVM_FN(all_process_stats));
+    HHVM_NAMED_FE(HH\\rqtrace\\request_event_stats,
+                  HHVM_FN(request_event_stats));
+    HHVM_NAMED_FE(HH\\rqtrace\\process_event_stats,
+                  HHVM_FN(process_event_stats));
     loadSystemlib();
   }
 } s_hh_extension;

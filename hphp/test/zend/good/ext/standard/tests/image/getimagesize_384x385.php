@@ -9,9 +9,8 @@
 		}
 	}
 	closedir($dir);
-	sort($files);
+	sort(&$files);
 	foreach($files as $file) {
 		$result[$file] = getimagesize(dirname(__FILE__)."/$file");
 	}
 	var_dump($result);
-?>

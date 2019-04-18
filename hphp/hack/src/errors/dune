@@ -1,0 +1,11 @@
+(library
+  (name errors)
+  (wrapped false)
+  (preprocess (pps ppx_deriving.std))
+  (libraries
+    core_kernel
+    pos
+    server_load_flag
+    (select coroutine_errors.ml from
+    (facebook -> facebook/coroutine_errors.ml)
+    (-> ../stubs/coroutine_errors.ml))))

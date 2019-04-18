@@ -2,7 +2,7 @@
 
 class A {
   public static function foo() {
-    var_dump(get_called_class());
+    var_dump(static::class);
   }
   public static function bar() {
     $x = new B;
@@ -13,8 +13,12 @@ class A {
 }
 class B extends A {
 }
+
+<<__EntryPoint>>
+function main_1885() {
 $array = array('foo');
 array_map('B::foo', $array);
 call_user_func('B::foo');
 call_user_func(array('B', 'foo'));
 A::bar();
+}

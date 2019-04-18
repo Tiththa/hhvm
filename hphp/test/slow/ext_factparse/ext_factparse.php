@@ -11,9 +11,7 @@
 
 function f1() {}
 
-if (rand()) {
-  function f2() {}
-}
+function f2() {}
 
 class CL0 {
   # negative test
@@ -41,9 +39,9 @@ trait TR1<T> {
 
 const CO0 = 1;
 const CO1 = "abc";
-define('CO2', 1);
-define('CO3', 'abc');
-@define('CO4', 2);
+const CO2 = 1;
+const CO3 = 'abc';
+const CO4 = 2;
 
 type TA0 = int;
 newtype TA1 = int;
@@ -63,52 +61,17 @@ trait TR2 implements I0, I1<int> {
   require implements I2;
 }
 
-# For multiple declarations of the same class we union the possible base types.
-if (rand()) {
-  class CL3 extends CL0 {
-    use TR0;
-  }
-} else {
-  class CL3 implements I0 {
-    use TR0;
-  }
-}
-
 enum E0 : int {
   EV0 = 0;
   EV1 = 1;
 }
 
-if (rand()) {
-  class M0 {
-  }
-} else {
-  interface M0 {
-  }
-}
-
-if (rand()) {
-  final class M1 {
-  }
-} else {
-  abstract class M1 {
-  }
-}
-
-# Need to be careful when writing an autoloader to handle these cases properly.
-# The output facts will show f8() is defined in this file. However, it won't
-# actually be callable unless f7() is called first (e.g. via the pesudo-main
-# in this source module which will be executed when the file is require'd).
-# As such an autoloader must be careful to call function_exists('f8') after
-# require'ing this file and return failure if f8() did not actually materialize.
-
-function f7() {
-  function f8() {
-  }
-}
-
+const CO5 = 1;
 function f6() {
-  define('CO5', 1);
+
+  new stdclass;
+  new stdclass;
+  new stdclass;
 }
 
 # Does not compile.
@@ -248,6 +211,18 @@ if ((int)HH\ext_factparse_version()) {
 # Check bad arg handling
 #
 
-HH\facts_parse(null, null, null, null);
-HH\facts_parse(null, array(null), null, null);
-HH\facts_parse(null, array(array()), null, null);
+try {
+  HH\facts_parse(null, null, null, null);
+} catch (Exception $e) {
+  var_dump($e->getMessage());
+}
+try {
+  HH\facts_parse(null, array(null), null, null);
+} catch (InvalidOperationException $e) {
+  var_dump($e->getMessage());
+}
+try {
+  HH\facts_parse(null, array(array()), null, null);
+} catch (InvalidOperationException $e) {
+  var_dump($e->getMessage());
+}

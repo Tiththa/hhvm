@@ -45,8 +45,8 @@ struct HeapObject;
 struct HeapGraph {
   enum PtrKind : uint8_t {
     Counted, // exactly-marked, ref-counted, pointer
-    Implicit, // exactly-marked but not counted
     Ambiguous, // any ambiguous pointer into a valid object
+    Weak, // a weak pointer to a possibly dead object
   };
   static constexpr auto NumPtrKinds = 3;
   struct Node {

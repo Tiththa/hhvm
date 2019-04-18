@@ -1,8 +1,11 @@
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "test"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
   String "\n"
   Print
   PopC

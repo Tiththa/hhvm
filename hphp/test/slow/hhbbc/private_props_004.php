@@ -9,7 +9,6 @@ class MVecFinalOps {
   private $o = null;
   private $igen = 42.0;
   private $icell = 2;
-  private $igen2 = array();
 
   public function __construct() {
     $this->o = new Other;
@@ -19,11 +18,9 @@ class MVecFinalOps {
   public function foo() {
     var_dump(isset($this->s));
     var_dump(empty($this->s));
-    reffy($this->igen);
+    reffy(&$this->igen);
     $this->icell += 2;
     $this->icell++;
-    $x = array();
-    $this->igen2 =& $x;
   }
 
   public function printer() {
@@ -44,4 +41,8 @@ function main() {
   $x->printer();
 }
 
+
+<<__EntryPoint>>
+function main_private_props_004() {
 main();
+}

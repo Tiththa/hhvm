@@ -1,9 +1,12 @@
 # Some tests for catch regions.
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
   Int 1
   RetC
 }
@@ -18,10 +21,14 @@
     Print
     PopC
 
-    FPushCtorD 1 "Exception"
-    FPassL 0 $msg
-    FCall 1
-    PopR
+    NewObjD "Exception"
+    Dup
+    NullUninit
+    NullUninit
+    CGetL $msg
+    FPushCtor 1
+    FCall <> 1 1 "" - "" ""
+    PopC
     Throw
   } .catch {
     String "throw_stuff's exception handler ...\n"
@@ -41,11 +48,13 @@
     Print
     PopC
 
-    FPushFuncD 1 "throw_stuff"
+    NullUninit
+    NullUninit
+    NullUninit
     String "the message"
-    FPassC 0
-    FCall 1
-    PopR
+    FPushFuncD 1 "throw_stuff"
+    FCall <> 1 1 "" - "" ""
+    PopC
 
     String "unreached\n"
     Print
@@ -61,22 +70,10 @@
 }
 
 .class One extends Exception {
-  .method [public no_injection] 86ctor() {
-    Null
-    RetC
-  }
 }
 .class Two extends Exception {
-  .method [public no_injection] 86ctor() {
-    Null
-    RetC
-  }
 }
 .class Three extends Exception {
-  .method [public no_injection] 86ctor() {
-    Null
-    RetC
-  }
 }
 
 .function throw_various() {
@@ -89,19 +86,30 @@ repeat:
              CGetL $counter
              Switch Unbounded 0 <make_one make_two make_three>
 
-make_one:    FPushCtorD 0 "One"
-             FCall 0
-             PopR
+make_one:    NewObjD "One"
+             Dup
+             NullUninit
+             NullUninit
+             FPushCtor 0
+             FCall <> 0 1 "" - "" ""
+             PopC
              Throw
-make_two:    FPushCtorD 0 "Two"
-             FCall 0
-             PopR
+make_two:    NewObjD "Two"
+             Dup
+             NullUninit
+             NullUninit
+             FPushCtor 0
+             FCall <> 0 1 "" - "" ""
+             PopC
              Throw
-make_three:  FPushCtorD 1 "Three"
+make_three:  NewObjD "Three"
+             Dup
+             NullUninit
+             NullUninit
              String "third exception from throw_various"
-             FPassC 0
-             FCall 1
-             PopR
+             FPushCtor 1
+             FCall <> 1 1 "" - "" ""
+             PopC
              Throw
            } .catch {
              Dup
@@ -141,21 +149,25 @@ on_three:    String "three\n"
          False
          SetL $ever_caught
          PopC
+         NullUninit
+         NullUninit
+         NullUninit
          String "foo"
 
 resume:  .try {
            FPushFunc 0
-           FCall 0
-           PopR
+           FCall <> 0 1 "" - "" ""
+           PopC
            Jmp resume2
          } .catch {
            SetL $ex
            PopC
            String "top-level catch handler got: "
            PushL $ex
+           NullUninit
+           NullUninit
            FPushObjMethodD 0 "getMessage" NullThrows
-           FCall 0
-           UnboxR
+           FCall <> 0 1 "" - "" ""
            Concat
            String "\n"
            Concat
@@ -167,6 +179,9 @@ resume:  .try {
            SetL $ever_caught
            PopC
            JmpNZ resume2
+           NullUninit
+           NullUninit
+           NullUninit
            String "throw_various"
            Jmp resume
          }

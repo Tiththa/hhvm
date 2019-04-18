@@ -16,9 +16,11 @@ function ackermann($n = 7) {
 }
 
 function ary($n = 50000) {
+  $X = array();
   for ($i=0; $i<$n; $i++) {
     $X[$i] = $i;
   }
+  $Y = array();
   for ($i=$n-1; $i>=0; $i--) {
     $Y[$i] = $X[$i];
   }
@@ -27,6 +29,7 @@ function ary($n = 50000) {
 }
 
 function ary2($n = 50000) {
+  $X = array();
   for ($i=0; $i<$n;) {
     $X[$i] = $i; ++$i;
     $X[$i] = $i; ++$i;
@@ -40,6 +43,7 @@ function ary2($n = 50000) {
     $X[$i] = $i; ++$i;
     $X[$i] = $i; ++$i;
   }
+  $Y = array();
   for ($i=$n-1; $i>=0;) {
     $Y[$i] = $X[$i]; --$i;
     $Y[$i] = $X[$i]; --$i;
@@ -58,6 +62,8 @@ function ary2($n = 50000) {
 }
 
 function ary3($n = 2000) {
+  $X = array();
+  $Y = array();
   for ($i=0; $i<$n; $i++) {
     $X[$i] = $i + 1;
     $Y[$i] = 0;
@@ -69,7 +75,8 @@ function ary3($n = 2000) {
     }
   }
   $last = $n-1;
-  print "$Y[0] $Y[$last]\n";
+  echo $Y[0];
+  print " $Y[$last]\n";
 }
 
 function fibo_r($n){
@@ -82,6 +89,7 @@ function fibo($n = 30) {
 }
 
 function hash1($n = 50000) {
+  $X = array();
   for ($i = 1; $i <= $n; $i++) {
     $X[dechex($i)] = $i;
   }
@@ -93,6 +101,8 @@ function hash1($n = 50000) {
 }
 
 function hash2($n = 500) {
+  $hash1 = array();
+  $hash2 = array();
   for ($i = 0; $i < $n; $i++) {
     $hash1["foo_$i"] = $i;
     $hash2["foo_$i"] = 0;
@@ -140,12 +150,11 @@ function heapsort_r($n, &$ra) {
 }
 
 function heapsort($N = 20000) {
-  global $LAST;
-
+  $ary = array();
   for ($i=1; $i<=$N; $i++) {
     $ary[$i] = ($N - $i);
   }
-  heapsort_r($N, $ary);
+  heapsort_r($N, &$ary);
   var_dump($ary[$N]);
 }
 
@@ -154,7 +163,8 @@ function mkmatrix ($rows, $cols) {
   $mx = array();
   for ($i=0; $i<$rows; $i++) {
     for ($j=0; $j<$cols; $j++) {
-	    $mx[$i][$j] = $count++;
+      if (!array_key_exists($i, $mx)) $mx[$i] = array();
+      $mx[$i][$j] = $count++;
     }
   }
   return($mx);
@@ -163,13 +173,14 @@ function mkmatrix ($rows, $cols) {
 function mmult ($rows, $cols, $m1, $m2) {
   $m3 = array();
   for ($i=0; $i<$rows; $i++) {
-	  for ($j=0; $j<$cols; $j++) {
-	    $x = 0;
-	    for ($k=0; $k<$cols; $k++) {
-		    $x += $m1[$i][$k] * $m2[$k][$j];
-	    }
-	    $m3[$i][$j] = $x;
-	  }
+    for ($j=0; $j<$cols; $j++) {
+      $x = 0;
+      for ($k=0; $k<$cols; $k++) {
+        $x += $m1[$i][$k] * $m2[$k][$j];
+      }
+      if (!array_key_exists($i, $m3)) $m3[$i] = array();
+      $m3[$i][$j] = $x;
+    }
   }
   return($m3);
 }
@@ -352,6 +363,7 @@ function fannkuch($n = 9) {
   printf("Pfannkuchen(%d) = %d\n", $n, Fannkuch_run($n));
 }
 
+<<__EntryPoint>>
 function main_function() {
   ackermann(2);
   ary(500);
@@ -368,6 +380,3 @@ function main_function() {
   binary_trees(3);
   fannkuch(6);
 }
-
-main_function();
-

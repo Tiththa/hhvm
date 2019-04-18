@@ -60,7 +60,8 @@ TransContext prologue_context(TransID transID,
     kind,
     TransFlags{},
     SrcKey{func, entry, SrcKey::PrologueTag{}},
-    FPInvOffset{func->numSlotsInFrame()}
+    FPInvOffset{func->numSlotsInFrame()},
+    0
   );
 }
 
@@ -82,16 +83,27 @@ TCA genFuncPrologue(TransID transID, TransKind kind, Func* func, int argc,
 
   printUnit(2, unit, "After initial prologue generation");
 
-  auto vunit = irlower::lowerUnit(env.unit, CodeKind::CrossTrace);
+  auto vunit = irlower::lowerUnit(env.unit, CodeKind::Prologue);
   emitVunit(*vunit, env.unit, code, fixups);
+
+  // In order to find the start of the (post guard) prologue after
+  // possibly relocating the code, we add a watchpoint that points to
+  // &unit.prologueStart. In some situations (eg tc-relocate) we will
+  // relocate the code again - but at that point, unit has gone (and
+  // tc-relocate tracks the start of the prologue for itself). So we
+  // need to remove it here, to prevent wild writes to dead stack
+  // locations.
+  auto it = std::find_if(fixups.watchpoints.begin(), fixups.watchpoints.end(),
+                         [&] (TCA* p) { return p == &unit.prologueStart; });
+  assertx(it != fixups.watchpoints.end());
+  fixups.watchpoints.erase(it);
 
   return unit.prologueStart;
 }
 
 TCA genFuncBodyDispatch(Func* func, const DVFuncletsVec& dvs,
-                        CodeCache::View code) {
-  auto context = prologue_context(kInvalidTransID, TransKind::Live,
-                                  func, func->base());
+                        TransKind kind, CodeCache::View code) {
+  auto context = prologue_context(kInvalidTransID, kind, func, func->base());
   IRUnit unit{context};
   irgen::IRGS env{unit, nullptr};
 
@@ -99,7 +111,7 @@ TCA genFuncBodyDispatch(Func* func, const DVFuncletsVec& dvs,
   irgen::sealUnit(env);
 
   CGMeta fixups;
-  auto vunit = irlower::lowerUnit(env.unit, CodeKind::CrossTrace);
+  auto vunit = irlower::lowerUnit(env.unit, CodeKind::Prologue);
 
   auto& main = code.main();
   auto const start = main.frontier();

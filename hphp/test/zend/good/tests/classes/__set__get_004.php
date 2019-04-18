@@ -1,11 +1,11 @@
 <?php
 class Test {
-	protected $x;
+	protected $x = array();
 
 	function __get($name) {
 		if (isset($this->x[$name])) {
 			return $this->x[$name];
-		} 
+		}
 		else
 		{
 			return NULL;
@@ -26,5 +26,4 @@ $foo->bar = $bar;
 var_dump($bar->baz);
 var_dump($foo->bar->baz);
 
-?>
-===DONE===
+echo "===DONE===\n";

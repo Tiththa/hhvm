@@ -20,7 +20,11 @@ class D2 extends Derived {
 function main() {
   $x = new D2;
   $y = 'ok';
-  $x->foo($y);
+  $x->foo(&$y);
 }
 
+
+<<__EntryPoint>>
+function main_func_family_013() {
 main();
+}

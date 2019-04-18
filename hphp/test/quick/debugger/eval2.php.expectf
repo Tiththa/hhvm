@@ -27,7 +27,7 @@ Stack trace:
 p $_
 "don't want to see this"
 = bad syntax
-Hit fatal : syntax error, unexpected T_STRING
+Hit fatal : Encountered unexpected token 'syntax'.
     #0 at [:1]
     #1 include(), called at [:1]
 

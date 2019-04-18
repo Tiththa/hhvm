@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 print "Test begin\n";
 
 if (!isset($g)) {
-  class A {}
+  include 'hoistable_a.inc';
 }
 
 class B extends A {}

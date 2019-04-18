@@ -17,7 +17,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <exception>
 #include <map>
@@ -52,6 +51,7 @@
 #include "hphp/runtime/ext/asio/socket-event.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/vm/vm-regs.h"
+#include "hphp/runtime/vm/treadmill.h"
 #include "hphp/util/async-func.h"
 #include "hphp/util/logger.h"
 
@@ -106,31 +106,6 @@ namespace {
 // any direct entries from HHVM.
 std::mutex s_sharedDataMutex;
 
-// socket name (or empty string) -> Watchman client
-std::unordered_map<
-  std::string,
-  std::shared_ptr<watchman::WatchmanClient>
-> s_activeClients;
-
-// All WatchmanClients must be disposed of on a non-EventBase thread and holding
-// the data lock. To ensure this, the list below holds a shared_ptr to all
-// clients regardless of whether they are initializing, active, or in a zombie
-// state. When the shared pointer use count drops to 1 we know the client is now
-// only refrenced in this list, and we can safely dispose of it in the next
-// requestInit/Shutdown.
-std::list<std::shared_ptr<watchman::WatchmanClient>> s_allClients;
-
-// On shutdown we use these to wait for transactions to finish
-std::condition_variable s_cvNoOutstandingOneShots;
-int s_outstandingOneShots{0};
-
-// Multiple requests may end up asking for a client at once so we broadcast
-// to all of them when a connection is established.
-std::unordered_map<
-  std::string,
-  std::vector<folly::Promise<std::shared_ptr<watchman::WatchmanClient>>>
-> s_connectPromises;
-
 // Class to execute short-run Watchman related callbacks in serial order. Long-
 // running Watchman subscription callbacks are run as AsyncFunc threads
 // initiated from this thread.
@@ -144,14 +119,14 @@ struct WatchmanThreadEventBase : folly::Executor {
   { }
 
   // (INIT)
-  ~WatchmanThreadEventBase() {
+  ~WatchmanThreadEventBase() override {
     drain();
     m_eventBase.terminateLoopSoon();
     m_eventThread.join();
   }
 
   // (PHP)
-  virtual void add(folly::Func f) override {
+  void add(folly::Func f) override {
     m_eventBase.add([f = std::move(f)] () mutable { // (ASYNC entry-point)
       std::lock_guard<std::mutex> g(HPHP::s_sharedDataMutex);
       f();
@@ -255,7 +230,7 @@ struct ActiveSubscription {
           processNextUpdate();
         }
       })
-      .then([this](watchman::SubscriptionPtr wm_sub) { // (ASYNC)
+      .thenValue([this](watchman::SubscriptionPtr wm_sub) { // (ASYNC)
         m_subscriptionPtr = wm_sub;
         return folly::unit;
       });
@@ -281,17 +256,17 @@ struct ActiveSubscription {
     m_unsubcribeInProgress = true;
 
     folly::Future<bool> unsubscribe_future{false};
-    // If the connection is alive we must peform an actual unsubscribe. If not,
+    // If the connection is alive we must perform an actual unsubscribe. If not,
     // we just need to sync to make sure all the outstanding threads complete.
     if (checkConnection()) {
       unsubscribe_future = m_watchmanClient->unsubscribe(m_subscriptionPtr)
-        .then([this] (const folly::dynamic& result) { // (ASYNC)
+        .thenValue([this] (const folly::dynamic& result) { // (ASYNC)
           m_unsubscribeData = toJson(result).data();
-          return sync(0);
+          return sync(std::chrono::milliseconds::zero());
         });
     } else {
       m_unsubscribeData = "Watchman connection dead.";
-      unsubscribe_future = sync(0);
+      unsubscribe_future = sync(std::chrono::milliseconds::zero());
     }
     return unsubscribe_future
       // All ASYNC calls run with the lock held and in some cases the lock held
@@ -302,7 +277,7 @@ struct ActiveSubscription {
       // only re-acquired after the sync promise is fulfilled in the AsyncFunc()
       // thread.
       .via(WatchmanThreadEventBase::Get())
-      .then([this] () { // (ASYNC)
+      .thenValue([this](auto&&){ // (ASYNC)
         // These should be finished by now due to the syncing above
         if (m_oldCallbackExecThread) {
           m_oldCallbackExecThread->waitForEnd();
@@ -318,7 +293,7 @@ struct ActiveSubscription {
   // (PHP-CALLBACK entry-point) This manually gets a lock where needed but
   // avoids holding one most of the time as this can be a quite slow operation.
   void runCallback() {
-    hphp_session_init();
+    hphp_session_init(Treadmill::SessionKind::Watchman);
     auto context = g_context.getNoCheck();
     SCOPE_EXIT {
       hphp_context_exit();
@@ -343,10 +318,19 @@ struct ActiveSubscription {
       auto unit = lookupUnit(
         String(m_callbackFile.c_str()).get(),
         "",
-        &initial);
+        &initial,
+        Native::s_noNativeFuncs);
       if (!unit) {
         throw std::runtime_error(
           folly::sformat("Unit '{}' no longer exists.", m_callbackFile));
+      }
+      if (!RuntimeOption::EvalPreludePath.empty()) {
+        auto const doc = unit->filepath()->data();
+        invoke_prelude_script(
+            m_path.c_str(),
+            doc,
+            RuntimeOption::EvalPreludePath,
+            m_path.c_str());
       }
       auto unit_result = Variant::attach(context->invokeUnit(unit));
       auto func = Unit::loadFunc(String(m_callbackFunc.c_str()).get());
@@ -360,11 +344,11 @@ struct ActiveSubscription {
       String str_json_data(json_data.c_str());
       String str_socket_path(m_socketPath.c_str());
       TypedValue args[] = {
-        make_tv<KindOfString>(str_path.get()),
-        make_tv<KindOfString>(str_query.get()),
-        make_tv<KindOfString>(str_name.get()),
-        make_tv<KindOfString>(str_json_data.get()),
-        make_tv<KindOfString>(str_socket_path.get())
+        str_path.toCell(),
+        str_query.toCell(),
+        str_name.toCell(),
+        str_json_data.toCell(),
+        str_socket_path.toCell(),
       };
       tvDecRefGen(
           context->invokeFuncFew(func,
@@ -441,17 +425,28 @@ struct ActiveSubscription {
   }
 
   // (PHP)
-  folly::Future<bool> sync(int timeout_ms) {
+  folly::Future<folly::Optional<folly::dynamic>> watchmanFlush(
+    std::chrono::milliseconds timeout
+  ) {
+    return !checkConnection() || m_unsubcribeInProgress || !m_subscriptionPtr
+      ? folly::makeFuture(folly::Optional<folly::dynamic>())
+      : m_watchmanClient->flushSubscription(m_subscriptionPtr, timeout);
+  }
+
+  // (PHP / ASYNC)
+  folly::Future<bool> sync(std::chrono::milliseconds timeout) {
     if (m_unprocessedCallbackData.size() == 0 && !m_callbackInProgress) {
       return folly::makeFuture(true);
     }
     folly::Promise<bool> promise;
     auto res_future = promise.getFuture();
-    if (timeout_ms > 0) {
-      res_future = res_future.within(std::chrono::milliseconds(timeout_ms))
-        .onError([](folly::TimedOut) {
-          return false;
-        });
+    if (timeout != std::chrono::milliseconds::zero()) {
+      res_future = std::move(res_future).within(timeout)
+        .thenError(
+            folly::tag_t<folly::FutureTimeout>{},
+            [](folly::FutureTimeout) {
+              return false;
+            });
     }
     m_syncPromises.emplace_back(std::move(promise));
     return res_future;
@@ -483,10 +478,9 @@ std::unordered_map<std::string, ActiveSubscription> s_activeSubscriptions;
 
 template <typename T> struct FutureEvent : AsioExternalThreadEvent {
   // (PHP)
-  explicit FutureEvent(folly::Future<T>&& future) :
-    m_future(std::move(future))
+  explicit FutureEvent(folly::Future<T>&& future)
   {
-    m_future.then([this] (folly::Try<T> result) { // (ASYNC)
+    std::move(future).thenTry([this] (folly::Try<T> result) { // (ASYNC)
       if (result.hasException()) {
         m_exception = result.exception();
       } else {
@@ -501,7 +495,7 @@ template <typename T> struct FutureEvent : AsioExternalThreadEvent {
   // after the markAsFinished() above which is the only place mutating the state
   // of the data used here. markAsFinished() can only be called once as it is
   // only called (indirectly) from construction of this object instance.
-  void unserialize(Cell& result) {
+  void unserialize(Cell& result) override {
     if (m_exception) {
       SystemLib::throwInvalidOperationExceptionObject(
         m_exception.what().c_str());
@@ -535,75 +529,26 @@ template <typename T> struct FutureEvent : AsioExternalThreadEvent {
     cellCopy(make_tv<KindOfBoolean>(m_result), result);
   }
 
-  folly::Future<T> m_future;
   T m_result;
   folly::exception_wrapper m_exception;
 };
 
-// (PHP) Gets a WatchmanClient instance while trying to re-use an existing one.
+// (PHP) Makes a new WatchmanClient.
 folly::Future<std::shared_ptr<watchman::WatchmanClient>>
 getWatchmanClientForSocket(const std::string& socket_path) {
-  // Check to see if there is already a running client
-  auto existing_client = s_activeClients.find(socket_path);
-  if (existing_client != s_activeClients.end()) {
-      return folly::Future<std::shared_ptr<watchman::WatchmanClient>>(
-        existing_client->second
-      ).via(WatchmanThreadEventBase::Get());
-  }
-
-  // Check to see if there is a currently a client still initializing
-  folly::Promise<std::shared_ptr<watchman::WatchmanClient>> new_promise;
-  auto new_future = new_promise.getFuture();
-  auto existing_promise_list = s_connectPromises.find(socket_path);
-  if (existing_promise_list == s_connectPromises.end()) {
-    std::vector<folly::Promise<std::shared_ptr<watchman::WatchmanClient>>>
-      promise_list;
-    promise_list.emplace_back(std::move(new_promise));
-    s_connectPromises.emplace(socket_path, std::move(promise_list));
-  } else {
-    existing_promise_list->second.emplace_back(std::move(new_promise));
-    return new_future;
-  }
-
-  // Make a new client
-  try {
-    auto socket =
-      socket_path.size() ? socket_path : folly::Optional<std::string>();
-    auto client = std::make_shared<watchman::WatchmanClient>(
-      &(WatchmanThreadEventBase::Get()->getEventBase()), std::move(socket),
-      WatchmanThreadEventBase::Get(),
-      [socket_path](folly::exception_wrapper& /*ex*/) { // (ASYNC) error handler
-        auto activeClient = s_activeClients.find(socket_path);
-        if (activeClient != s_activeClients.end()) {
-          s_activeClients.erase(socket_path);
-        }
-      });
-    s_allClients.push_back(client);
-    client->connect()
-      .then([client, socket_path](const folly::dynamic& /*connect_info*/) {
-        // (ASYNC)
-        auto promise_list = s_connectPromises.find(socket_path);
-        for (auto& promise : promise_list->second) {
-          promise.setValue(client);
-        }
-        s_activeClients.insert({socket_path, client});
-        s_connectPromises.erase(socket_path);
-        return client;
-      })
-      .onError([socket_path](const folly::exception_wrapper& e) {
-        // (ASYNC)
-        auto promise_list = s_connectPromises.find(socket_path);
-        for (auto& promise : promise_list->second) { promise.setException(e); }
-        s_connectPromises.erase(socket_path);
-        e.throw_exception();
-        // shouldn't actually be reached but placates the compiler
-        return std::shared_ptr<watchman::WatchmanClient>();
-      });
-    return new_future;
-  } catch(...) {
-    s_connectPromises.erase(socket_path);
-    throw;
-  }
+  auto socket =
+    socket_path.size() ? socket_path : folly::Optional<std::string>();
+  auto client = std::make_shared<watchman::WatchmanClient>(
+    &(WatchmanThreadEventBase::Get()->getEventBase()),
+    std::move(socket),
+    WatchmanThreadEventBase::Get(),
+    [](folly::exception_wrapper& /*ex*/) { /* (ASYNC) error handler */ }
+  );
+  return client->connect()
+    .thenValue([client](const folly::dynamic& /*connect_info*/) {
+      // (ASYNC)
+      return client;
+    });
 }
 
 // (PHP / INIT)
@@ -615,44 +560,15 @@ folly::Future<std::string> watchman_unsubscribe_impl(const std::string& name) {
   auto res_future = entry->second.unsubscribe()
     // I assume the items queued on the event base are drained in FIFO
     // order. So, after the unsubscribe should be safe to clean up.
-    .then([] (std::string&& result) {
+    .thenValue([] (std::string&& result) {
       // (ASYNC)
-      return result;
+      return std::move(result);
     })
     .ensure([name] {
       // (ASYNC)
       s_activeSubscriptions.erase(name);
     });
   return res_future;
-}
-
-// (PHP)
-void clearDeadConnections() {
-  for (auto& sub_entry : s_activeSubscriptions) {
-    sub_entry.second.checkConnection(); // releases client shared_ptr if dead
-  }
-  auto active_it = s_activeClients.begin();
-  while (active_it != s_activeClients.end()) {
-    // use = 2 => s_activeClients + s_allClients only
-    if (active_it->second.use_count() == 2) {
-      active_it = s_activeClients.erase(active_it);
-    } else {
-      ++active_it;
-    }
-  }
-  auto all_it = s_allClients.begin();
-  while (all_it != s_allClients.end()) {
-    // use = 1 => s_allClients only
-    if (all_it->use_count() == 1) {
-      // Pass shared-ptr to a closure in our executor queue. This ensures the
-      // client won't be destroyed until all potentially outstanding callbacks
-      // with references to the connection are completed.
-      WatchmanThreadEventBase::Get()->add([ptr = *all_it]{});
-      all_it = s_allClients.erase(all_it);
-    } else {
-      ++all_it;
-    }
-  }
 }
 
 // (PHP entry-point)
@@ -668,22 +584,14 @@ Object HHVM_FUNCTION(HH_watchman_run,
 
   auto dynamic_query = folly::parseJson(json_query);
   auto res_future = getWatchmanClientForSocket(socket_path)
-    .then([dynamic_query] (std::shared_ptr<watchman::WatchmanClient> client) {
+    .thenValue([dynamic_query] (std::shared_ptr<watchman::WatchmanClient> client) {
       // (ASYNC)
       return client->run(dynamic_query)
         // pass client shared_ptr through to keep client alive
-        .then([client] (const folly::dynamic& result) {
+        .thenValue([client] (const folly::dynamic& result) {
           return std::string(toJson(result).data());
         });
-    })
-    .ensure([] {
-      // (ASYNC)
-      s_outstandingOneShots--;
-      if (!s_outstandingOneShots) {
-        s_cvNoOutstandingOneShots.notify_all();
-      }
     });
-  s_outstandingOneShots++;
   return Object{
     (new FutureEvent<std::string>(std::move(res_future)))->getWaitHandle()
   };
@@ -732,7 +640,7 @@ Object HHVM_FUNCTION(HH_watchman_subscribe,
       name));
   try {
     auto res_future = getWatchmanClientForSocket(socket_path)
-      .then([name] (std::shared_ptr<watchman::WatchmanClient> client)
+      .thenValue([name] (std::shared_ptr<watchman::WatchmanClient> client)
         -> folly::Future<folly::Unit>
       {
         // (ASYNC)
@@ -742,11 +650,13 @@ Object HHVM_FUNCTION(HH_watchman_subscribe,
         }
         return folly::unit;
       })
-      .onError([name] (std::exception const& e) -> folly::Unit {
-        // (ASNYC) delete active subscription
-        s_activeSubscriptions.erase(name);
-        throw std::runtime_error(e.what());
-      });
+      .thenError(
+          folly::tag_t<std::exception>{},
+          [name] (std::exception const& e) -> folly::Unit {
+            // (ASNYC) delete active subscription
+            s_activeSubscriptions.erase(name);
+            throw std::runtime_error(e.what());
+          });
     return Object{
       (new FutureEvent<folly::Unit>(std::move(res_future)))->getWaitHandle()
     };
@@ -805,9 +715,56 @@ Object HHVM_FUNCTION(HH_watchman_sync_sub,
     SystemLib::throwInvalidOperationExceptionObject(folly::sformat(
       "Unknown subscription '{}'", name));
   }
-
+  std::chrono::milliseconds timeout(timeout_ms);
+  auto start_time = std::chrono::steady_clock::now();
   try {
-    auto res_future = sub_entry->second.sync(timeout_ms);
+    auto res_future = sub_entry->second.watchmanFlush(timeout)
+      .thenValue([timeout, start_time, name](folly::Optional<folly::dynamic> flush) {
+        // (ASYNC)
+        if (!flush.hasValue()) {
+          // Subscription is broken - no updates to process.
+          return folly::makeFuture(true);
+        }
+        if (flush.value().find("error") != flush.value().items().end()) {
+          // Timeout
+          return folly::makeFuture(false);
+        }
+        // At this stage a flush may have caused an update which is still
+        // waiting to execute in the executor queue. So explicitly schedule
+        // our sync into the same queue causing it to execute after the updates
+        // have been processed.
+        folly::Promise<bool> sync_promise;
+        auto sync_future = sync_promise.getFuture();
+        WatchmanThreadEventBase::Get()->add(
+          [name, start_time, timeout, sync_promise = std::move(sync_promise)]
+          () mutable { // (ASYNC)
+            auto sub_entry = s_activeSubscriptions.find(name);
+            if (sub_entry == s_activeSubscriptions.end()) {
+              // Subscription went away - no updates to process.
+              sync_promise.setValue(true);
+              return;
+            }
+            auto elapsed_time = std::chrono::steady_clock::now() - start_time;
+            auto remaining_timeout = timeout -
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                elapsed_time);
+            if (timeout == timeout.zero()) {
+              remaining_timeout = timeout.zero();
+            } else {
+              if (remaining_timeout <= remaining_timeout.zero()) {
+                sync_promise.setValue(false);
+                return;
+              }
+            }
+            sub_entry->second.sync(remaining_timeout)
+              .thenTry(
+                [sync_promise= std::move(sync_promise)]
+                (folly::Try<bool> res) mutable { // (ASYNC)
+                  sync_promise.setValue(res);
+                });
+          });
+        return sync_future;
+      });
     return Object{
       (new FutureEvent<bool>(std::move(res_future)))->getWaitHandle()
     };
@@ -883,34 +840,9 @@ struct WatchmanExtension final : Extension {
     for (auto& unsub_future : unsub_futures) {
       unsub_future.wait();
     }
-    // Wait for there to be no outstanding one-shot runs.
-    {
-      std::unique_lock<std::mutex> lock(HPHP::s_sharedDataMutex);
-      if (HPHP::s_outstandingOneShots) {
-        HPHP::s_cvNoOutstandingOneShots.wait(
-          lock,
-          [] { // (INIT)
-            return HPHP::s_outstandingOneShots == 0;
-          });
-      }
-    }
     WatchmanThreadEventBase::Get()->drain();
     s_activeSubscriptions.clear();
-    s_activeClients.clear();
-    s_allClients.clear();
     WatchmanThreadEventBase::Free();
-  }
-
-  // (PHP entry-point)
-  void requestInit() override {
-    std::lock_guard<std::mutex> g(s_sharedDataMutex);
-    HPHP::clearDeadConnections();
-  }
-
-  // (PHP entry-point)
-  void requestShutdown() override {
-    std::lock_guard<std::mutex> g(s_sharedDataMutex);
-    HPHP::clearDeadConnections();
   }
 
   // (INIT entry-point) no need for lock

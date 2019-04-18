@@ -2,9 +2,8 @@
 namespace foo {
 echo "hi\n";
 }
-__HALT_COMPILER();
+__halt_compiler();
 namespace unprocessed {
 echo "should not echo\n";
 }
-?>
-===DONE===
+echo "===DONE===\n";

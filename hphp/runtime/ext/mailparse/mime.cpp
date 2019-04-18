@@ -34,7 +34,7 @@ MimePart::MimeHeader::MimeHeader()
 
 MimePart::MimeHeader::MimeHeader(const char *value)
   : m_empty(false) {
-  assert(value);
+  assertx(value);
   m_attributes = Array::Create();
   m_value = String(value, CopyString);
 }
@@ -164,7 +164,10 @@ MimePart::MimeHeader::MimeHeader(php_rfc822_tokenized_t *toks)
             /* Finalize packet */
             rfc2231_to_mime(value_buf, NULL, 0, prevcharset_p);
 
-            m_attributes.set(name_buf, value_buf.detach());
+            auto const name_key =
+              m_attributes.convertKey<IntishCast::Cast>(name_buf);
+            auto str = value_buf.detach();
+            m_attributes.set(name_key, make_tv<KindOfString>(str.get()));
             value_buf.clear();
 
             prevcharset_p = 0;
@@ -174,7 +177,10 @@ MimePart::MimeHeader::MimeHeader(php_rfc822_tokenized_t *toks)
             /* New non encoded name*/
             if (!currentencoded) {
               /* Add string*/
-              m_attributes.set(name, value);
+              auto const updated_name_key =
+                m_attributes.convertKey<IntishCast::Cast>(name);
+              m_attributes.set(updated_name_key,
+                               make_tv<KindOfString>(value.get()));
             } else {    /* Encoded name changed*/
               if (namechanged) {
                 /* Append string to buffer - check if to be encoded...  */
@@ -191,7 +197,9 @@ MimePart::MimeHeader::MimeHeader(php_rfc822_tokenized_t *toks)
             namechanged = false;
           }
         } else {
-          m_attributes.set(name, value);
+          auto const name_key =
+            m_attributes.convertKey<IntishCast::Cast>(name);
+          m_attributes.set(name_key, make_tv<KindOfString>(value.get()));
         }
       }
     }
@@ -207,7 +215,10 @@ MimePart::MimeHeader::MimeHeader(php_rfc822_tokenized_t *toks)
   if (is_rfc2231_name) {
     /* Finalize packet */
     rfc2231_to_mime(value_buf, NULL, 0, prevcharset_p);
-    m_attributes.set(name_buf, value_buf.detach());
+    auto const name_key =
+      m_attributes.convertKey<IntishCast::Cast>(name_buf);
+    auto str = value_buf.detach();
+    m_attributes.set(name_key, make_tv<KindOfString>(str.get()));
   }
 }
 
@@ -218,13 +229,17 @@ void MimePart::MimeHeader::clear() {
 }
 
 Variant MimePart::MimeHeader::get(const String& attrname) {
-  return m_attributes[attrname];
+  auto const arrkey =
+    m_attributes.convertKey<IntishCast::Cast>(attrname);
+  return m_attributes[arrkey];
 }
 
 void MimePart::MimeHeader::getAll(Array &ret, const String& valuelabel,
                                   const String& attrprefix) {
   for (ArrayIter iter(m_attributes); iter; ++iter) {
-    ret.set(attrprefix + iter.first().toString(), iter.second());
+    String s = attrprefix + iter.first().toString();
+    auto const arrkey = ret.convertKey<IntishCast::Cast>(s);
+    ret.set(arrkey, iter.secondVal());
   }
 
   /* do this last so that a bogus set of headers like this:
@@ -235,7 +250,8 @@ void MimePart::MimeHeader::getAll(Array &ret, const String& valuelabel,
    * doesn't overwrite content-type with the type="text/html"
    * value.
    * */
-  ret.set(valuelabel, m_value);
+  auto const arrkey = ret.convertKey<IntishCast::Cast>(valuelabel);
+  ret.set(arrkey, make_tv<KindOfString>(m_value.get()));
 }
 
 void MimePart::MimeHeader::rfc2231_to_mime(StringBuffer &value_buf,
@@ -669,28 +685,31 @@ bool MimePart::processHeader() {
       header_val++;
     }
 
+    auto const header_arrkey =
+      m_headers.convertKey<IntishCast::Cast>(header_key);
     /* add the header to the hash.
      * join multiple To: or Cc: lines together */
     if ((header_key == s_to || header_key == s_cc) &&
-        m_headers.exists(header_key)) {
-      String newstr = m_headers[header_key].toString();
+        m_headers.exists(header_arrkey)) {
+      String newstr = m_headers[header_arrkey].toString();
       newstr += ", ";
       newstr += header_val;
-      m_headers.set(header_key, newstr);
+      m_headers.set(header_arrkey, make_tv<KindOfString>(newstr.get()));
     } else {
-      if (m_headers.exists(header_key)) {
-        Variant &zheaderval = m_headers.lvalAt(header_key);
-        if (zheaderval.isArray()) {
-          zheaderval.toArrRef().append(String(header_val, CopyString));
+      if (m_headers.exists(header_arrkey)) {
+        auto const zheaderval = m_headers.lvalAt(header_arrkey).unboxed();
+        if (isArrayLikeType(zheaderval.type())) {
+          asArrRef(zheaderval).append(String(header_val, CopyString));
         } else {
           // Create a nested array if there is more than one of the same header
           Array zarr = Array::Create();
-          zarr.append(zheaderval);
+          zarr.append(zheaderval.tv());
           zarr.append(String(header_val, CopyString));
-          m_headers.set(header_key, zarr);
+          m_headers.set(header_arrkey, make_tv<KindOfArray>(zarr.get()));
         }
       } else {
-        m_headers.set(header_key, String(header_val, CopyString));
+        String str(header_val, CopyString);
+        m_headers.set(header_arrkey, make_tv<KindOfString>(str.get()));
       }
     }
 
@@ -974,7 +993,7 @@ int MimePart::extractImpl(int decode, req::ptr<File> src) {
 }
 
 void MimePart::callUserFunc(const String& s) {
-  vm_call_user_func(m_extract_context, make_packed_array(s));
+  vm_call_user_func(m_extract_context, make_vec_array(s));
 }
 
 void MimePart::outputToStdout(const String& s) {

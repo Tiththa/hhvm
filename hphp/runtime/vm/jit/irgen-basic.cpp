@@ -17,58 +17,109 @@
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/strings.h"
 
-#include "hphp/runtime/vm/jit/irgen-interpone.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
+#include "hphp/runtime/vm/jit/irgen-interpone.h"
+#include "hphp/runtime/vm/jit/irgen-minstr.h"
+#include "hphp/runtime/vm/reified-generics.h"
+#include "hphp/runtime/vm/unit-util.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/set-array.h"
+#include "hphp/runtime/base/type-structure-helpers-defs.h"
 
 namespace HPHP { namespace jit { namespace irgen {
 
 namespace {
 
-//////////////////////////////////////////////////////////////////////
+const StaticString s_reified_type_must_be_ts(
+  "Reified type must be a type structure");
+const StaticString s_new_instance_of_not_string(
+  "You cannot create a new instance of this type as it is not a string");
 
-void implClsRefGet(IRGS& env, SSATmp* classSrc, uint32_t slot) {
-  auto const cls = (classSrc->type() <= TStr)
-    ? ldCls(env, classSrc)
-    : gen(env, LdObjClass, classSrc);
-  putClsRef(env, slot, cls);
-}
-
-const StaticString s_FATAL_NULL_THIS(Strings::FATAL_NULL_THIS);
-bool checkThis(IRGS& env, SSATmp* /*ctx*/) {
-  if (hasThis(env)) return true;
-  auto const err = cns(env, s_FATAL_NULL_THIS.get());
-  gen(env, RaiseError, err);
-  return false;
-}
-
-//////////////////////////////////////////////////////////////////////
-
-}
+} // namespace
 
 void emitClsRefGetC(IRGS& env, uint32_t slot) {
   auto const name = topC(env);
-  if (name->type().subtypeOfAny(TObj, TStr)) {
-    popC(env);
-    implClsRefGet(env, name, slot);
-    decRef(env, name);
-  } else {
+  if (!name->type().subtypeOfAny(TObj, TStr)) {
     interpOne(env, *env.currentNormalizedInstruction);
+    return;
   }
+  popC(env);
+  if (name->isA(TObj)) {
+    putClsRef(env, slot, gen(env, LdObjClass, name));
+    decRef(env, name);
+    return;
+  }
+  if (!name->hasConstVal()) gen(env, RaiseStrToClassNotice, name);
+  auto const cls = ldCls(env, name);
+  ifThenElse(
+    env,
+    [&] (Block* taken) {
+      auto const isreified = gen(env, IsReifiedName, name);
+      gen(env, JmpZero, taken, isreified);
+    },
+    [&] {
+      auto ts = gen(env, LdReifiedGeneric, name);
+      putClsRef(env, slot, cls, ts);
+    },
+    [&] { putClsRef(env, slot, cls); }
+  );
+  decRef(env, name);
 }
 
-void emitClsRefGetL(IRGS& env, int32_t id, uint32_t slot) {
-  auto const ldrefExit = makeExit(env);
-  auto const ldPMExit = makePseudoMainExit(env);
-  auto const src = ldLocInner(env, id, ldrefExit, ldPMExit, DataTypeSpecific);
-  if (src->type().subtypeOfAny(TObj, TStr)) {
-    implClsRefGet(env, src, slot);
-  } else {
-    PUNT(ClsRefGetL);
+void emitClsRefGetTS(IRGS& env, uint32_t slot) {
+  auto const required_ts_type = RuntimeOption::EvalHackArrDVArrs ? TDict : TArr;
+  auto const ts = topC(env);
+  if (!ts->isA(required_ts_type)) {
+    if (ts->type().maybe(required_ts_type)) {
+      PUNT(ClsRefGetTS-UnguardedTS);
+    } else {
+      gen(env, RaiseError, cns(env, s_reified_type_must_be_ts.get()));
+    }
   }
+  ifThenElse(
+    env,
+    [&] (Block* taken) {
+      auto const val = gen(
+        env,
+        RuntimeOption::EvalHackArrDVArrs ? AKExistsDict : AKExistsArr,
+        ts,
+        cns(env, s_generic_types.get())
+      );
+      gen(env, JmpZero, taken, val);
+    },
+    [&] {
+      // Has reified generics
+      hint(env, Block::Hint::Unlikely);
+      interpOne(env, *env.currentNormalizedInstruction);
+    },
+    // taken
+    [&] {
+      // Does not have reified generics
+      auto const key = cns(env, s_classname.get());
+      auto const clsName = profiledArrayAccess(env, ts, key,
+        [&] (SSATmp* base, SSATmp* key, uint32_t pos) {
+          return gen(env, RuntimeOption::EvalHackArrDVArrs ? DictGetK
+                                                           : MixedArrayGetK,
+                     IndexData { pos }, base, key);
+        },
+        [&] (SSATmp* key) {
+          if (RuntimeOption::EvalHackArrDVArrs) {
+            return gen(env, DictGet, ts, key);
+          }
+          return gen(env, ArrayGet, MOpModeData { MOpMode::Warn }, ts, key);
+        }
+      );
+      if (!clsName->isA(TStr)) {
+        if (!ts->type().maybe(TStr)) PUNT(ClsRefGetTS-ClassnameNotStr);
+        gen(env, RaiseError, cns(env, s_new_instance_of_not_string.get()));
+      }
+      auto const cls = ldCls(env, clsName);
+      popDecRef(env);
+      putClsRef(env, slot, cls);
+    }
+  );
 }
 
 void emitCGetL(IRGS& env, int32_t id) {
@@ -87,14 +138,39 @@ void emitCGetL(IRGS& env, int32_t id) {
 void emitCGetQuietL(IRGS& env, int32_t id) {
   auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const loc = ldLocInner(
+  pushIncRef(
     env,
-    id,
-    ldrefExit,
-    ldPMExit,
-    DataTypeBoxAndCountnessInit
+    [&] {
+      auto const loc = ldLocInner(
+        env,
+        id,
+        ldrefExit,
+        ldPMExit,
+        DataTypeBoxAndCountnessInit
+      );
+
+      if (loc->type() <= TUninit) {
+        return cns(env, TInitNull);
+      }
+
+      if (loc->type().maybe(TUninit)) {
+        return cond(
+          env,
+          [&] (Block* taken) {
+            gen(env, CheckInit, taken, loc);
+          },
+          [&] { // Next: local is InitCell.
+            return loc;
+          },
+          [&] { // Taken: local is Uninit
+            return cns(env, TInitNull);
+          }
+        );
+      }
+
+      return loc;
+    }()
   );
-  pushIncRef(env, loc);
 }
 
 void emitCUGetL(IRGS& env, int32_t id) {
@@ -125,38 +201,6 @@ void emitCGetL2(IRGS& env, int32_t id) {
   push(env, oldTop);
 }
 
-template<class F>
-SSATmp* boxHelper(IRGS& env, SSATmp* value, F rewrite) {
-  auto const t = value->type();
-  if (t <= TCell) {
-    if (t <= TUninit) {
-      value = cns(env, TInitNull);
-    }
-    value = gen(env, Box, value);
-    rewrite(value);
-  } else if (t.maybe(TCell)) {
-    value = cond(env,
-                 [&](Block* taken) {
-                   auto const ret = gen(env, CheckType, TBoxedInitCell,
-                                        taken, value);
-                   env.irb->constrainValue(ret, DataTypeSpecific);
-                   return ret;
-                 },
-                 [&](SSATmp* box) { // Next: value is Boxed
-                   return box;
-                 },
-                 [&] { // Taken: value is not Boxed
-                   auto const tmpType = t - TBoxedInitCell;
-                   assertx(tmpType <= TCell);
-                   auto const tmp = gen(env, AssertType, tmpType, value);
-                   auto const ret = gen(env, Box, tmp);
-                   rewrite(ret);
-                   return ret;
-                 });
-  }
-  return value;
-}
-
 void emitVGetL(IRGS& env, int32_t id) {
   auto const value = ldLoc(env, id, makeExit(env), DataTypeBoxAndCountnessInit);
   auto const boxed = boxHelper(
@@ -173,36 +217,10 @@ void emitBox(IRGS& env) {
   push(env, gen(env, Box, pop(env, DataTypeGeneric)));
 }
 
-void emitBoxR(IRGS& env) {
-  auto const value = pop(env, DataTypeGeneric);
-  auto const boxed = boxHelper(
-    env,
-    gen(env, AssertType, TCell | TBoxedInitCell, value),
-    [] (SSATmp* ) {});
-  push(env, boxed);
-}
-
 void emitUnsetL(IRGS& env, int32_t id) {
   auto const prev = ldLoc(env, id, makeExit(env), DataTypeBoxAndCountness);
   stLocRaw(env, id, fp(env), cns(env, TUninit));
   decRef(env, prev);
-}
-
-void emitBindL(IRGS& env, int32_t id) {
-  if (curFunc(env)->isPseudoMain()) {
-    interpOne(env, TBoxedInitCell, 1);
-    return;
-  }
-
-  auto const ldPMExit = makePseudoMainExit(env);
-  auto const newValue = popV(env);
-  // Note that the IncRef must happen first, for correctness in a
-  // pseudo-main: the destructor could decref the value again after
-  // we've stored it into the local.
-  pushIncRef(env, newValue);
-  auto const oldValue = ldLoc(env, id, ldPMExit, DataTypeSpecific);
-  stLocRaw(env, id, fp(env), newValue);
-  decRef(env, oldValue);
 }
 
 void emitSetL(IRGS& env, int32_t id) {
@@ -266,19 +284,12 @@ void emitUnbox(IRGS& env) {
 }
 
 void emitThis(IRGS& env) {
-  auto const ctx = ldCtx(env);
-  if (!checkThis(env, ctx)) {
-    // Unreachable
-    push(env, cns(env, TInitNull));
-    return;
-  }
-  auto const this_ = castCtxThis(env, ctx);
+  auto const this_ = checkAndLoadThis(env);
   pushIncRef(env, this_);
 }
 
 void emitCheckThis(IRGS& env) {
-  auto const ctx = ldCtx(env);
-  checkThis(env, ctx);
+  checkAndLoadThis(env);
 }
 
 void emitBareThis(IRGS& env, BareThisOp subop) {
@@ -294,6 +305,11 @@ void emitBareThis(IRGS& env, BareThisOp subop) {
   }
 
   pushIncRef(env, castCtxThis(env, ctx));
+}
+
+void emitFuncNumArgs(IRGS& env) {
+  if (curFunc(env)->isPseudoMain()) PUNT(FuncNumArgs-PseudoMain);
+  push(env, gen(env, LdARNumParams, fp(env)));
 }
 
 void emitClone(IRGS& env) {
@@ -333,7 +349,7 @@ void emitParent(IRGS& env, uint32_t slot) {
 }
 
 void emitClsRefName(IRGS& env, uint32_t slot) {
-  auto const cls = takeClsRef(env, slot);
+  auto const cls = takeClsRefCls(env, slot);
   push(env, gen(env, LdClsName, cls));
 }
 
@@ -345,6 +361,8 @@ void emitCastArray(IRGS& env) {
 }
 
 void emitCastVArray(IRGS& env) {
+  assertx(!RuntimeOption::EvalHackArrDVArrs);
+
   auto const src = popC(env);
 
   auto const raise = [&](const char* type) {
@@ -362,17 +380,17 @@ void emitCastVArray(IRGS& env) {
   push(
     env,
     [&] {
-      if (src->isA(TArr))    {
-        // ConvArrToVArr can be simplified away if the array is packed or the
-        // empty array.
-        env.irb->constrainValue(
-          src,
-          TypeConstraint{DataTypeSpecialized}.setWantArrayKind()
+      if (src->isA(TArr)) {
+        return cond(
+          env,
+          [&](Block* taken) { return gen(env, CheckVArray, taken, src); },
+          [&](SSATmp* varr) { return varr; },
+          [&]{ return gen(env, ConvArrToVArr, src); }
         );
-        return gen(env, ConvArrToVArr, src);
       }
       if (src->isA(TVec))    return gen(env, ConvVecToVArr, src);
       if (src->isA(TDict))   return gen(env, ConvDictToVArr, src);
+      if (src->isA(TShape))  return gen(env, ConvShapeToVArr, src);
       if (src->isA(TKeyset)) return gen(env, ConvKeysetToVArr, src);
       if (src->isA(TObj))    return gen(env, ConvObjToVArr, src);
       if (src->isA(TNull))   return raise("Null");
@@ -381,12 +399,16 @@ void emitCastVArray(IRGS& env) {
       if (src->isA(TDbl))    return raise("Double");
       if (src->isA(TStr))    return raise("String");
       if (src->isA(TRes))    return raise("Resource");
-      always_assert_flog(false, "Unexpected {} in emitCastVArray", src->type());
+      // Unexpected types may only be seen in unreachable code.
+      gen(env, Unreachable, ASSERT_REASON);
+      return cns(env, TBottom);
     }()
   );
 }
 
 void emitCastDArray(IRGS& env) {
+  assertx(!RuntimeOption::EvalHackArrDVArrs);
+
   auto const src = popC(env);
 
   auto const raise = [&](const char* type) {
@@ -404,10 +426,18 @@ void emitCastDArray(IRGS& env) {
   push(
     env,
     [&] {
-      if (src->isA(TArr))    return src;
-      if (src->isA(TVec))    return gen(env, ConvVecToArr, src);
-      if (src->isA(TDict))   return gen(env, ConvDictToArr, src);
-      if (src->isA(TKeyset)) return gen(env, ConvKeysetToArr, src);
+      if (src->isA(TArr)) {
+        return cond(
+          env,
+          [&](Block* taken) { return gen(env, CheckDArray, taken, src); },
+          [&](SSATmp* darr) { return darr; },
+          [&]{ return gen(env, ConvArrToDArr, src); }
+        );
+      }
+      if (src->isA(TVec))    return gen(env, ConvVecToDArr, src);
+      if (src->isA(TDict))   return gen(env, ConvDictToDArr, src);
+      if (src->isA(TShape))  return gen(env, ConvShapeToDArr, src);
+      if (src->isA(TKeyset)) return gen(env, ConvKeysetToDArr, src);
       if (src->isA(TObj))    return gen(env, ConvObjToDArr, src);
       if (src->isA(TNull))   return raise("Null");
       if (src->isA(TBool))   return raise("Bool");
@@ -415,7 +445,9 @@ void emitCastDArray(IRGS& env) {
       if (src->isA(TDbl))    return raise("Double");
       if (src->isA(TStr))    return raise("String");
       if (src->isA(TRes))    return raise("Resource");
-      always_assert_flog(false, "Unexpected {} in emitCastDArray", src->type());
+      // Unexpected types may only be seen in unreachable code.
+      gen(env, Unreachable, ASSERT_REASON);
+      return cns(env, TBottom);
     }()
   );
 }
@@ -441,6 +473,7 @@ void emitCastVec(IRGS& env) {
       if (src->isA(TVec))    return src;
       if (src->isA(TArr))    return gen(env, ConvArrToVec, src);
       if (src->isA(TDict))   return gen(env, ConvDictToVec, src);
+      if (src->isA(TShape))  return gen(env, ConvShapeToVec, src);
       if (src->isA(TKeyset)) return gen(env, ConvKeysetToVec, src);
       if (src->isA(TObj))    return gen(env, ConvObjToVec, src);
       if (src->isA(TNull))   return raise("Null");
@@ -450,7 +483,7 @@ void emitCastVec(IRGS& env) {
       if (src->isA(TStr))    return raise("String");
       if (src->isA(TRes))    return raise("Resource");
       // Unexpected types may only be seen in unreachable code.
-      gen(env, Unreachable);
+      gen(env, Unreachable, ASSERT_REASON);
       return cns(env, TBottom);
     }()
   );
@@ -475,6 +508,7 @@ void emitCastDict(IRGS& env) {
     env,
     [&] {
       if (src->isA(TDict))    return src;
+      if (src->isA(TShape))   return gen(env, ConvShapeToDict, src);
       if (src->isA(TArr))     return gen(env, ConvArrToDict, src);
       if (src->isA(TVec))     return gen(env, ConvVecToDict, src);
       if (src->isA(TKeyset))  return gen(env, ConvKeysetToDict, src);
@@ -486,7 +520,7 @@ void emitCastDict(IRGS& env) {
       if (src->isA(TStr))     return raise("String");
       if (src->isA(TRes))     return raise("Resource");
       // Unexpected types may only be seen in unreachable code.
-      gen(env, Unreachable);
+      gen(env, Unreachable, ASSERT_REASON);
       return cns(env, TBottom);
     }()
   );
@@ -514,6 +548,7 @@ void emitCastKeyset(IRGS& env) {
       if (src->isA(TArr))     return gen(env, ConvArrToKeyset, src);
       if (src->isA(TVec))     return gen(env, ConvVecToKeyset, src);
       if (src->isA(TDict))    return gen(env, ConvDictToKeyset, src);
+      if (src->isA(TShape))   return gen(env, ConvShapeToKeyset, src);
       if (src->isA(TObj))     return gen(env, ConvObjToKeyset, src);
       if (src->isA(TNull))    return raise("Null");
       if (src->isA(TBool))    return raise("Bool");
@@ -522,7 +557,7 @@ void emitCastKeyset(IRGS& env) {
       if (src->isA(TStr))     return raise("String");
       if (src->isA(TRes))     return raise("Resource");
       // Unexpected types may only be seen in unreachable code.
-      gen(env, Unreachable);
+      gen(env, Unreachable, ASSERT_REASON);
       return cns(env, TBottom);
     }()
   );
@@ -557,9 +592,22 @@ void emitCastString(IRGS& env) {
   decRef(env, src);
 }
 
-void emitIncStat(IRGS& env, uint32_t counter, uint32_t value) {
+//////////////////////////////////////////////////////////////////////
+
+void emitDblAsBits(IRGS& env) {
+  auto const src = popC(env);
+  if (!src->isA(TDbl)) {
+    push(env, cns(env, 0));
+    return;
+  }
+  push(env, gen(env, DblAsBits, src));
+}
+
+//////////////////////////////////////////////////////////////////////
+
+void implIncStat(IRGS& env, uint32_t counter) {
   if (!Stats::enabled()) return;
-  gen(env, IncStat, cns(env, counter), cns(env, value), cns(env, false));
+  gen(env, IncStat, cns(env, counter));
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -568,8 +616,19 @@ void emitDiscardClsRef(IRGS& env, uint32_t slot)   { killClsRef(env, slot); }
 
 void emitPopC(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
 void emitPopV(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
-void emitPopR(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
 void emitPopU(IRGS& env)   { popU(env); }
+void emitPopU2(IRGS& env) {
+  auto const src = popC(env, DataTypeGeneric);
+  popU(env);
+  push(env, src);
+}
+
+void emitPopL(IRGS& env, int32_t id) {
+  auto const ldrefExit = makeExit(env);
+  auto const ldPMExit = makePseudoMainExit(env);
+  auto const src = popC(env, DataTypeGeneric);
+  stLocMove(env, id, ldrefExit, ldPMExit, src);
+}
 
 void emitDir(IRGS& env)    { push(env, cns(env, curUnit(env)->dirpath())); }
 void emitFile(IRGS& env)   { push(env, cns(env, curUnit(env)->filepath())); }
@@ -580,6 +639,7 @@ void emitDup(IRGS& env)    { pushIncRef(env, topC(env)); }
 
 void emitArray(IRGS& env, const ArrayData* x) {
   assertx(x->isPHPArray());
+  assertx(!RuntimeOption::EvalHackArrDVArrs || x->isNotDVArray());
   push(env, cns(env, x));
 }
 
@@ -611,12 +671,6 @@ void emitNullUninit(IRGS& env) { push(env, cns(env, TUninit)); }
 
 void emitNop(IRGS&)                {}
 void emitEntryNop(IRGS&)           {}
-void emitBoxRNop(IRGS& env) {
-  assertTypeStack(env, BCSPRelOffset{0}, TBoxedCell);
-}
-void emitUnboxRNop(IRGS& env) {
-  assertTypeStack(env, BCSPRelOffset{0}, TCell);
-}
 void emitCGetCUNop(IRGS& env) {
   auto const offset = offsetFromIRSP(env, BCSPRelOffset{0});
   auto const knownType = env.irb->stack(offset, DataTypeSpecific).type;
@@ -625,9 +679,6 @@ void emitCGetCUNop(IRGS& env) {
 void emitUGetCUNop(IRGS& env) {
   assertTypeStack(env, BCSPRelOffset{0}, TUninit);
 }
-void emitRGetCNop(IRGS&)           {}
-void emitFPassC(IRGS&, uint32_t)   {}
-void emitFPassVNop(IRGS&, uint32_t){}
 void emitDefClsNop(IRGS&, uint32_t){}
 void emitBreakTraceHint(IRGS&)     {}
 

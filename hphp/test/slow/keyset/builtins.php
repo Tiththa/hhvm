@@ -34,16 +34,27 @@ var_dump(array_column(
   'baz',
 ));
 
+function nocase($a, $b) {
+  $la = strtolower((string)$a);
+  $lb = strtolower((string)$b);
+  return ($la === $lb) ? 0 : (($la > $lb) ? 1 : (-1));
+}
+
+function vowel($c) {
+  $k = keyset['a', 'e', 'i', 'o', 'u'];
+  return isset($k[$c]);
+}
+
+function inc($s) {
+  $s++;
+  return $s;
+}
+
 function with_keyset($k1) {
   echo "---- running " . __FUNCTION__ . " with\n";
   var_dump($k1);
   $k2 = keyset['q', 'n'];
   $k3 = keyset['q', 'N'];
-  function nocase($a, $b) {
-    $la = strtolower($a);
-    $lb = strtolower($b);
-    return ($la === $lb) ? 0 : (($la > $lb) ? 1 : (-1));
-  }
   echo "array_diff_assoc: ";
   var_dump(array_diff_assoc($k1, $k2));
   echo "array_diff: ";
@@ -80,18 +91,10 @@ function with_keyset($k1) {
   var_dump(array_intersect($k1, $k2));
   echo "array_uintersect: ";
   var_dump(array_uintersect($k1, $k3, 'nocase'));
-  function vowel($c) {
-    $k = keyset['a', 'e', 'i', 'o', 'u'];
-    return isset($k[$c]);
-  }
   echo "array_filter: ";
   var_dump(array_filter($k1, 'vowel'));
   echo "array_flip: ";
   var_dump(array_flip($k1));
-  function inc($s) {
-    $s++;
-    return $s;
-  }
   echo "array_map: ";
   var_dump(array_map('inc', keyset['H', 'A', 'L']));
   echo "array_merge: ";
@@ -110,7 +113,7 @@ function with_keyset($k1) {
   var_dump(array_keys($k1));
   $k = $k1;
   echo "array_pop: ";
-  var_dump(array_pop($k));
+  var_dump(array_pop(&$k));
   var_dump($k);
   echo "array_product: ";
   var_dump(array_product($k1));
@@ -124,35 +127,32 @@ function with_keyset($k1) {
   echo "array_search 2: ";
   var_dump(array_search('x', $k1));
   echo "array_shift: ";
-  var_dump(array_shift($k));
+  var_dump(array_shift(&$k));
   var_dump($k);
   echo "array_sum: ";
   var_dump(array_sum($k1));
   echo "current 1: ";
-  var_dump(current($k));
+  var_dump(current(&$k));
   echo "each: ";
-  var_dump(each($k));
+  var_dump(each(&$k));
   echo "current 2: ";
-  var_dump(current($k));
+  var_dump(current(&$k));
   echo "end: ";
-  var_dump(end($k));
-  echo "extract: ";
-  var_dump(extract(keyset['php_is_awesome', 42]));
-  var_dump($php_is_awesome);
+  var_dump(end(&$k));
   echo "in_array: ";
   var_dump([in_array('x', $k1), in_array('q', $k1)]);
   echo "key: ";
-  var_dump(key($k));
+  var_dump(key(&$k));
   // list() could be tested here, but it's just weird with keysets
   echo "next: ";
-  var_dump(next($k));
+  var_dump(next(&$k));
   echo "prev 1: ";
-  var_dump(prev($k));
-  end($k);
+  var_dump(prev(&$k));
+  end(&$k);
   echo "prev 2: ";
-  var_dump(prev($k));
+  var_dump(prev(&$k));
   echo "reset: ";
-  var_dump(reset($k));
+  var_dump(reset(&$k));
   echo "count: ";
   var_dump(count($k1));
   echo "array_pad 1: ";
@@ -168,13 +168,19 @@ function with_keyset($k1) {
 
   // Those two must work with keysets and preserve the type.
   //
-  var_dump(array_push($k, 'i'));
-  var_dump(array_unshift($k, 'q'));
+  var_dump(array_push(&$k, 'i'));
+  var_dump(array_unshift(&$k, 'q'));
+  var_dump($k);
+
+  echo "array_splice: ";
+  var_dump(array_splice(&$k, 2));
   var_dump($k);
 
 }
 
 with_keyset(keyset['q', 'u', 'e', 'n', 't', 'i', 'n']);
+with_keyset(keyset[5, 7, 8, 10]);
+with_keyset(keyset["5", "7", "8", "10"]);
 with_keyset(keyset[]);
 
 // Recursive functions will convert the keysets they process in a "lazy"
@@ -192,15 +198,8 @@ var_dump(array_replace_recursive($ar1, ["colors" => ["green" => "blue"]]));
 // These functions should return false or null and emit a warning when passed a
 // hack array.
 //
-$k1 = keyset[];
-echo "array_splice: ";
-var_dump(array_splice($k1, 2));
 echo "array_multisort: ";
-var_dump(array_multisort($k1));
-echo "array_walk: ";
-var_dump(array_walk($k1, function($foo) { return "bar"; }));
-echo "array_walk_recursive: ";
-var_dump(array_walk_recursive($k1, function($foo) { return "bar"; }));
+var_dump(array_multisort(&$k1));
 
 // Those should simply return a php array.
 //

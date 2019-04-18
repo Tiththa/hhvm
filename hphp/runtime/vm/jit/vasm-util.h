@@ -21,6 +21,7 @@
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-reg.h"
 #include "hphp/runtime/vm/jit/vasm-unit.h"
+#include "hphp/runtime/vm/jit/vasm-visit.h"
 
 #include <algorithm>
 
@@ -39,10 +40,86 @@ bool is_trivial_nop(const Vinstr&);
  */
 bool splitCriticalEdges(Vunit& unit);
 
+///////////////////////////////////////////////////////////////////////////////
+
 /*
- * Return a Vreg holding the constant value represented by the given Type.
+ * Compute a mapping of each (reachable) block in a Vunit to its immediate
+ * dominator, using the provided reverse post-order sort of the blocks.
  */
-Vreg make_const(Vunit&, Type);
+using VIdomVector = jit::vector<Vlabel>;
+VIdomVector findDominators(const Vunit&, const jit::vector<Vlabel>& rpo);
+
+/*
+ * Test if b1 dominates b2
+ */
+bool dominates(Vlabel b1, Vlabel b2, const VIdomVector&);
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Compute all back edges among the (reachable) blocks in a Vunit, using the
+ * provided reverse post-order sort of the blocks.
+ *
+ * A back-edge is a pair of blocks b1 and b2 where b2 is an immediate successor
+ * of b1, and b2 also dominates b1.
+ */
+using BackEdgeVector = jit::vector<std::pair<Vlabel, Vlabel>>;
+BackEdgeVector findBackEdges(const Vunit&,
+                             const jit::vector<Vlabel>& rpo,
+                             const VIdomVector&);
+
+/*
+ * Compute a mapping of loops (represented by the loop's header block) to the
+ * blocks contained within that loop. The membership is inclusive, a block may
+ * be in multiple loops.
+ *
+ * NB: This only finds reducible loops. It may not recognize irreducible loops
+ * correctly, so should not be used in places where it would be unsound to miss
+ * those.
+ */
+using LoopBlocks = jit::fast_map<Vlabel, jit::vector<Vlabel>>;
+LoopBlocks findLoopBlocks(const Vunit&,
+                          const PredVector&,
+                          const BackEdgeVector&);
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Put the Vregs specified by `targets' into SSA form. Only the instances of
+ * Vregs in blocks present in the reverse post-order sort will be modified.
+ *
+ * The Vregs will be rewritten to new Vregs, such that each new Vreg has exactly
+ * one definition, and all usages of the Vregs are dominated by a
+ * definition. This lets one do transformations that may not preserve SSA form,
+ * and restore it after the fact.
+ *
+ * A mapping of new Vregs to the Vreg they replaced is returned.
+ *
+ * The `ssaalias' pseudo-instruction can be used to control what a Vreg is
+ * rewritten to. An example:
+ *
+ *   conjure %1
+ *   ssaalias %1, %2
+ *   copy %1, %1
+ *   conjureuse %1
+ *   conjureuse %2
+ *
+ * will be rewritten as:
+ *   conjure %3
+ *   copy %3, %4
+ *   conjureuse %4
+ *   conjureuse %3
+ */
+jit::fast_map<Vreg, Vreg> restoreSSA(Vunit& unit,
+                                     const VregSet& targets,
+                                     const jit::vector<Vlabel>& rpo);
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Return a Vloc holding the constant value represented by the given Type.
+ */
+Vloc make_const(Vunit&, Type);
 
 /*
  * Move all the elements of `in' into `out', replacing `count' elements of

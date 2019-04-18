@@ -22,8 +22,10 @@
 
 #include <folly/Optional.h>
 
-#include "hphp/hhbbc/misc.h"
+#include "hphp/hhbbc/bc.h"
+#include "hphp/hhbbc/context.h"
 #include "hphp/hhbbc/index.h"
+#include "hphp/hhbbc/misc.h"
 #include "hphp/hhbbc/type-system.h"
 
 namespace HPHP { namespace HHBBC {
@@ -35,6 +37,7 @@ struct StepFlags;
 struct Bytecode;
 struct ISS;
 namespace php { struct Block; }
+namespace res { struct Func; }
 
 //////////////////////////////////////////////////////////////////////
 
@@ -42,6 +45,12 @@ constexpr auto kReadOnlyConstant = kInvalidDataType;
 constexpr auto kDynamicConstant = kExtraInvalidDataType;
 
 //////////////////////////////////////////////////////////////////////
+
+struct BlockUpdateInfo {
+  BlockId fallthrough{NoBlockId};
+  uint32_t unchangedBcs{0};
+  CompactVector<Bytecode> replacedBcs;
+};
 
 /*
  * RunFlags are information about running an entire block in the
@@ -55,11 +64,12 @@ struct RunFlags {
   folly::Optional<Type> returned;
 
   /*
-   * Map from the local statics whose types were used by this block,
-   * to the type that was used.  This is used to force re-analysis of
-   * the corresponding blocks when the type of the static changes.
+   * If returned is set, and the returned value was a parameter,
+   * retParam will be set to the parameter's id; otherwise it will be
+   * NoLocalId.
    */
-  std::shared_ptr<std::map<LocalId,Type>> usedLocalStatics;
+  LocalId retParam{NoLocalId};
+  BlockUpdateInfo updateInfo;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -78,29 +88,12 @@ struct StepFlags {
    *
    * Instructions are assumed to be PEIs unless the abstract
    * interpreter says they aren't.  A PEI must propagate the state
-   * from before the instruction across all factored exit edges.
+   * from before the instruction across all throw exit edges.
    *
    * Some instructions that can throw with mid-opcode states need to
    * handle those cases specially.
    */
   bool wasPEI = true;
-
-  /*
-   * Information about the branch taken by a conditional JmpZ/JmpNZ at
-   * the end of the BB.
-   *
-   * 'Either' indicates that both branches could be taken. 'Taken' indicates
-   * that the conditional branch was known to be taken (e.g. because the
-   * condition was a constant). In this case, the state doesn't need to
-   * be propagated to the fallthrough block.
-   *
-   * 'Fallthrough' indicates that the conditional branch was known to be not
-   * taken, and control goes to the fallthrough block. In this case, the
-   * JmpZ/JmpNZ instruction can be converted to a PopC (no-op).
-   */
-  enum class JmpFlags : uint8_t { Either, Taken, Fallthrough };
-
-  JmpFlags jmpFlag = JmpFlags::Either;
 
   /*
    * If an instruction sets this flag, it means that if it pushed a
@@ -110,6 +103,28 @@ struct StepFlags {
    * constant.
    */
   bool canConstProp = false;
+
+  /*
+   * If an instruction sets this flag, it means that this
+   * instruction doesn't prevent a call to the containing function
+   * from being discarded if its result is unneeded.
+   *
+   * Instructions that are marked canConstProp that also produce a
+   * constant result automatically set this flag.
+   */
+  bool effectFree = false;
+
+  /*
+   * Set by impl_vec to indicate that this instruction was already
+   * dealt with via reduce.
+   */
+  bool reduced = false;
+
+  /*
+   * If set to something other than NoBlockId, then this block
+   * unconditionally falls through to that block.
+   */
+  BlockId jmpDest = NoBlockId;
 
   /*
    * If an instruction may read or write to locals, these flags
@@ -129,24 +144,17 @@ struct StepFlags {
   std::bitset<kMaxTrackedLocals> mayReadLocalSet;
 
   /*
-   * If the instruction on this step could've been replaced with
-   * cheaper bytecode, this is the list of bytecode that can be used.
-   */
-  folly::Optional<std::vector<Bytecode>> strengthReduced;
-
-  /*
    * If this is not none, the interpreter executed a return on this
    * step, with this type.
    */
   folly::Optional<Type> returned;
 
   /*
-   * Map from the local statics whose types were used by this
-   * instruction, to the type that was used.  This is used to force
-   * re-analysis of the corresponding blocks when the type of the
-   * static changes.
+   * If returned is set, and the returned value was a parameter,
+   * retParam will be set to the parameter's id; otherwise it will be
+   * NoLocalId.
    */
-  std::shared_ptr<std::map<LocalId,Type>> usedLocalStatics;
+  LocalId retParam{NoLocalId};
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -159,7 +167,8 @@ struct Interp {
   const Index& index;
   Context ctx;
   CollectedInfo& collect;
-  borrowed_ptr<const php::Block> blk;
+  const BlockId bid;
+  const php::Block* blk;
   State& state;
 };
 
@@ -178,9 +187,12 @@ StepFlags step(Interp&, const Bytecode& op);
  * If a branch is taken or an exception is thrown, the supplied
  * callback is used to indicate when/where the state referenced in the
  * Interp structure should be propagated.
+ *
+ * If the PropagateFn is called with a nullptr State, it means that
+ * the given block should be re-processed.
  */
-using PropagateFn = std::function<void (BlockId, const State&)>;
-RunFlags run(Interp&, PropagateFn);
+using PropagateFn = std::function<void (BlockId, const State*)>;
+RunFlags run(Interp&, const State& in, PropagateFn);
 
 /*
  * Dispatch a bytecode to the default interpreter.
@@ -195,17 +207,26 @@ void default_dispatch(ISS&, const Bytecode&);
 /*
  * Can this call be converted to an FCallBuiltin
  */
-bool can_emit_builtin(borrowed_ptr<const php::Func> func,
+bool can_emit_builtin(const php::Func* func,
                       int numParams, bool hasUnpack);
 
 void finish_builtin(ISS& env,
-                    borrowed_ptr<const php::Func> func,
+                    const php::Func* func,
                     uint32_t numParams,
                     bool unpack);
 
-void reduce_fpass_arg(ISS& env, const Bytecode&, uint32_t param, bool byRef);
-
 bool handle_function_exists(ISS& env, int numArgs, bool allowConstProp);
+
+folly::Optional<Type>
+const_fold(ISS& env, uint32_t nArgs, const res::Func& rfunc);
+
+folly::Optional<Type> thisType(const Index& index, Context ctx);
+
+/*
+ * Extracts name from the type either by using a reified name specialization or
+ * by looking at the typed value
+ */
+SString getNameFromType(const Type& t);
 
 //////////////////////////////////////////////////////////////////////
 

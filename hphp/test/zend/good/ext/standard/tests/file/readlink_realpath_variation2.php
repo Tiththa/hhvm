@@ -7,7 +7,7 @@
 */
 
 echo "*** Testing readlink() and realpath() : usage variations ***\n";
-$name_prefix = dirname(__FILE__);
+$name_prefix = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 // create temp dir
 mkdir("$name_prefix/readlink_realpath_variation2/home/tests/link/", 0777, true);
 // create the file
@@ -48,13 +48,11 @@ unlink($link_arr[0]);
 unlink($link_arr[1]);  
   
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
-$name_prefix = dirname(__FILE__)."/readlink_realpath_variation2";
+error_reporting(0);
+$name_prefix = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
+$name_prefix .= "/readlink_realpath_variation2";
 unlink("$name_prefix/home/tests/link/readlink_realpath_variation2.tmp");
 rmdir("$name_prefix/home/tests/link/");
 rmdir("$name_prefix/home/tests/");
 rmdir("$name_prefix/home/");
 rmdir("$name_prefix/");
-?>

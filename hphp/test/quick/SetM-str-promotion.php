@@ -1,13 +1,7 @@
-<?php
+<?hh
 
 function elemNoPromo() {
   $ret = " ";
-  $ret[0] = 'A';
-  return $ret;
-}
-
-function elemPromo() {
-  $ret = "";
   $ret[0] = 'A';
   return $ret;
 }
@@ -24,8 +18,6 @@ function propPromo() {
   return $ret;
 }
 
-var_dump(elemPromo());
-var_dump(elemPromo());
 var_dump(elemNoPromo());
 var_dump(elemNoPromo());
 var_dump(propPromo());

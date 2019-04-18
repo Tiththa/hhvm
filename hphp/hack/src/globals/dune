@@ -1,0 +1,10 @@
+(library
+  (name global_config)
+  (wrapped false)
+  (modules
+    globalConfig)
+  (libraries
+    core_kernel
+    find
+    heap_shared_mem
+    sys_utils))

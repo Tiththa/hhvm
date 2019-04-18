@@ -1,11 +1,8 @@
-<?hh
+<?php /* destructor */
 
 const N = 10;
 
 class Obj {
-  function __destruct() {
-    echo "object destroyed\n";
-  }
 }
 
 class X {
@@ -26,6 +23,7 @@ class X {
   }
 
   function __construct() {
+    $this->arr = array();
     for ($i = 0; $i < N; $i++) {
       $this->arr[] = new Obj();
     }
@@ -33,6 +31,15 @@ class X {
   }
 }
 
-$x = new X();
-$x->f();
-echo "done\n";
+
+function f() {
+  $x = new X();
+  $x->f();
+}
+
+<<__EntryPoint>>
+function main_uninit_leak() {
+  f();
+  var_dump(hh\objprof_get_data());
+  echo "done\n";
+}

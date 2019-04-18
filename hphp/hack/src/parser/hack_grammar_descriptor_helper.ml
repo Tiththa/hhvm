@@ -2,9 +2,8 @@
 * Copyright (c) 2016, Facebook, Inc.
 * All rights reserved.
 *
-* This source code is licensed under the BSD-style license found in the
-* LICENSE file in the "hack" directory of this source tree. An additional grant
-* of patent rights can be found in the PATENTS file in the same directory.
+* This source code is licensed under the MIT license found in the
+* LICENSE file in the "hack" directory of this source tree.
 *
 *)
 
@@ -40,8 +39,9 @@ end
 module HackGrammarHelper = struct
 
   let is_keyword text =
-    let text = String.lowercase text in
-    match Full_fidelity_token_kind.from_string text with
+    let text = String.lowercase_ascii text in
+    match Full_fidelity_token_kind.from_string text ~is_hack:true
+      ~allow_xhp:true ~only_reserved:false with
     | Some _ -> true
     | _ -> false
 
@@ -89,8 +89,8 @@ module HackGrammarTermSpec = struct
   let term_array = Term Array
   let term_list = Term List
   let name = Term Name
-  let qualified_name = Term QualifiedName
   let equal = Term Equal
+  let backslash = Term Backslash
   let equal_equal = Term EqualEqual
   let equal_equal_equal = Term EqualEqualEqual
   let equal_greater_than = Term EqualGreaterThan
@@ -232,12 +232,16 @@ module HackGrammarTermSpec = struct
   let xhp_comment = Term XHPComment
   let slash_greater_than = Term SlashGreaterThan
   let less_than_slash = Term LessThanSlash
+  let inout = Term Inout
+
+  let rec qualified_name = NonTerm ("QualifiedName", fun () -> [
+    [name; backslash; name];
+    [qualified_name; backslash; name]])
 
   (* For keywords, use TokenKind to_string. For names, use gen_name to generate
    * name *)
   let to_string = function
   | Dollar -> "$" ^ (gen_name ())
-  | QualifiedName
   | Name -> gen_name()
   (* TODO more general approach *)
   (* | QualifiedName -> (gen_name ()) ^ "/" ^ (gen_name ()) *)

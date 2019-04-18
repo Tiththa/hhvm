@@ -2,9 +2,8 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
+ * This source code is licensed under the MIT license found in the
  * LICENSE file in the "hack" directory of this source tree. An additional
- * grant of patent rights can be found in the PATENTS file in the same
  * directory.
  *
  **
@@ -13,8 +12,6 @@
  * To regenerate this file, run
  *
  *   buck run //hphp/hack/src:generate_full_fidelity
- *
- * This module contains the type describing the structure of a syntax tree.
  *
  **
  *
@@ -30,9 +27,13 @@
  * a rewriting visitor, and so on.
  *)
 
+open Core_kernel
 open Full_fidelity_syntax_type
+
 module SyntaxKind = Full_fidelity_syntax_kind
+module TokenKind = Full_fidelity_token_kind
 module Operator = Full_fidelity_operator
+[@@@warning "-27"] (* unused variable *)
 
 module WithToken(Token: TokenType) = struct
   module WithSyntaxValue(SyntaxValue: SyntaxValueType) = struct
@@ -57,17 +58,21 @@ module WithToken(Token: TokenType) = struct
     let to_kind syntax =
       match syntax with
       | Missing                             -> SyntaxKind.Missing
-      | Token                             _ -> SyntaxKind.Token
+      | Token                             t -> SyntaxKind.Token (Token.kind t)
       | SyntaxList                        _ -> SyntaxKind.SyntaxList
       | EndOfFile                         _ -> SyntaxKind.EndOfFile
       | Script                            _ -> SyntaxKind.Script
+      | QualifiedName                     _ -> SyntaxKind.QualifiedName
       | SimpleTypeSpecifier               _ -> SyntaxKind.SimpleTypeSpecifier
       | LiteralExpression                 _ -> SyntaxKind.LiteralExpression
+      | PrefixedStringExpression          _ -> SyntaxKind.PrefixedStringExpression
       | VariableExpression                _ -> SyntaxKind.VariableExpression
-      | QualifiedNameExpression           _ -> SyntaxKind.QualifiedNameExpression
       | PipeVariableExpression            _ -> SyntaxKind.PipeVariableExpression
+      | FileAttributeSpecification        _ -> SyntaxKind.FileAttributeSpecification
       | EnumDeclaration                   _ -> SyntaxKind.EnumDeclaration
       | Enumerator                        _ -> SyntaxKind.Enumerator
+      | RecordDeclaration                 _ -> SyntaxKind.RecordDeclaration
+      | RecordField                       _ -> SyntaxKind.RecordField
       | AliasDeclaration                  _ -> SyntaxKind.AliasDeclaration
       | PropertyDeclaration               _ -> SyntaxKind.PropertyDeclaration
       | PropertyDeclarator                _ -> SyntaxKind.PropertyDeclarator
@@ -82,6 +87,7 @@ module WithToken(Token: TokenType) = struct
       | WhereClause                       _ -> SyntaxKind.WhereClause
       | WhereConstraint                   _ -> SyntaxKind.WhereConstraint
       | MethodishDeclaration              _ -> SyntaxKind.MethodishDeclaration
+      | MethodishTraitResolution          _ -> SyntaxKind.MethodishTraitResolution
       | ClassishDeclaration               _ -> SyntaxKind.ClassishDeclaration
       | ClassishBody                      _ -> SyntaxKind.ClassishBody
       | TraitUsePrecedenceItem            _ -> SyntaxKind.TraitUsePrecedenceItem
@@ -96,18 +102,26 @@ module WithToken(Token: TokenType) = struct
       | ParameterDeclaration              _ -> SyntaxKind.ParameterDeclaration
       | VariadicParameter                 _ -> SyntaxKind.VariadicParameter
       | AttributeSpecification            _ -> SyntaxKind.AttributeSpecification
-      | Attribute                         _ -> SyntaxKind.Attribute
       | InclusionExpression               _ -> SyntaxKind.InclusionExpression
       | InclusionDirective                _ -> SyntaxKind.InclusionDirective
       | CompoundStatement                 _ -> SyntaxKind.CompoundStatement
+      | AlternateLoopStatement            _ -> SyntaxKind.AlternateLoopStatement
       | ExpressionStatement               _ -> SyntaxKind.ExpressionStatement
       | MarkupSection                     _ -> SyntaxKind.MarkupSection
       | MarkupSuffix                      _ -> SyntaxKind.MarkupSuffix
       | UnsetStatement                    _ -> SyntaxKind.UnsetStatement
+      | LetStatement                      _ -> SyntaxKind.LetStatement
+      | UsingStatementBlockScoped         _ -> SyntaxKind.UsingStatementBlockScoped
+      | UsingStatementFunctionScoped      _ -> SyntaxKind.UsingStatementFunctionScoped
+      | DeclareDirectiveStatement         _ -> SyntaxKind.DeclareDirectiveStatement
+      | DeclareBlockStatement             _ -> SyntaxKind.DeclareBlockStatement
       | WhileStatement                    _ -> SyntaxKind.WhileStatement
       | IfStatement                       _ -> SyntaxKind.IfStatement
       | ElseifClause                      _ -> SyntaxKind.ElseifClause
       | ElseClause                        _ -> SyntaxKind.ElseClause
+      | AlternateIfStatement              _ -> SyntaxKind.AlternateIfStatement
+      | AlternateElseifClause             _ -> SyntaxKind.AlternateElseifClause
+      | AlternateElseClause               _ -> SyntaxKind.AlternateElseClause
       | TryStatement                      _ -> SyntaxKind.TryStatement
       | CatchClause                       _ -> SyntaxKind.CatchClause
       | FinallyClause                     _ -> SyntaxKind.FinallyClause
@@ -115,6 +129,7 @@ module WithToken(Token: TokenType) = struct
       | ForStatement                      _ -> SyntaxKind.ForStatement
       | ForeachStatement                  _ -> SyntaxKind.ForeachStatement
       | SwitchStatement                   _ -> SyntaxKind.SwitchStatement
+      | AlternateSwitchStatement          _ -> SyntaxKind.AlternateSwitchStatement
       | SwitchSection                     _ -> SyntaxKind.SwitchSection
       | SwitchFallthrough                 _ -> SyntaxKind.SwitchFallthrough
       | CaseLabel                         _ -> SyntaxKind.CaseLabel
@@ -125,12 +140,12 @@ module WithToken(Token: TokenType) = struct
       | ThrowStatement                    _ -> SyntaxKind.ThrowStatement
       | BreakStatement                    _ -> SyntaxKind.BreakStatement
       | ContinueStatement                 _ -> SyntaxKind.ContinueStatement
-      | FunctionStaticStatement           _ -> SyntaxKind.FunctionStaticStatement
-      | StaticDeclarator                  _ -> SyntaxKind.StaticDeclarator
       | EchoStatement                     _ -> SyntaxKind.EchoStatement
-      | GlobalStatement                   _ -> SyntaxKind.GlobalStatement
+      | ConcurrentStatement               _ -> SyntaxKind.ConcurrentStatement
       | SimpleInitializer                 _ -> SyntaxKind.SimpleInitializer
+      | AnonymousClass                    _ -> SyntaxKind.AnonymousClass
       | AnonymousFunction                 _ -> SyntaxKind.AnonymousFunction
+      | Php7AnonymousFunction             _ -> SyntaxKind.Php7AnonymousFunction
       | AnonymousFunctionUseClause        _ -> SyntaxKind.AnonymousFunctionUseClause
       | LambdaExpression                  _ -> SyntaxKind.LambdaExpression
       | LambdaSignature                   _ -> SyntaxKind.LambdaSignature
@@ -145,10 +160,14 @@ module WithToken(Token: TokenType) = struct
       | PostfixUnaryExpression            _ -> SyntaxKind.PostfixUnaryExpression
       | BinaryExpression                  _ -> SyntaxKind.BinaryExpression
       | InstanceofExpression              _ -> SyntaxKind.InstanceofExpression
+      | IsExpression                      _ -> SyntaxKind.IsExpression
+      | AsExpression                      _ -> SyntaxKind.AsExpression
+      | NullableAsExpression              _ -> SyntaxKind.NullableAsExpression
       | ConditionalExpression             _ -> SyntaxKind.ConditionalExpression
       | EvalExpression                    _ -> SyntaxKind.EvalExpression
       | EmptyExpression                   _ -> SyntaxKind.EmptyExpression
       | DefineExpression                  _ -> SyntaxKind.DefineExpression
+      | HaltCompilerExpression            _ -> SyntaxKind.HaltCompilerExpression
       | IssetExpression                   _ -> SyntaxKind.IssetExpression
       | FunctionCallExpression            _ -> SyntaxKind.FunctionCallExpression
       | ParenthesizedExpression           _ -> SyntaxKind.ParenthesizedExpression
@@ -157,6 +176,8 @@ module WithToken(Token: TokenType) = struct
       | ListExpression                    _ -> SyntaxKind.ListExpression
       | CollectionLiteralExpression       _ -> SyntaxKind.CollectionLiteralExpression
       | ObjectCreationExpression          _ -> SyntaxKind.ObjectCreationExpression
+      | ConstructorCall                   _ -> SyntaxKind.ConstructorCall
+      | RecordCreationExpression          _ -> SyntaxKind.RecordCreationExpression
       | ArrayCreationExpression           _ -> SyntaxKind.ArrayCreationExpression
       | ArrayIntrinsicExpression          _ -> SyntaxKind.ArrayIntrinsicExpression
       | DarrayIntrinsicExpression         _ -> SyntaxKind.DarrayIntrinsicExpression
@@ -176,7 +197,8 @@ module WithToken(Token: TokenType) = struct
       | XHPClassAttributeDeclaration      _ -> SyntaxKind.XHPClassAttributeDeclaration
       | XHPClassAttribute                 _ -> SyntaxKind.XHPClassAttribute
       | XHPSimpleClassAttribute           _ -> SyntaxKind.XHPSimpleClassAttribute
-      | XHPAttribute                      _ -> SyntaxKind.XHPAttribute
+      | XHPSimpleAttribute                _ -> SyntaxKind.XHPSimpleAttribute
+      | XHPSpreadAttribute                _ -> SyntaxKind.XHPSpreadAttribute
       | XHPOpen                           _ -> SyntaxKind.XHPOpen
       | XHPExpression                     _ -> SyntaxKind.XHPExpression
       | XHPClose                          _ -> SyntaxKind.XHPClose
@@ -192,6 +214,7 @@ module WithToken(Token: TokenType) = struct
       | MapArrayTypeSpecifier             _ -> SyntaxKind.MapArrayTypeSpecifier
       | DictionaryTypeSpecifier           _ -> SyntaxKind.DictionaryTypeSpecifier
       | ClosureTypeSpecifier              _ -> SyntaxKind.ClosureTypeSpecifier
+      | ClosureParameterTypeSpecifier     _ -> SyntaxKind.ClosureParameterTypeSpecifier
       | ClassnameTypeSpecifier            _ -> SyntaxKind.ClassnameTypeSpecifier
       | FieldSpecifier                    _ -> SyntaxKind.FieldSpecifier
       | FieldInitializer                  _ -> SyntaxKind.FieldInitializer
@@ -200,12 +223,22 @@ module WithToken(Token: TokenType) = struct
       | TupleExpression                   _ -> SyntaxKind.TupleExpression
       | GenericTypeSpecifier              _ -> SyntaxKind.GenericTypeSpecifier
       | NullableTypeSpecifier             _ -> SyntaxKind.NullableTypeSpecifier
+      | LikeTypeSpecifier                 _ -> SyntaxKind.LikeTypeSpecifier
       | SoftTypeSpecifier                 _ -> SyntaxKind.SoftTypeSpecifier
+      | ReifiedTypeArgument               _ -> SyntaxKind.ReifiedTypeArgument
       | TypeArguments                     _ -> SyntaxKind.TypeArguments
       | TypeParameters                    _ -> SyntaxKind.TypeParameters
       | TupleTypeSpecifier                _ -> SyntaxKind.TupleTypeSpecifier
       | ErrorSyntax                       _ -> SyntaxKind.ErrorSyntax
       | ListItem                          _ -> SyntaxKind.ListItem
+      | PocketAtomExpression              _ -> SyntaxKind.PocketAtomExpression
+      | PocketIdentifierExpression        _ -> SyntaxKind.PocketIdentifierExpression
+      | PocketAtomMappingDeclaration      _ -> SyntaxKind.PocketAtomMappingDeclaration
+      | PocketEnumDeclaration             _ -> SyntaxKind.PocketEnumDeclaration
+      | PocketFieldTypeExprDeclaration    _ -> SyntaxKind.PocketFieldTypeExprDeclaration
+      | PocketFieldTypeDeclaration        _ -> SyntaxKind.PocketFieldTypeDeclaration
+      | PocketMappingIdDeclaration        _ -> SyntaxKind.PocketMappingIdDeclaration
+      | PocketMappingTypeDeclaration      _ -> SyntaxKind.PocketMappingTypeDeclaration
 
 
     let kind node =
@@ -222,13 +255,17 @@ module WithToken(Token: TokenType) = struct
 
     let is_end_of_file                          = has_kind SyntaxKind.EndOfFile
     let is_script                               = has_kind SyntaxKind.Script
+    let is_qualified_name                       = has_kind SyntaxKind.QualifiedName
     let is_simple_type_specifier                = has_kind SyntaxKind.SimpleTypeSpecifier
     let is_literal_expression                   = has_kind SyntaxKind.LiteralExpression
+    let is_prefixed_string_expression           = has_kind SyntaxKind.PrefixedStringExpression
     let is_variable_expression                  = has_kind SyntaxKind.VariableExpression
-    let is_qualified_name_expression            = has_kind SyntaxKind.QualifiedNameExpression
     let is_pipe_variable_expression             = has_kind SyntaxKind.PipeVariableExpression
+    let is_file_attribute_specification         = has_kind SyntaxKind.FileAttributeSpecification
     let is_enum_declaration                     = has_kind SyntaxKind.EnumDeclaration
     let is_enumerator                           = has_kind SyntaxKind.Enumerator
+    let is_record_declaration                   = has_kind SyntaxKind.RecordDeclaration
+    let is_record_field                         = has_kind SyntaxKind.RecordField
     let is_alias_declaration                    = has_kind SyntaxKind.AliasDeclaration
     let is_property_declaration                 = has_kind SyntaxKind.PropertyDeclaration
     let is_property_declarator                  = has_kind SyntaxKind.PropertyDeclarator
@@ -243,6 +280,7 @@ module WithToken(Token: TokenType) = struct
     let is_where_clause                         = has_kind SyntaxKind.WhereClause
     let is_where_constraint                     = has_kind SyntaxKind.WhereConstraint
     let is_methodish_declaration                = has_kind SyntaxKind.MethodishDeclaration
+    let is_methodish_trait_resolution           = has_kind SyntaxKind.MethodishTraitResolution
     let is_classish_declaration                 = has_kind SyntaxKind.ClassishDeclaration
     let is_classish_body                        = has_kind SyntaxKind.ClassishBody
     let is_trait_use_precedence_item            = has_kind SyntaxKind.TraitUsePrecedenceItem
@@ -257,18 +295,26 @@ module WithToken(Token: TokenType) = struct
     let is_parameter_declaration                = has_kind SyntaxKind.ParameterDeclaration
     let is_variadic_parameter                   = has_kind SyntaxKind.VariadicParameter
     let is_attribute_specification              = has_kind SyntaxKind.AttributeSpecification
-    let is_attribute                            = has_kind SyntaxKind.Attribute
     let is_inclusion_expression                 = has_kind SyntaxKind.InclusionExpression
     let is_inclusion_directive                  = has_kind SyntaxKind.InclusionDirective
     let is_compound_statement                   = has_kind SyntaxKind.CompoundStatement
+    let is_alternate_loop_statement             = has_kind SyntaxKind.AlternateLoopStatement
     let is_expression_statement                 = has_kind SyntaxKind.ExpressionStatement
     let is_markup_section                       = has_kind SyntaxKind.MarkupSection
     let is_markup_suffix                        = has_kind SyntaxKind.MarkupSuffix
     let is_unset_statement                      = has_kind SyntaxKind.UnsetStatement
+    let is_let_statement                        = has_kind SyntaxKind.LetStatement
+    let is_using_statement_block_scoped         = has_kind SyntaxKind.UsingStatementBlockScoped
+    let is_using_statement_function_scoped      = has_kind SyntaxKind.UsingStatementFunctionScoped
+    let is_declare_directive_statement          = has_kind SyntaxKind.DeclareDirectiveStatement
+    let is_declare_block_statement              = has_kind SyntaxKind.DeclareBlockStatement
     let is_while_statement                      = has_kind SyntaxKind.WhileStatement
     let is_if_statement                         = has_kind SyntaxKind.IfStatement
     let is_elseif_clause                        = has_kind SyntaxKind.ElseifClause
     let is_else_clause                          = has_kind SyntaxKind.ElseClause
+    let is_alternate_if_statement               = has_kind SyntaxKind.AlternateIfStatement
+    let is_alternate_elseif_clause              = has_kind SyntaxKind.AlternateElseifClause
+    let is_alternate_else_clause                = has_kind SyntaxKind.AlternateElseClause
     let is_try_statement                        = has_kind SyntaxKind.TryStatement
     let is_catch_clause                         = has_kind SyntaxKind.CatchClause
     let is_finally_clause                       = has_kind SyntaxKind.FinallyClause
@@ -276,6 +322,7 @@ module WithToken(Token: TokenType) = struct
     let is_for_statement                        = has_kind SyntaxKind.ForStatement
     let is_foreach_statement                    = has_kind SyntaxKind.ForeachStatement
     let is_switch_statement                     = has_kind SyntaxKind.SwitchStatement
+    let is_alternate_switch_statement           = has_kind SyntaxKind.AlternateSwitchStatement
     let is_switch_section                       = has_kind SyntaxKind.SwitchSection
     let is_switch_fallthrough                   = has_kind SyntaxKind.SwitchFallthrough
     let is_case_label                           = has_kind SyntaxKind.CaseLabel
@@ -286,12 +333,12 @@ module WithToken(Token: TokenType) = struct
     let is_throw_statement                      = has_kind SyntaxKind.ThrowStatement
     let is_break_statement                      = has_kind SyntaxKind.BreakStatement
     let is_continue_statement                   = has_kind SyntaxKind.ContinueStatement
-    let is_function_static_statement            = has_kind SyntaxKind.FunctionStaticStatement
-    let is_static_declarator                    = has_kind SyntaxKind.StaticDeclarator
     let is_echo_statement                       = has_kind SyntaxKind.EchoStatement
-    let is_global_statement                     = has_kind SyntaxKind.GlobalStatement
+    let is_concurrent_statement                 = has_kind SyntaxKind.ConcurrentStatement
     let is_simple_initializer                   = has_kind SyntaxKind.SimpleInitializer
+    let is_anonymous_class                      = has_kind SyntaxKind.AnonymousClass
     let is_anonymous_function                   = has_kind SyntaxKind.AnonymousFunction
+    let is_php7_anonymous_function              = has_kind SyntaxKind.Php7AnonymousFunction
     let is_anonymous_function_use_clause        = has_kind SyntaxKind.AnonymousFunctionUseClause
     let is_lambda_expression                    = has_kind SyntaxKind.LambdaExpression
     let is_lambda_signature                     = has_kind SyntaxKind.LambdaSignature
@@ -306,10 +353,14 @@ module WithToken(Token: TokenType) = struct
     let is_postfix_unary_expression             = has_kind SyntaxKind.PostfixUnaryExpression
     let is_binary_expression                    = has_kind SyntaxKind.BinaryExpression
     let is_instanceof_expression                = has_kind SyntaxKind.InstanceofExpression
+    let is_is_expression                        = has_kind SyntaxKind.IsExpression
+    let is_as_expression                        = has_kind SyntaxKind.AsExpression
+    let is_nullable_as_expression               = has_kind SyntaxKind.NullableAsExpression
     let is_conditional_expression               = has_kind SyntaxKind.ConditionalExpression
     let is_eval_expression                      = has_kind SyntaxKind.EvalExpression
     let is_empty_expression                     = has_kind SyntaxKind.EmptyExpression
     let is_define_expression                    = has_kind SyntaxKind.DefineExpression
+    let is_halt_compiler_expression             = has_kind SyntaxKind.HaltCompilerExpression
     let is_isset_expression                     = has_kind SyntaxKind.IssetExpression
     let is_function_call_expression             = has_kind SyntaxKind.FunctionCallExpression
     let is_parenthesized_expression             = has_kind SyntaxKind.ParenthesizedExpression
@@ -318,6 +369,8 @@ module WithToken(Token: TokenType) = struct
     let is_list_expression                      = has_kind SyntaxKind.ListExpression
     let is_collection_literal_expression        = has_kind SyntaxKind.CollectionLiteralExpression
     let is_object_creation_expression           = has_kind SyntaxKind.ObjectCreationExpression
+    let is_constructor_call                     = has_kind SyntaxKind.ConstructorCall
+    let is_record_creation_expression           = has_kind SyntaxKind.RecordCreationExpression
     let is_array_creation_expression            = has_kind SyntaxKind.ArrayCreationExpression
     let is_array_intrinsic_expression           = has_kind SyntaxKind.ArrayIntrinsicExpression
     let is_darray_intrinsic_expression          = has_kind SyntaxKind.DarrayIntrinsicExpression
@@ -337,7 +390,8 @@ module WithToken(Token: TokenType) = struct
     let is_xhp_class_attribute_declaration      = has_kind SyntaxKind.XHPClassAttributeDeclaration
     let is_xhp_class_attribute                  = has_kind SyntaxKind.XHPClassAttribute
     let is_xhp_simple_class_attribute           = has_kind SyntaxKind.XHPSimpleClassAttribute
-    let is_xhp_attribute                        = has_kind SyntaxKind.XHPAttribute
+    let is_xhp_simple_attribute                 = has_kind SyntaxKind.XHPSimpleAttribute
+    let is_xhp_spread_attribute                 = has_kind SyntaxKind.XHPSpreadAttribute
     let is_xhp_open                             = has_kind SyntaxKind.XHPOpen
     let is_xhp_expression                       = has_kind SyntaxKind.XHPExpression
     let is_xhp_close                            = has_kind SyntaxKind.XHPClose
@@ -353,6 +407,7 @@ module WithToken(Token: TokenType) = struct
     let is_map_array_type_specifier             = has_kind SyntaxKind.MapArrayTypeSpecifier
     let is_dictionary_type_specifier            = has_kind SyntaxKind.DictionaryTypeSpecifier
     let is_closure_type_specifier               = has_kind SyntaxKind.ClosureTypeSpecifier
+    let is_closure_parameter_type_specifier     = has_kind SyntaxKind.ClosureParameterTypeSpecifier
     let is_classname_type_specifier             = has_kind SyntaxKind.ClassnameTypeSpecifier
     let is_field_specifier                      = has_kind SyntaxKind.FieldSpecifier
     let is_field_initializer                    = has_kind SyntaxKind.FieldInitializer
@@ -361,12 +416,22 @@ module WithToken(Token: TokenType) = struct
     let is_tuple_expression                     = has_kind SyntaxKind.TupleExpression
     let is_generic_type_specifier               = has_kind SyntaxKind.GenericTypeSpecifier
     let is_nullable_type_specifier              = has_kind SyntaxKind.NullableTypeSpecifier
+    let is_like_type_specifier                  = has_kind SyntaxKind.LikeTypeSpecifier
     let is_soft_type_specifier                  = has_kind SyntaxKind.SoftTypeSpecifier
+    let is_reified_type_argument                = has_kind SyntaxKind.ReifiedTypeArgument
     let is_type_arguments                       = has_kind SyntaxKind.TypeArguments
     let is_type_parameters                      = has_kind SyntaxKind.TypeParameters
     let is_tuple_type_specifier                 = has_kind SyntaxKind.TupleTypeSpecifier
     let is_error                                = has_kind SyntaxKind.ErrorSyntax
     let is_list_item                            = has_kind SyntaxKind.ListItem
+    let is_pocket_atom_expression               = has_kind SyntaxKind.PocketAtomExpression
+    let is_pocket_identifier_expression         = has_kind SyntaxKind.PocketIdentifierExpression
+    let is_pocket_atom_mapping_declaration      = has_kind SyntaxKind.PocketAtomMappingDeclaration
+    let is_pocket_enum_declaration              = has_kind SyntaxKind.PocketEnumDeclaration
+    let is_pocket_field_type_expr_declaration   = has_kind SyntaxKind.PocketFieldTypeExprDeclaration
+    let is_pocket_field_type_declaration        = has_kind SyntaxKind.PocketFieldTypeDeclaration
+    let is_pocket_mapping_id_declaration        = has_kind SyntaxKind.PocketMappingIdDeclaration
+    let is_pocket_mapping_type_declaration      = has_kind SyntaxKind.PocketMappingTypeDeclaration
 
 
     let is_loop_statement node =
@@ -378,7 +443,7 @@ module WithToken(Token: TokenType) = struct
     let is_separable_prefix node =
       match syntax node with
       | Token t -> begin
-        Full_fidelity_token_kind.(match Token.kind t with
+        TokenKind.(match Token.kind t with
         | PlusPlus | MinusMinus -> false
         | _ -> true) end
       | _ -> true
@@ -388,1711 +453,2036 @@ module WithToken(Token: TokenType) = struct
       | Token t -> Token.kind t = kind
       | _ -> false
 
-
-    let is_semicolon  = is_specific_token Full_fidelity_token_kind.Semicolon
-    let is_name       = is_specific_token Full_fidelity_token_kind.Name
-    let is_construct  = is_specific_token Full_fidelity_token_kind.Construct
-    let is_destruct   = is_specific_token Full_fidelity_token_kind.Destruct
-    let is_static     = is_specific_token Full_fidelity_token_kind.Static
-    let is_private    = is_specific_token Full_fidelity_token_kind.Private
-    let is_public     = is_specific_token Full_fidelity_token_kind.Public
-    let is_protected  = is_specific_token Full_fidelity_token_kind.Protected
-    let is_abstract   = is_specific_token Full_fidelity_token_kind.Abstract
-    let is_final      = is_specific_token Full_fidelity_token_kind.Final
-    let is_void       = is_specific_token Full_fidelity_token_kind.Void
-    let is_left_brace = is_specific_token Full_fidelity_token_kind.LeftBrace
-    let is_ellipsis   = is_specific_token Full_fidelity_token_kind.DotDotDot
-    let is_comma      = is_specific_token Full_fidelity_token_kind.Comma
-    let is_array      = is_specific_token Full_fidelity_token_kind.Array
-
-    let get_end_of_file_children {
-      end_of_file_token;
-    } = (
-      end_of_file_token
-    )
-
-    let get_script_children {
-      script_declarations;
-    } = (
-      script_declarations
-    )
-
-    let get_simple_type_specifier_children {
-      simple_type_specifier;
-    } = (
-      simple_type_specifier
-    )
-
-    let get_literal_expression_children {
-      literal_expression;
-    } = (
-      literal_expression
-    )
-
-    let get_variable_expression_children {
-      variable_expression;
-    } = (
-      variable_expression
-    )
-
-    let get_qualified_name_expression_children {
-      qualified_name_expression;
-    } = (
-      qualified_name_expression
-    )
-
-    let get_pipe_variable_expression_children {
-      pipe_variable_expression;
-    } = (
-      pipe_variable_expression
-    )
-
-    let get_enum_declaration_children {
-      enum_attribute_spec;
-      enum_keyword;
-      enum_name;
-      enum_colon;
-      enum_base;
-      enum_type;
-      enum_left_brace;
-      enum_enumerators;
-      enum_right_brace;
-    } = (
-      enum_attribute_spec,
-      enum_keyword,
-      enum_name,
-      enum_colon,
-      enum_base,
-      enum_type,
-      enum_left_brace,
-      enum_enumerators,
-      enum_right_brace
-    )
-
-    let get_enumerator_children {
-      enumerator_name;
-      enumerator_equal;
-      enumerator_value;
-      enumerator_semicolon;
-    } = (
-      enumerator_name,
-      enumerator_equal,
-      enumerator_value,
-      enumerator_semicolon
-    )
-
-    let get_alias_declaration_children {
-      alias_attribute_spec;
-      alias_keyword;
-      alias_name;
-      alias_generic_parameter;
-      alias_constraint;
-      alias_equal;
-      alias_type;
-      alias_semicolon;
-    } = (
-      alias_attribute_spec,
-      alias_keyword,
-      alias_name,
-      alias_generic_parameter,
-      alias_constraint,
-      alias_equal,
-      alias_type,
-      alias_semicolon
-    )
-
-    let get_property_declaration_children {
-      property_modifiers;
-      property_type;
-      property_declarators;
-      property_semicolon;
-    } = (
-      property_modifiers,
-      property_type,
-      property_declarators,
-      property_semicolon
-    )
-
-    let get_property_declarator_children {
-      property_name;
-      property_initializer;
-    } = (
-      property_name,
-      property_initializer
-    )
-
-    let get_namespace_declaration_children {
-      namespace_keyword;
-      namespace_name;
-      namespace_body;
-    } = (
-      namespace_keyword,
-      namespace_name,
-      namespace_body
-    )
-
-    let get_namespace_body_children {
-      namespace_left_brace;
-      namespace_declarations;
-      namespace_right_brace;
-    } = (
-      namespace_left_brace,
-      namespace_declarations,
-      namespace_right_brace
-    )
-
-    let get_namespace_empty_body_children {
-      namespace_semicolon;
-    } = (
-      namespace_semicolon
-    )
-
-    let get_namespace_use_declaration_children {
-      namespace_use_keyword;
-      namespace_use_kind;
-      namespace_use_clauses;
-      namespace_use_semicolon;
-    } = (
-      namespace_use_keyword,
-      namespace_use_kind,
-      namespace_use_clauses,
-      namespace_use_semicolon
-    )
-
-    let get_namespace_group_use_declaration_children {
-      namespace_group_use_keyword;
-      namespace_group_use_kind;
-      namespace_group_use_prefix;
-      namespace_group_use_left_brace;
-      namespace_group_use_clauses;
-      namespace_group_use_right_brace;
-      namespace_group_use_semicolon;
-    } = (
-      namespace_group_use_keyword,
-      namespace_group_use_kind,
-      namespace_group_use_prefix,
-      namespace_group_use_left_brace,
-      namespace_group_use_clauses,
-      namespace_group_use_right_brace,
-      namespace_group_use_semicolon
-    )
-
-    let get_namespace_use_clause_children {
-      namespace_use_clause_kind;
-      namespace_use_name;
-      namespace_use_as;
-      namespace_use_alias;
-    } = (
-      namespace_use_clause_kind,
-      namespace_use_name,
-      namespace_use_as,
-      namespace_use_alias
-    )
-
-    let get_function_declaration_children {
-      function_attribute_spec;
-      function_declaration_header;
-      function_body;
-    } = (
-      function_attribute_spec,
-      function_declaration_header,
-      function_body
-    )
-
-    let get_function_declaration_header_children {
-      function_async;
-      function_coroutine;
-      function_keyword;
-      function_ampersand;
-      function_name;
-      function_type_parameter_list;
-      function_left_paren;
-      function_parameter_list;
-      function_right_paren;
-      function_colon;
-      function_type;
-      function_where_clause;
-    } = (
-      function_async,
-      function_coroutine,
-      function_keyword,
-      function_ampersand,
-      function_name,
-      function_type_parameter_list,
-      function_left_paren,
-      function_parameter_list,
-      function_right_paren,
-      function_colon,
-      function_type,
-      function_where_clause
-    )
-
-    let get_where_clause_children {
-      where_clause_keyword;
-      where_clause_constraints;
-    } = (
-      where_clause_keyword,
-      where_clause_constraints
-    )
-
-    let get_where_constraint_children {
-      where_constraint_left_type;
-      where_constraint_operator;
-      where_constraint_right_type;
-    } = (
-      where_constraint_left_type,
-      where_constraint_operator,
-      where_constraint_right_type
-    )
-
-    let get_methodish_declaration_children {
-      methodish_attribute;
-      methodish_modifiers;
-      methodish_function_decl_header;
-      methodish_function_body;
-      methodish_semicolon;
-    } = (
-      methodish_attribute,
-      methodish_modifiers,
-      methodish_function_decl_header,
-      methodish_function_body,
-      methodish_semicolon
-    )
-
-    let get_classish_declaration_children {
-      classish_attribute;
-      classish_modifiers;
-      classish_keyword;
-      classish_name;
-      classish_type_parameters;
-      classish_extends_keyword;
-      classish_extends_list;
-      classish_implements_keyword;
-      classish_implements_list;
-      classish_body;
-    } = (
-      classish_attribute,
-      classish_modifiers,
-      classish_keyword,
-      classish_name,
-      classish_type_parameters,
-      classish_extends_keyword,
-      classish_extends_list,
-      classish_implements_keyword,
-      classish_implements_list,
-      classish_body
-    )
-
-    let get_classish_body_children {
-      classish_body_left_brace;
-      classish_body_elements;
-      classish_body_right_brace;
-    } = (
-      classish_body_left_brace,
-      classish_body_elements,
-      classish_body_right_brace
-    )
-
-    let get_trait_use_precedence_item_children {
-      trait_use_precedence_item_name;
-      trait_use_precedence_item_keyword;
-      trait_use_precedence_item_removed_names;
-    } = (
-      trait_use_precedence_item_name,
-      trait_use_precedence_item_keyword,
-      trait_use_precedence_item_removed_names
-    )
-
-    let get_trait_use_alias_item_children {
-      trait_use_alias_item_aliasing_name;
-      trait_use_alias_item_keyword;
-      trait_use_alias_item_visibility;
-      trait_use_alias_item_aliased_name;
-    } = (
-      trait_use_alias_item_aliasing_name,
-      trait_use_alias_item_keyword,
-      trait_use_alias_item_visibility,
-      trait_use_alias_item_aliased_name
-    )
-
-    let get_trait_use_conflict_resolution_children {
-      trait_use_conflict_resolution_keyword;
-      trait_use_conflict_resolution_names;
-      trait_use_conflict_resolution_left_brace;
-      trait_use_conflict_resolution_clauses;
-      trait_use_conflict_resolution_right_brace;
-    } = (
-      trait_use_conflict_resolution_keyword,
-      trait_use_conflict_resolution_names,
-      trait_use_conflict_resolution_left_brace,
-      trait_use_conflict_resolution_clauses,
-      trait_use_conflict_resolution_right_brace
-    )
-
-    let get_trait_use_children {
-      trait_use_keyword;
-      trait_use_names;
-      trait_use_semicolon;
-    } = (
-      trait_use_keyword,
-      trait_use_names,
-      trait_use_semicolon
-    )
-
-    let get_require_clause_children {
-      require_keyword;
-      require_kind;
-      require_name;
-      require_semicolon;
-    } = (
-      require_keyword,
-      require_kind,
-      require_name,
-      require_semicolon
-    )
-
-    let get_const_declaration_children {
-      const_abstract;
-      const_keyword;
-      const_type_specifier;
-      const_declarators;
-      const_semicolon;
-    } = (
-      const_abstract,
-      const_keyword,
-      const_type_specifier,
-      const_declarators,
-      const_semicolon
-    )
-
-    let get_constant_declarator_children {
-      constant_declarator_name;
-      constant_declarator_initializer;
-    } = (
-      constant_declarator_name,
-      constant_declarator_initializer
-    )
-
-    let get_type_const_declaration_children {
-      type_const_abstract;
-      type_const_keyword;
-      type_const_type_keyword;
-      type_const_name;
-      type_const_type_constraint;
-      type_const_equal;
-      type_const_type_specifier;
-      type_const_semicolon;
-    } = (
-      type_const_abstract,
-      type_const_keyword,
-      type_const_type_keyword,
-      type_const_name,
-      type_const_type_constraint,
-      type_const_equal,
-      type_const_type_specifier,
-      type_const_semicolon
-    )
-
-    let get_decorated_expression_children {
-      decorated_expression_decorator;
-      decorated_expression_expression;
-    } = (
-      decorated_expression_decorator,
-      decorated_expression_expression
-    )
-
-    let get_parameter_declaration_children {
-      parameter_attribute;
-      parameter_visibility;
-      parameter_type;
-      parameter_name;
-      parameter_default_value;
-    } = (
-      parameter_attribute,
-      parameter_visibility,
-      parameter_type,
-      parameter_name,
-      parameter_default_value
-    )
-
-    let get_variadic_parameter_children {
-      variadic_parameter_ellipsis;
-    } = (
-      variadic_parameter_ellipsis
-    )
-
-    let get_attribute_specification_children {
-      attribute_specification_left_double_angle;
-      attribute_specification_attributes;
-      attribute_specification_right_double_angle;
-    } = (
-      attribute_specification_left_double_angle,
-      attribute_specification_attributes,
-      attribute_specification_right_double_angle
-    )
-
-    let get_attribute_children {
-      attribute_name;
-      attribute_left_paren;
-      attribute_values;
-      attribute_right_paren;
-    } = (
-      attribute_name,
-      attribute_left_paren,
-      attribute_values,
-      attribute_right_paren
-    )
-
-    let get_inclusion_expression_children {
-      inclusion_require;
-      inclusion_filename;
-    } = (
-      inclusion_require,
-      inclusion_filename
-    )
-
-    let get_inclusion_directive_children {
-      inclusion_expression;
-      inclusion_semicolon;
-    } = (
-      inclusion_expression,
-      inclusion_semicolon
-    )
-
-    let get_compound_statement_children {
-      compound_left_brace;
-      compound_statements;
-      compound_right_brace;
-    } = (
-      compound_left_brace,
-      compound_statements,
-      compound_right_brace
-    )
-
-    let get_expression_statement_children {
-      expression_statement_expression;
-      expression_statement_semicolon;
-    } = (
-      expression_statement_expression,
-      expression_statement_semicolon
-    )
-
-    let get_markup_section_children {
-      markup_prefix;
-      markup_text;
-      markup_suffix;
-      markup_expression;
-    } = (
-      markup_prefix,
-      markup_text,
-      markup_suffix,
-      markup_expression
-    )
-
-    let get_markup_suffix_children {
-      markup_suffix_less_than_question;
-      markup_suffix_name;
-    } = (
-      markup_suffix_less_than_question,
-      markup_suffix_name
-    )
-
-    let get_unset_statement_children {
-      unset_keyword;
-      unset_left_paren;
-      unset_variables;
-      unset_right_paren;
-      unset_semicolon;
-    } = (
-      unset_keyword,
-      unset_left_paren,
-      unset_variables,
-      unset_right_paren,
-      unset_semicolon
-    )
-
-    let get_while_statement_children {
-      while_keyword;
-      while_left_paren;
-      while_condition;
-      while_right_paren;
-      while_body;
-    } = (
-      while_keyword,
-      while_left_paren,
-      while_condition,
-      while_right_paren,
-      while_body
-    )
-
-    let get_if_statement_children {
-      if_keyword;
-      if_left_paren;
-      if_condition;
-      if_right_paren;
-      if_statement;
-      if_elseif_clauses;
-      if_else_clause;
-    } = (
-      if_keyword,
-      if_left_paren,
-      if_condition,
-      if_right_paren,
-      if_statement,
-      if_elseif_clauses,
-      if_else_clause
-    )
-
-    let get_elseif_clause_children {
-      elseif_keyword;
-      elseif_left_paren;
-      elseif_condition;
-      elseif_right_paren;
-      elseif_statement;
-    } = (
-      elseif_keyword,
-      elseif_left_paren,
-      elseif_condition,
-      elseif_right_paren,
-      elseif_statement
-    )
-
-    let get_else_clause_children {
-      else_keyword;
-      else_statement;
-    } = (
-      else_keyword,
-      else_statement
-    )
-
-    let get_try_statement_children {
-      try_keyword;
-      try_compound_statement;
-      try_catch_clauses;
-      try_finally_clause;
-    } = (
-      try_keyword,
-      try_compound_statement,
-      try_catch_clauses,
-      try_finally_clause
-    )
-
-    let get_catch_clause_children {
-      catch_keyword;
-      catch_left_paren;
-      catch_type;
-      catch_variable;
-      catch_right_paren;
-      catch_body;
-    } = (
-      catch_keyword,
-      catch_left_paren,
-      catch_type,
-      catch_variable,
-      catch_right_paren,
-      catch_body
-    )
-
-    let get_finally_clause_children {
-      finally_keyword;
-      finally_body;
-    } = (
-      finally_keyword,
-      finally_body
-    )
-
-    let get_do_statement_children {
-      do_keyword;
-      do_body;
-      do_while_keyword;
-      do_left_paren;
-      do_condition;
-      do_right_paren;
-      do_semicolon;
-    } = (
-      do_keyword,
-      do_body,
-      do_while_keyword,
-      do_left_paren,
-      do_condition,
-      do_right_paren,
-      do_semicolon
-    )
-
-    let get_for_statement_children {
-      for_keyword;
-      for_left_paren;
-      for_initializer;
-      for_first_semicolon;
-      for_control;
-      for_second_semicolon;
-      for_end_of_loop;
-      for_right_paren;
-      for_body;
-    } = (
-      for_keyword,
-      for_left_paren,
-      for_initializer,
-      for_first_semicolon,
-      for_control,
-      for_second_semicolon,
-      for_end_of_loop,
-      for_right_paren,
-      for_body
-    )
-
-    let get_foreach_statement_children {
-      foreach_keyword;
-      foreach_left_paren;
-      foreach_collection;
-      foreach_await_keyword;
-      foreach_as;
-      foreach_key;
-      foreach_arrow;
-      foreach_value;
-      foreach_right_paren;
-      foreach_body;
-    } = (
-      foreach_keyword,
-      foreach_left_paren,
-      foreach_collection,
-      foreach_await_keyword,
-      foreach_as,
-      foreach_key,
-      foreach_arrow,
-      foreach_value,
-      foreach_right_paren,
-      foreach_body
-    )
-
-    let get_switch_statement_children {
-      switch_keyword;
-      switch_left_paren;
-      switch_expression;
-      switch_right_paren;
-      switch_left_brace;
-      switch_sections;
-      switch_right_brace;
-    } = (
-      switch_keyword,
-      switch_left_paren,
-      switch_expression,
-      switch_right_paren,
-      switch_left_brace,
-      switch_sections,
-      switch_right_brace
-    )
-
-    let get_switch_section_children {
-      switch_section_labels;
-      switch_section_statements;
-      switch_section_fallthrough;
-    } = (
-      switch_section_labels,
-      switch_section_statements,
-      switch_section_fallthrough
-    )
-
-    let get_switch_fallthrough_children {
-      fallthrough_keyword;
-      fallthrough_semicolon;
-    } = (
-      fallthrough_keyword,
-      fallthrough_semicolon
-    )
-
-    let get_case_label_children {
-      case_keyword;
-      case_expression;
-      case_colon;
-    } = (
-      case_keyword,
-      case_expression,
-      case_colon
-    )
-
-    let get_default_label_children {
-      default_keyword;
-      default_colon;
-    } = (
-      default_keyword,
-      default_colon
-    )
-
-    let get_return_statement_children {
-      return_keyword;
-      return_expression;
-      return_semicolon;
-    } = (
-      return_keyword,
-      return_expression,
-      return_semicolon
-    )
-
-    let get_goto_label_children {
-      goto_label_name;
-      goto_label_colon;
-    } = (
-      goto_label_name,
-      goto_label_colon
-    )
-
-    let get_goto_statement_children {
-      goto_statement_keyword;
-      goto_statement_label_name;
-      goto_statement_semicolon;
-    } = (
-      goto_statement_keyword,
-      goto_statement_label_name,
-      goto_statement_semicolon
-    )
-
-    let get_throw_statement_children {
-      throw_keyword;
-      throw_expression;
-      throw_semicolon;
-    } = (
-      throw_keyword,
-      throw_expression,
-      throw_semicolon
-    )
-
-    let get_break_statement_children {
-      break_keyword;
-      break_level;
-      break_semicolon;
-    } = (
-      break_keyword,
-      break_level,
-      break_semicolon
-    )
-
-    let get_continue_statement_children {
-      continue_keyword;
-      continue_level;
-      continue_semicolon;
-    } = (
-      continue_keyword,
-      continue_level,
-      continue_semicolon
-    )
-
-    let get_function_static_statement_children {
-      static_static_keyword;
-      static_declarations;
-      static_semicolon;
-    } = (
-      static_static_keyword,
-      static_declarations,
-      static_semicolon
-    )
-
-    let get_static_declarator_children {
-      static_name;
-      static_initializer;
-    } = (
-      static_name,
-      static_initializer
-    )
-
-    let get_echo_statement_children {
-      echo_keyword;
-      echo_expressions;
-      echo_semicolon;
-    } = (
-      echo_keyword,
-      echo_expressions,
-      echo_semicolon
-    )
-
-    let get_global_statement_children {
-      global_keyword;
-      global_variables;
-      global_semicolon;
-    } = (
-      global_keyword,
-      global_variables,
-      global_semicolon
-    )
-
-    let get_simple_initializer_children {
-      simple_initializer_equal;
-      simple_initializer_value;
-    } = (
-      simple_initializer_equal,
-      simple_initializer_value
-    )
-
-    let get_anonymous_function_children {
-      anonymous_static_keyword;
-      anonymous_async_keyword;
-      anonymous_coroutine_keyword;
-      anonymous_function_keyword;
-      anonymous_left_paren;
-      anonymous_parameters;
-      anonymous_right_paren;
-      anonymous_colon;
-      anonymous_type;
-      anonymous_use;
-      anonymous_body;
-    } = (
-      anonymous_static_keyword,
-      anonymous_async_keyword,
-      anonymous_coroutine_keyword,
-      anonymous_function_keyword,
-      anonymous_left_paren,
-      anonymous_parameters,
-      anonymous_right_paren,
-      anonymous_colon,
-      anonymous_type,
-      anonymous_use,
-      anonymous_body
-    )
-
-    let get_anonymous_function_use_clause_children {
-      anonymous_use_keyword;
-      anonymous_use_left_paren;
-      anonymous_use_variables;
-      anonymous_use_right_paren;
-    } = (
-      anonymous_use_keyword,
-      anonymous_use_left_paren,
-      anonymous_use_variables,
-      anonymous_use_right_paren
-    )
-
-    let get_lambda_expression_children {
-      lambda_async;
-      lambda_coroutine;
-      lambda_signature;
-      lambda_arrow;
-      lambda_body;
-    } = (
-      lambda_async,
-      lambda_coroutine,
-      lambda_signature,
-      lambda_arrow,
-      lambda_body
-    )
-
-    let get_lambda_signature_children {
-      lambda_left_paren;
-      lambda_parameters;
-      lambda_right_paren;
-      lambda_colon;
-      lambda_type;
-    } = (
-      lambda_left_paren,
-      lambda_parameters,
-      lambda_right_paren,
-      lambda_colon,
-      lambda_type
-    )
-
-    let get_cast_expression_children {
-      cast_left_paren;
-      cast_type;
-      cast_right_paren;
-      cast_operand;
-    } = (
-      cast_left_paren,
-      cast_type,
-      cast_right_paren,
-      cast_operand
-    )
-
-    let get_scope_resolution_expression_children {
-      scope_resolution_qualifier;
-      scope_resolution_operator;
-      scope_resolution_name;
-    } = (
-      scope_resolution_qualifier,
-      scope_resolution_operator,
-      scope_resolution_name
-    )
-
-    let get_member_selection_expression_children {
-      member_object;
-      member_operator;
-      member_name;
-    } = (
-      member_object,
-      member_operator,
-      member_name
-    )
-
-    let get_safe_member_selection_expression_children {
-      safe_member_object;
-      safe_member_operator;
-      safe_member_name;
-    } = (
-      safe_member_object,
-      safe_member_operator,
-      safe_member_name
-    )
-
-    let get_embedded_member_selection_expression_children {
-      embedded_member_object;
-      embedded_member_operator;
-      embedded_member_name;
-    } = (
-      embedded_member_object,
-      embedded_member_operator,
-      embedded_member_name
-    )
-
-    let get_yield_expression_children {
-      yield_keyword;
-      yield_operand;
-    } = (
-      yield_keyword,
-      yield_operand
-    )
-
-    let get_yield_from_expression_children {
-      yield_from_yield_keyword;
-      yield_from_from_keyword;
-      yield_from_operand;
-    } = (
-      yield_from_yield_keyword,
-      yield_from_from_keyword,
-      yield_from_operand
-    )
-
-    let get_prefix_unary_expression_children {
-      prefix_unary_operator;
-      prefix_unary_operand;
-    } = (
-      prefix_unary_operator,
-      prefix_unary_operand
-    )
-
-    let get_postfix_unary_expression_children {
-      postfix_unary_operand;
-      postfix_unary_operator;
-    } = (
-      postfix_unary_operand,
-      postfix_unary_operator
-    )
-
-    let get_binary_expression_children {
-      binary_left_operand;
-      binary_operator;
-      binary_right_operand;
-    } = (
-      binary_left_operand,
-      binary_operator,
-      binary_right_operand
-    )
-
-    let get_instanceof_expression_children {
-      instanceof_left_operand;
-      instanceof_operator;
-      instanceof_right_operand;
-    } = (
-      instanceof_left_operand,
-      instanceof_operator,
-      instanceof_right_operand
-    )
-
-    let get_conditional_expression_children {
-      conditional_test;
-      conditional_question;
-      conditional_consequence;
-      conditional_colon;
-      conditional_alternative;
-    } = (
-      conditional_test,
-      conditional_question,
-      conditional_consequence,
-      conditional_colon,
-      conditional_alternative
-    )
-
-    let get_eval_expression_children {
-      eval_keyword;
-      eval_left_paren;
-      eval_argument;
-      eval_right_paren;
-    } = (
-      eval_keyword,
-      eval_left_paren,
-      eval_argument,
-      eval_right_paren
-    )
-
-    let get_empty_expression_children {
-      empty_keyword;
-      empty_left_paren;
-      empty_argument;
-      empty_right_paren;
-    } = (
-      empty_keyword,
-      empty_left_paren,
-      empty_argument,
-      empty_right_paren
-    )
-
-    let get_define_expression_children {
-      define_keyword;
-      define_left_paren;
-      define_argument_list;
-      define_right_paren;
-    } = (
-      define_keyword,
-      define_left_paren,
-      define_argument_list,
-      define_right_paren
-    )
-
-    let get_isset_expression_children {
-      isset_keyword;
-      isset_left_paren;
-      isset_argument_list;
-      isset_right_paren;
-    } = (
-      isset_keyword,
-      isset_left_paren,
-      isset_argument_list,
-      isset_right_paren
-    )
-
-    let get_function_call_expression_children {
-      function_call_receiver;
-      function_call_left_paren;
-      function_call_argument_list;
-      function_call_right_paren;
-    } = (
-      function_call_receiver,
-      function_call_left_paren,
-      function_call_argument_list,
-      function_call_right_paren
-    )
-
-    let get_parenthesized_expression_children {
-      parenthesized_expression_left_paren;
-      parenthesized_expression_expression;
-      parenthesized_expression_right_paren;
-    } = (
-      parenthesized_expression_left_paren,
-      parenthesized_expression_expression,
-      parenthesized_expression_right_paren
-    )
-
-    let get_braced_expression_children {
-      braced_expression_left_brace;
-      braced_expression_expression;
-      braced_expression_right_brace;
-    } = (
-      braced_expression_left_brace,
-      braced_expression_expression,
-      braced_expression_right_brace
-    )
-
-    let get_embedded_braced_expression_children {
-      embedded_braced_expression_left_brace;
-      embedded_braced_expression_expression;
-      embedded_braced_expression_right_brace;
-    } = (
-      embedded_braced_expression_left_brace,
-      embedded_braced_expression_expression,
-      embedded_braced_expression_right_brace
-    )
-
-    let get_list_expression_children {
-      list_keyword;
-      list_left_paren;
-      list_members;
-      list_right_paren;
-    } = (
-      list_keyword,
-      list_left_paren,
-      list_members,
-      list_right_paren
-    )
-
-    let get_collection_literal_expression_children {
-      collection_literal_name;
-      collection_literal_left_brace;
-      collection_literal_initializers;
-      collection_literal_right_brace;
-    } = (
-      collection_literal_name,
-      collection_literal_left_brace,
-      collection_literal_initializers,
-      collection_literal_right_brace
-    )
-
-    let get_object_creation_expression_children {
-      object_creation_new_keyword;
-      object_creation_type;
-      object_creation_left_paren;
-      object_creation_argument_list;
-      object_creation_right_paren;
-    } = (
-      object_creation_new_keyword,
-      object_creation_type,
-      object_creation_left_paren,
-      object_creation_argument_list,
-      object_creation_right_paren
-    )
-
-    let get_array_creation_expression_children {
-      array_creation_left_bracket;
-      array_creation_members;
-      array_creation_right_bracket;
-    } = (
-      array_creation_left_bracket,
-      array_creation_members,
-      array_creation_right_bracket
-    )
-
-    let get_array_intrinsic_expression_children {
-      array_intrinsic_keyword;
-      array_intrinsic_left_paren;
-      array_intrinsic_members;
-      array_intrinsic_right_paren;
-    } = (
-      array_intrinsic_keyword,
-      array_intrinsic_left_paren,
-      array_intrinsic_members,
-      array_intrinsic_right_paren
-    )
-
-    let get_darray_intrinsic_expression_children {
-      darray_intrinsic_keyword;
-      darray_intrinsic_left_bracket;
-      darray_intrinsic_members;
-      darray_intrinsic_right_bracket;
-    } = (
-      darray_intrinsic_keyword,
-      darray_intrinsic_left_bracket,
-      darray_intrinsic_members,
-      darray_intrinsic_right_bracket
-    )
-
-    let get_dictionary_intrinsic_expression_children {
-      dictionary_intrinsic_keyword;
-      dictionary_intrinsic_left_bracket;
-      dictionary_intrinsic_members;
-      dictionary_intrinsic_right_bracket;
-    } = (
-      dictionary_intrinsic_keyword,
-      dictionary_intrinsic_left_bracket,
-      dictionary_intrinsic_members,
-      dictionary_intrinsic_right_bracket
-    )
-
-    let get_keyset_intrinsic_expression_children {
-      keyset_intrinsic_keyword;
-      keyset_intrinsic_left_bracket;
-      keyset_intrinsic_members;
-      keyset_intrinsic_right_bracket;
-    } = (
-      keyset_intrinsic_keyword,
-      keyset_intrinsic_left_bracket,
-      keyset_intrinsic_members,
-      keyset_intrinsic_right_bracket
-    )
-
-    let get_varray_intrinsic_expression_children {
-      varray_intrinsic_keyword;
-      varray_intrinsic_left_bracket;
-      varray_intrinsic_members;
-      varray_intrinsic_right_bracket;
-    } = (
-      varray_intrinsic_keyword,
-      varray_intrinsic_left_bracket,
-      varray_intrinsic_members,
-      varray_intrinsic_right_bracket
-    )
-
-    let get_vector_intrinsic_expression_children {
-      vector_intrinsic_keyword;
-      vector_intrinsic_left_bracket;
-      vector_intrinsic_members;
-      vector_intrinsic_right_bracket;
-    } = (
-      vector_intrinsic_keyword,
-      vector_intrinsic_left_bracket,
-      vector_intrinsic_members,
-      vector_intrinsic_right_bracket
-    )
-
-    let get_element_initializer_children {
-      element_key;
-      element_arrow;
-      element_value;
-    } = (
-      element_key,
-      element_arrow,
-      element_value
-    )
-
-    let get_subscript_expression_children {
-      subscript_receiver;
-      subscript_left_bracket;
-      subscript_index;
-      subscript_right_bracket;
-    } = (
-      subscript_receiver,
-      subscript_left_bracket,
-      subscript_index,
-      subscript_right_bracket
-    )
-
-    let get_embedded_subscript_expression_children {
-      embedded_subscript_receiver;
-      embedded_subscript_left_bracket;
-      embedded_subscript_index;
-      embedded_subscript_right_bracket;
-    } = (
-      embedded_subscript_receiver,
-      embedded_subscript_left_bracket,
-      embedded_subscript_index,
-      embedded_subscript_right_bracket
-    )
-
-    let get_awaitable_creation_expression_children {
-      awaitable_async;
-      awaitable_coroutine;
-      awaitable_compound_statement;
-    } = (
-      awaitable_async,
-      awaitable_coroutine,
-      awaitable_compound_statement
-    )
-
-    let get_xhp_children_declaration_children {
-      xhp_children_keyword;
-      xhp_children_expression;
-      xhp_children_semicolon;
-    } = (
-      xhp_children_keyword,
-      xhp_children_expression,
-      xhp_children_semicolon
-    )
-
-    let get_xhp_children_parenthesized_list_children {
-      xhp_children_list_left_paren;
-      xhp_children_list_xhp_children;
-      xhp_children_list_right_paren;
-    } = (
-      xhp_children_list_left_paren,
-      xhp_children_list_xhp_children,
-      xhp_children_list_right_paren
-    )
-
-    let get_xhp_category_declaration_children {
-      xhp_category_keyword;
-      xhp_category_categories;
-      xhp_category_semicolon;
-    } = (
-      xhp_category_keyword,
-      xhp_category_categories,
-      xhp_category_semicolon
-    )
-
-    let get_xhp_enum_type_children {
-      xhp_enum_keyword;
-      xhp_enum_left_brace;
-      xhp_enum_values;
-      xhp_enum_right_brace;
-    } = (
-      xhp_enum_keyword,
-      xhp_enum_left_brace,
-      xhp_enum_values,
-      xhp_enum_right_brace
-    )
-
-    let get_xhp_required_children {
-      xhp_required_at;
-      xhp_required_keyword;
-    } = (
-      xhp_required_at,
-      xhp_required_keyword
-    )
-
-    let get_xhp_class_attribute_declaration_children {
-      xhp_attribute_keyword;
-      xhp_attribute_attributes;
-      xhp_attribute_semicolon;
-    } = (
-      xhp_attribute_keyword,
-      xhp_attribute_attributes,
-      xhp_attribute_semicolon
-    )
-
-    let get_xhp_class_attribute_children {
-      xhp_attribute_decl_type;
-      xhp_attribute_decl_name;
-      xhp_attribute_decl_initializer;
-      xhp_attribute_decl_required;
-    } = (
-      xhp_attribute_decl_type,
-      xhp_attribute_decl_name,
-      xhp_attribute_decl_initializer,
-      xhp_attribute_decl_required
-    )
-
-    let get_xhp_simple_class_attribute_children {
-      xhp_simple_class_attribute_type;
-    } = (
-      xhp_simple_class_attribute_type
-    )
-
-    let get_xhp_attribute_children {
-      xhp_attribute_name;
-      xhp_attribute_equal;
-      xhp_attribute_expression;
-    } = (
-      xhp_attribute_name,
-      xhp_attribute_equal,
-      xhp_attribute_expression
-    )
-
-    let get_xhp_open_children {
-      xhp_open_left_angle;
-      xhp_open_name;
-      xhp_open_attributes;
-      xhp_open_right_angle;
-    } = (
-      xhp_open_left_angle,
-      xhp_open_name,
-      xhp_open_attributes,
-      xhp_open_right_angle
-    )
-
-    let get_xhp_expression_children {
-      xhp_open;
-      xhp_body;
-      xhp_close;
-    } = (
-      xhp_open,
-      xhp_body,
-      xhp_close
-    )
-
-    let get_xhp_close_children {
-      xhp_close_left_angle;
-      xhp_close_name;
-      xhp_close_right_angle;
-    } = (
-      xhp_close_left_angle,
-      xhp_close_name,
-      xhp_close_right_angle
-    )
-
-    let get_type_constant_children {
-      type_constant_left_type;
-      type_constant_separator;
-      type_constant_right_type;
-    } = (
-      type_constant_left_type,
-      type_constant_separator,
-      type_constant_right_type
-    )
-
-    let get_vector_type_specifier_children {
-      vector_type_keyword;
-      vector_type_left_angle;
-      vector_type_type;
-      vector_type_trailing_comma;
-      vector_type_right_angle;
-    } = (
-      vector_type_keyword,
-      vector_type_left_angle,
-      vector_type_type,
-      vector_type_trailing_comma,
-      vector_type_right_angle
-    )
-
-    let get_keyset_type_specifier_children {
-      keyset_type_keyword;
-      keyset_type_left_angle;
-      keyset_type_type;
-      keyset_type_trailing_comma;
-      keyset_type_right_angle;
-    } = (
-      keyset_type_keyword,
-      keyset_type_left_angle,
-      keyset_type_type,
-      keyset_type_trailing_comma,
-      keyset_type_right_angle
-    )
-
-    let get_tuple_type_explicit_specifier_children {
-      tuple_type_keyword;
-      tuple_type_left_angle;
-      tuple_type_types;
-      tuple_type_right_angle;
-    } = (
-      tuple_type_keyword,
-      tuple_type_left_angle,
-      tuple_type_types,
-      tuple_type_right_angle
-    )
-
-    let get_varray_type_specifier_children {
-      varray_keyword;
-      varray_left_angle;
-      varray_type;
-      varray_trailing_comma;
-      varray_right_angle;
-    } = (
-      varray_keyword,
-      varray_left_angle,
-      varray_type,
-      varray_trailing_comma,
-      varray_right_angle
-    )
-
-    let get_vector_array_type_specifier_children {
-      vector_array_keyword;
-      vector_array_left_angle;
-      vector_array_type;
-      vector_array_right_angle;
-    } = (
-      vector_array_keyword,
-      vector_array_left_angle,
-      vector_array_type,
-      vector_array_right_angle
-    )
-
-    let get_type_parameter_children {
-      type_variance;
-      type_name;
-      type_constraints;
-    } = (
-      type_variance,
-      type_name,
-      type_constraints
-    )
-
-    let get_type_constraint_children {
-      constraint_keyword;
-      constraint_type;
-    } = (
-      constraint_keyword,
-      constraint_type
-    )
-
-    let get_darray_type_specifier_children {
-      darray_keyword;
-      darray_left_angle;
-      darray_key;
-      darray_comma;
-      darray_value;
-      darray_trailing_comma;
-      darray_right_angle;
-    } = (
-      darray_keyword,
-      darray_left_angle,
-      darray_key,
-      darray_comma,
-      darray_value,
-      darray_trailing_comma,
-      darray_right_angle
-    )
-
-    let get_map_array_type_specifier_children {
-      map_array_keyword;
-      map_array_left_angle;
-      map_array_key;
-      map_array_comma;
-      map_array_value;
-      map_array_right_angle;
-    } = (
-      map_array_keyword,
-      map_array_left_angle,
-      map_array_key,
-      map_array_comma,
-      map_array_value,
-      map_array_right_angle
-    )
-
-    let get_dictionary_type_specifier_children {
-      dictionary_type_keyword;
-      dictionary_type_left_angle;
-      dictionary_type_members;
-      dictionary_type_right_angle;
-    } = (
-      dictionary_type_keyword,
-      dictionary_type_left_angle,
-      dictionary_type_members,
-      dictionary_type_right_angle
-    )
-
-    let get_closure_type_specifier_children {
-      closure_outer_left_paren;
-      closure_coroutine;
-      closure_function_keyword;
-      closure_inner_left_paren;
-      closure_parameter_types;
-      closure_inner_right_paren;
-      closure_colon;
-      closure_return_type;
-      closure_outer_right_paren;
-    } = (
-      closure_outer_left_paren,
-      closure_coroutine,
-      closure_function_keyword,
-      closure_inner_left_paren,
-      closure_parameter_types,
-      closure_inner_right_paren,
-      closure_colon,
-      closure_return_type,
-      closure_outer_right_paren
-    )
-
-    let get_classname_type_specifier_children {
-      classname_keyword;
-      classname_left_angle;
-      classname_type;
-      classname_trailing_comma;
-      classname_right_angle;
-    } = (
-      classname_keyword,
-      classname_left_angle,
-      classname_type,
-      classname_trailing_comma,
-      classname_right_angle
-    )
-
-    let get_field_specifier_children {
-      field_question;
-      field_name;
-      field_arrow;
-      field_type;
-    } = (
-      field_question,
-      field_name,
-      field_arrow,
-      field_type
-    )
-
-    let get_field_initializer_children {
-      field_initializer_name;
-      field_initializer_arrow;
-      field_initializer_value;
-    } = (
-      field_initializer_name,
-      field_initializer_arrow,
-      field_initializer_value
-    )
-
-    let get_shape_type_specifier_children {
-      shape_type_keyword;
-      shape_type_left_paren;
-      shape_type_fields;
-      shape_type_ellipsis;
-      shape_type_right_paren;
-    } = (
-      shape_type_keyword,
-      shape_type_left_paren,
-      shape_type_fields,
-      shape_type_ellipsis,
-      shape_type_right_paren
-    )
-
-    let get_shape_expression_children {
-      shape_expression_keyword;
-      shape_expression_left_paren;
-      shape_expression_fields;
-      shape_expression_right_paren;
-    } = (
-      shape_expression_keyword,
-      shape_expression_left_paren,
-      shape_expression_fields,
-      shape_expression_right_paren
-    )
-
-    let get_tuple_expression_children {
-      tuple_expression_keyword;
-      tuple_expression_left_paren;
-      tuple_expression_items;
-      tuple_expression_right_paren;
-    } = (
-      tuple_expression_keyword,
-      tuple_expression_left_paren,
-      tuple_expression_items,
-      tuple_expression_right_paren
-    )
-
-    let get_generic_type_specifier_children {
-      generic_class_type;
-      generic_argument_list;
-    } = (
-      generic_class_type,
-      generic_argument_list
-    )
-
-    let get_nullable_type_specifier_children {
-      nullable_question;
-      nullable_type;
-    } = (
-      nullable_question,
-      nullable_type
-    )
-
-    let get_soft_type_specifier_children {
-      soft_at;
-      soft_type;
-    } = (
-      soft_at,
-      soft_type
-    )
-
-    let get_type_arguments_children {
-      type_arguments_left_angle;
-      type_arguments_types;
-      type_arguments_right_angle;
-    } = (
-      type_arguments_left_angle,
-      type_arguments_types,
-      type_arguments_right_angle
-    )
-
-    let get_type_parameters_children {
-      type_parameters_left_angle;
-      type_parameters_parameters;
-      type_parameters_right_angle;
-    } = (
-      type_parameters_left_angle,
-      type_parameters_parameters,
-      type_parameters_right_angle
-    )
-
-    let get_tuple_type_specifier_children {
-      tuple_left_paren;
-      tuple_types;
-      tuple_right_paren;
-    } = (
-      tuple_left_paren,
-      tuple_types,
-      tuple_right_paren
-    )
-
-    let get_error_children {
-      error_error;
-    } = (
-      error_error
-    )
-
-    let get_list_item_children {
-      list_item;
-      list_separator;
-    } = (
-      list_item,
-      list_separator
-    )
-
+    let is_namespace_prefix node =
+      match syntax node with
+      | QualifiedName e ->
+        begin match List.last (syntax_node_to_list e.qualified_name_parts) with
+        | None -> false
+        | Some p ->
+          begin match syntax p with
+          | ListItem p -> not (is_missing p.list_separator)
+          | _ -> false
+          end
+        end
+      | _ -> false
+
+    let has_leading_trivia kind token =
+      List.exists (Token.leading token)
+        ~f:(fun trivia ->  Token.Trivia.kind trivia = kind)
+
+    let is_semicolon  = is_specific_token TokenKind.Semicolon
+    let is_name       = is_specific_token TokenKind.Name
+    let is_construct  = is_specific_token TokenKind.Construct
+    let is_destruct   = is_specific_token TokenKind.Destruct
+    let is_static     = is_specific_token TokenKind.Static
+    let is_private    = is_specific_token TokenKind.Private
+    let is_public     = is_specific_token TokenKind.Public
+    let is_protected  = is_specific_token TokenKind.Protected
+    let is_abstract   = is_specific_token TokenKind.Abstract
+    let is_final      = is_specific_token TokenKind.Final
+    let is_async      = is_specific_token TokenKind.Async
+    let is_coroutine  = is_specific_token TokenKind.Coroutine
+    let is_void       = is_specific_token TokenKind.Void
+    let is_left_brace = is_specific_token TokenKind.LeftBrace
+    let is_ellipsis   = is_specific_token TokenKind.DotDotDot
+    let is_comma      = is_specific_token TokenKind.Comma
+    let is_array      = is_specific_token TokenKind.Array
+    let is_var        = is_specific_token TokenKind.Var
+    let is_ampersand  = is_specific_token TokenKind.Ampersand
+    let is_inout      = is_specific_token TokenKind.Inout
+
+    let syntax_list_fold ~init ~f node =
+      match syntax node with
+      | SyntaxList sl ->
+        List.fold_left
+          ~init
+          ~f:(fun init li -> match syntax li with
+              | ListItem { list_item; _; }-> f init list_item
+              | Missing -> init
+              | _ -> f init li)
+          sl
+      | Missing -> init
+      | _ -> f init node
+
+    let fold_over_children f acc syntax =
+      match syntax with
+      | Missing -> acc
+      | Token _ -> acc
+      | SyntaxList items ->
+        List.fold_left ~f ~init:acc items
+      | EndOfFile {
+        end_of_file_token;
+      } ->
+         let acc = f acc end_of_file_token in
+         acc
+      | Script {
+        script_declarations;
+      } ->
+         let acc = f acc script_declarations in
+         acc
+      | QualifiedName {
+        qualified_name_parts;
+      } ->
+         let acc = f acc qualified_name_parts in
+         acc
+      | SimpleTypeSpecifier {
+        simple_type_specifier;
+      } ->
+         let acc = f acc simple_type_specifier in
+         acc
+      | LiteralExpression {
+        literal_expression;
+      } ->
+         let acc = f acc literal_expression in
+         acc
+      | PrefixedStringExpression {
+        prefixed_string_name;
+        prefixed_string_str;
+      } ->
+         let acc = f acc prefixed_string_name in
+         let acc = f acc prefixed_string_str in
+         acc
+      | VariableExpression {
+        variable_expression;
+      } ->
+         let acc = f acc variable_expression in
+         acc
+      | PipeVariableExpression {
+        pipe_variable_expression;
+      } ->
+         let acc = f acc pipe_variable_expression in
+         acc
+      | FileAttributeSpecification {
+        file_attribute_specification_left_double_angle;
+        file_attribute_specification_keyword;
+        file_attribute_specification_colon;
+        file_attribute_specification_attributes;
+        file_attribute_specification_right_double_angle;
+      } ->
+         let acc = f acc file_attribute_specification_left_double_angle in
+         let acc = f acc file_attribute_specification_keyword in
+         let acc = f acc file_attribute_specification_colon in
+         let acc = f acc file_attribute_specification_attributes in
+         let acc = f acc file_attribute_specification_right_double_angle in
+         acc
+      | EnumDeclaration {
+        enum_attribute_spec;
+        enum_keyword;
+        enum_name;
+        enum_colon;
+        enum_base;
+        enum_type;
+        enum_left_brace;
+        enum_enumerators;
+        enum_right_brace;
+      } ->
+         let acc = f acc enum_attribute_spec in
+         let acc = f acc enum_keyword in
+         let acc = f acc enum_name in
+         let acc = f acc enum_colon in
+         let acc = f acc enum_base in
+         let acc = f acc enum_type in
+         let acc = f acc enum_left_brace in
+         let acc = f acc enum_enumerators in
+         let acc = f acc enum_right_brace in
+         acc
+      | Enumerator {
+        enumerator_name;
+        enumerator_equal;
+        enumerator_value;
+        enumerator_semicolon;
+      } ->
+         let acc = f acc enumerator_name in
+         let acc = f acc enumerator_equal in
+         let acc = f acc enumerator_value in
+         let acc = f acc enumerator_semicolon in
+         acc
+      | RecordDeclaration {
+        record_attribute_spec;
+        record_keyword;
+        record_name;
+        record_left_brace;
+        record_fields;
+        record_right_brace;
+      } ->
+         let acc = f acc record_attribute_spec in
+         let acc = f acc record_keyword in
+         let acc = f acc record_name in
+         let acc = f acc record_left_brace in
+         let acc = f acc record_fields in
+         let acc = f acc record_right_brace in
+         acc
+      | RecordField {
+        record_field_name;
+        record_field_colon;
+        record_field_type;
+        record_field_init;
+        record_field_comma;
+      } ->
+         let acc = f acc record_field_name in
+         let acc = f acc record_field_colon in
+         let acc = f acc record_field_type in
+         let acc = f acc record_field_init in
+         let acc = f acc record_field_comma in
+         acc
+      | AliasDeclaration {
+        alias_attribute_spec;
+        alias_keyword;
+        alias_name;
+        alias_generic_parameter;
+        alias_constraint;
+        alias_equal;
+        alias_type;
+        alias_semicolon;
+      } ->
+         let acc = f acc alias_attribute_spec in
+         let acc = f acc alias_keyword in
+         let acc = f acc alias_name in
+         let acc = f acc alias_generic_parameter in
+         let acc = f acc alias_constraint in
+         let acc = f acc alias_equal in
+         let acc = f acc alias_type in
+         let acc = f acc alias_semicolon in
+         acc
+      | PropertyDeclaration {
+        property_attribute_spec;
+        property_modifiers;
+        property_type;
+        property_declarators;
+        property_semicolon;
+      } ->
+         let acc = f acc property_attribute_spec in
+         let acc = f acc property_modifiers in
+         let acc = f acc property_type in
+         let acc = f acc property_declarators in
+         let acc = f acc property_semicolon in
+         acc
+      | PropertyDeclarator {
+        property_name;
+        property_initializer;
+      } ->
+         let acc = f acc property_name in
+         let acc = f acc property_initializer in
+         acc
+      | NamespaceDeclaration {
+        namespace_keyword;
+        namespace_name;
+        namespace_body;
+      } ->
+         let acc = f acc namespace_keyword in
+         let acc = f acc namespace_name in
+         let acc = f acc namespace_body in
+         acc
+      | NamespaceBody {
+        namespace_left_brace;
+        namespace_declarations;
+        namespace_right_brace;
+      } ->
+         let acc = f acc namespace_left_brace in
+         let acc = f acc namespace_declarations in
+         let acc = f acc namespace_right_brace in
+         acc
+      | NamespaceEmptyBody {
+        namespace_semicolon;
+      } ->
+         let acc = f acc namespace_semicolon in
+         acc
+      | NamespaceUseDeclaration {
+        namespace_use_keyword;
+        namespace_use_kind;
+        namespace_use_clauses;
+        namespace_use_semicolon;
+      } ->
+         let acc = f acc namespace_use_keyword in
+         let acc = f acc namespace_use_kind in
+         let acc = f acc namespace_use_clauses in
+         let acc = f acc namespace_use_semicolon in
+         acc
+      | NamespaceGroupUseDeclaration {
+        namespace_group_use_keyword;
+        namespace_group_use_kind;
+        namespace_group_use_prefix;
+        namespace_group_use_left_brace;
+        namespace_group_use_clauses;
+        namespace_group_use_right_brace;
+        namespace_group_use_semicolon;
+      } ->
+         let acc = f acc namespace_group_use_keyword in
+         let acc = f acc namespace_group_use_kind in
+         let acc = f acc namespace_group_use_prefix in
+         let acc = f acc namespace_group_use_left_brace in
+         let acc = f acc namespace_group_use_clauses in
+         let acc = f acc namespace_group_use_right_brace in
+         let acc = f acc namespace_group_use_semicolon in
+         acc
+      | NamespaceUseClause {
+        namespace_use_clause_kind;
+        namespace_use_name;
+        namespace_use_as;
+        namespace_use_alias;
+      } ->
+         let acc = f acc namespace_use_clause_kind in
+         let acc = f acc namespace_use_name in
+         let acc = f acc namespace_use_as in
+         let acc = f acc namespace_use_alias in
+         acc
+      | FunctionDeclaration {
+        function_attribute_spec;
+        function_declaration_header;
+        function_body;
+      } ->
+         let acc = f acc function_attribute_spec in
+         let acc = f acc function_declaration_header in
+         let acc = f acc function_body in
+         acc
+      | FunctionDeclarationHeader {
+        function_modifiers;
+        function_keyword;
+        function_name;
+        function_type_parameter_list;
+        function_left_paren;
+        function_parameter_list;
+        function_right_paren;
+        function_colon;
+        function_type;
+        function_where_clause;
+      } ->
+         let acc = f acc function_modifiers in
+         let acc = f acc function_keyword in
+         let acc = f acc function_name in
+         let acc = f acc function_type_parameter_list in
+         let acc = f acc function_left_paren in
+         let acc = f acc function_parameter_list in
+         let acc = f acc function_right_paren in
+         let acc = f acc function_colon in
+         let acc = f acc function_type in
+         let acc = f acc function_where_clause in
+         acc
+      | WhereClause {
+        where_clause_keyword;
+        where_clause_constraints;
+      } ->
+         let acc = f acc where_clause_keyword in
+         let acc = f acc where_clause_constraints in
+         acc
+      | WhereConstraint {
+        where_constraint_left_type;
+        where_constraint_operator;
+        where_constraint_right_type;
+      } ->
+         let acc = f acc where_constraint_left_type in
+         let acc = f acc where_constraint_operator in
+         let acc = f acc where_constraint_right_type in
+         acc
+      | MethodishDeclaration {
+        methodish_attribute;
+        methodish_function_decl_header;
+        methodish_function_body;
+        methodish_semicolon;
+      } ->
+         let acc = f acc methodish_attribute in
+         let acc = f acc methodish_function_decl_header in
+         let acc = f acc methodish_function_body in
+         let acc = f acc methodish_semicolon in
+         acc
+      | MethodishTraitResolution {
+        methodish_trait_attribute;
+        methodish_trait_function_decl_header;
+        methodish_trait_equal;
+        methodish_trait_name;
+        methodish_trait_semicolon;
+      } ->
+         let acc = f acc methodish_trait_attribute in
+         let acc = f acc methodish_trait_function_decl_header in
+         let acc = f acc methodish_trait_equal in
+         let acc = f acc methodish_trait_name in
+         let acc = f acc methodish_trait_semicolon in
+         acc
+      | ClassishDeclaration {
+        classish_attribute;
+        classish_modifiers;
+        classish_keyword;
+        classish_name;
+        classish_type_parameters;
+        classish_extends_keyword;
+        classish_extends_list;
+        classish_implements_keyword;
+        classish_implements_list;
+        classish_body;
+      } ->
+         let acc = f acc classish_attribute in
+         let acc = f acc classish_modifiers in
+         let acc = f acc classish_keyword in
+         let acc = f acc classish_name in
+         let acc = f acc classish_type_parameters in
+         let acc = f acc classish_extends_keyword in
+         let acc = f acc classish_extends_list in
+         let acc = f acc classish_implements_keyword in
+         let acc = f acc classish_implements_list in
+         let acc = f acc classish_body in
+         acc
+      | ClassishBody {
+        classish_body_left_brace;
+        classish_body_elements;
+        classish_body_right_brace;
+      } ->
+         let acc = f acc classish_body_left_brace in
+         let acc = f acc classish_body_elements in
+         let acc = f acc classish_body_right_brace in
+         acc
+      | TraitUsePrecedenceItem {
+        trait_use_precedence_item_name;
+        trait_use_precedence_item_keyword;
+        trait_use_precedence_item_removed_names;
+      } ->
+         let acc = f acc trait_use_precedence_item_name in
+         let acc = f acc trait_use_precedence_item_keyword in
+         let acc = f acc trait_use_precedence_item_removed_names in
+         acc
+      | TraitUseAliasItem {
+        trait_use_alias_item_aliasing_name;
+        trait_use_alias_item_keyword;
+        trait_use_alias_item_modifiers;
+        trait_use_alias_item_aliased_name;
+      } ->
+         let acc = f acc trait_use_alias_item_aliasing_name in
+         let acc = f acc trait_use_alias_item_keyword in
+         let acc = f acc trait_use_alias_item_modifiers in
+         let acc = f acc trait_use_alias_item_aliased_name in
+         acc
+      | TraitUseConflictResolution {
+        trait_use_conflict_resolution_keyword;
+        trait_use_conflict_resolution_names;
+        trait_use_conflict_resolution_left_brace;
+        trait_use_conflict_resolution_clauses;
+        trait_use_conflict_resolution_right_brace;
+      } ->
+         let acc = f acc trait_use_conflict_resolution_keyword in
+         let acc = f acc trait_use_conflict_resolution_names in
+         let acc = f acc trait_use_conflict_resolution_left_brace in
+         let acc = f acc trait_use_conflict_resolution_clauses in
+         let acc = f acc trait_use_conflict_resolution_right_brace in
+         acc
+      | TraitUse {
+        trait_use_keyword;
+        trait_use_names;
+        trait_use_semicolon;
+      } ->
+         let acc = f acc trait_use_keyword in
+         let acc = f acc trait_use_names in
+         let acc = f acc trait_use_semicolon in
+         acc
+      | RequireClause {
+        require_keyword;
+        require_kind;
+        require_name;
+        require_semicolon;
+      } ->
+         let acc = f acc require_keyword in
+         let acc = f acc require_kind in
+         let acc = f acc require_name in
+         let acc = f acc require_semicolon in
+         acc
+      | ConstDeclaration {
+        const_visibility;
+        const_abstract;
+        const_keyword;
+        const_type_specifier;
+        const_declarators;
+        const_semicolon;
+      } ->
+         let acc = f acc const_visibility in
+         let acc = f acc const_abstract in
+         let acc = f acc const_keyword in
+         let acc = f acc const_type_specifier in
+         let acc = f acc const_declarators in
+         let acc = f acc const_semicolon in
+         acc
+      | ConstantDeclarator {
+        constant_declarator_name;
+        constant_declarator_initializer;
+      } ->
+         let acc = f acc constant_declarator_name in
+         let acc = f acc constant_declarator_initializer in
+         acc
+      | TypeConstDeclaration {
+        type_const_attribute_spec;
+        type_const_abstract;
+        type_const_keyword;
+        type_const_type_keyword;
+        type_const_name;
+        type_const_type_parameters;
+        type_const_type_constraint;
+        type_const_equal;
+        type_const_type_specifier;
+        type_const_semicolon;
+      } ->
+         let acc = f acc type_const_attribute_spec in
+         let acc = f acc type_const_abstract in
+         let acc = f acc type_const_keyword in
+         let acc = f acc type_const_type_keyword in
+         let acc = f acc type_const_name in
+         let acc = f acc type_const_type_parameters in
+         let acc = f acc type_const_type_constraint in
+         let acc = f acc type_const_equal in
+         let acc = f acc type_const_type_specifier in
+         let acc = f acc type_const_semicolon in
+         acc
+      | DecoratedExpression {
+        decorated_expression_decorator;
+        decorated_expression_expression;
+      } ->
+         let acc = f acc decorated_expression_decorator in
+         let acc = f acc decorated_expression_expression in
+         acc
+      | ParameterDeclaration {
+        parameter_attribute;
+        parameter_visibility;
+        parameter_call_convention;
+        parameter_type;
+        parameter_name;
+        parameter_default_value;
+      } ->
+         let acc = f acc parameter_attribute in
+         let acc = f acc parameter_visibility in
+         let acc = f acc parameter_call_convention in
+         let acc = f acc parameter_type in
+         let acc = f acc parameter_name in
+         let acc = f acc parameter_default_value in
+         acc
+      | VariadicParameter {
+        variadic_parameter_call_convention;
+        variadic_parameter_type;
+        variadic_parameter_ellipsis;
+      } ->
+         let acc = f acc variadic_parameter_call_convention in
+         let acc = f acc variadic_parameter_type in
+         let acc = f acc variadic_parameter_ellipsis in
+         acc
+      | AttributeSpecification {
+        attribute_specification_left_double_angle;
+        attribute_specification_attributes;
+        attribute_specification_right_double_angle;
+      } ->
+         let acc = f acc attribute_specification_left_double_angle in
+         let acc = f acc attribute_specification_attributes in
+         let acc = f acc attribute_specification_right_double_angle in
+         acc
+      | InclusionExpression {
+        inclusion_require;
+        inclusion_filename;
+      } ->
+         let acc = f acc inclusion_require in
+         let acc = f acc inclusion_filename in
+         acc
+      | InclusionDirective {
+        inclusion_expression;
+        inclusion_semicolon;
+      } ->
+         let acc = f acc inclusion_expression in
+         let acc = f acc inclusion_semicolon in
+         acc
+      | CompoundStatement {
+        compound_left_brace;
+        compound_statements;
+        compound_right_brace;
+      } ->
+         let acc = f acc compound_left_brace in
+         let acc = f acc compound_statements in
+         let acc = f acc compound_right_brace in
+         acc
+      | AlternateLoopStatement {
+        alternate_loop_opening_colon;
+        alternate_loop_statements;
+        alternate_loop_closing_keyword;
+        alternate_loop_closing_semicolon;
+      } ->
+         let acc = f acc alternate_loop_opening_colon in
+         let acc = f acc alternate_loop_statements in
+         let acc = f acc alternate_loop_closing_keyword in
+         let acc = f acc alternate_loop_closing_semicolon in
+         acc
+      | ExpressionStatement {
+        expression_statement_expression;
+        expression_statement_semicolon;
+      } ->
+         let acc = f acc expression_statement_expression in
+         let acc = f acc expression_statement_semicolon in
+         acc
+      | MarkupSection {
+        markup_prefix;
+        markup_text;
+        markup_suffix;
+        markup_expression;
+      } ->
+         let acc = f acc markup_prefix in
+         let acc = f acc markup_text in
+         let acc = f acc markup_suffix in
+         let acc = f acc markup_expression in
+         acc
+      | MarkupSuffix {
+        markup_suffix_less_than_question;
+        markup_suffix_name;
+      } ->
+         let acc = f acc markup_suffix_less_than_question in
+         let acc = f acc markup_suffix_name in
+         acc
+      | UnsetStatement {
+        unset_keyword;
+        unset_left_paren;
+        unset_variables;
+        unset_right_paren;
+        unset_semicolon;
+      } ->
+         let acc = f acc unset_keyword in
+         let acc = f acc unset_left_paren in
+         let acc = f acc unset_variables in
+         let acc = f acc unset_right_paren in
+         let acc = f acc unset_semicolon in
+         acc
+      | LetStatement {
+        let_statement_keyword;
+        let_statement_name;
+        let_statement_colon;
+        let_statement_type;
+        let_statement_initializer;
+        let_statement_semicolon;
+      } ->
+         let acc = f acc let_statement_keyword in
+         let acc = f acc let_statement_name in
+         let acc = f acc let_statement_colon in
+         let acc = f acc let_statement_type in
+         let acc = f acc let_statement_initializer in
+         let acc = f acc let_statement_semicolon in
+         acc
+      | UsingStatementBlockScoped {
+        using_block_await_keyword;
+        using_block_using_keyword;
+        using_block_left_paren;
+        using_block_expressions;
+        using_block_right_paren;
+        using_block_body;
+      } ->
+         let acc = f acc using_block_await_keyword in
+         let acc = f acc using_block_using_keyword in
+         let acc = f acc using_block_left_paren in
+         let acc = f acc using_block_expressions in
+         let acc = f acc using_block_right_paren in
+         let acc = f acc using_block_body in
+         acc
+      | UsingStatementFunctionScoped {
+        using_function_await_keyword;
+        using_function_using_keyword;
+        using_function_expression;
+        using_function_semicolon;
+      } ->
+         let acc = f acc using_function_await_keyword in
+         let acc = f acc using_function_using_keyword in
+         let acc = f acc using_function_expression in
+         let acc = f acc using_function_semicolon in
+         acc
+      | DeclareDirectiveStatement {
+        declare_directive_keyword;
+        declare_directive_left_paren;
+        declare_directive_expression;
+        declare_directive_right_paren;
+        declare_directive_semicolon;
+      } ->
+         let acc = f acc declare_directive_keyword in
+         let acc = f acc declare_directive_left_paren in
+         let acc = f acc declare_directive_expression in
+         let acc = f acc declare_directive_right_paren in
+         let acc = f acc declare_directive_semicolon in
+         acc
+      | DeclareBlockStatement {
+        declare_block_keyword;
+        declare_block_left_paren;
+        declare_block_expression;
+        declare_block_right_paren;
+        declare_block_body;
+      } ->
+         let acc = f acc declare_block_keyword in
+         let acc = f acc declare_block_left_paren in
+         let acc = f acc declare_block_expression in
+         let acc = f acc declare_block_right_paren in
+         let acc = f acc declare_block_body in
+         acc
+      | WhileStatement {
+        while_keyword;
+        while_left_paren;
+        while_condition;
+        while_right_paren;
+        while_body;
+      } ->
+         let acc = f acc while_keyword in
+         let acc = f acc while_left_paren in
+         let acc = f acc while_condition in
+         let acc = f acc while_right_paren in
+         let acc = f acc while_body in
+         acc
+      | IfStatement {
+        if_keyword;
+        if_left_paren;
+        if_condition;
+        if_right_paren;
+        if_statement;
+        if_elseif_clauses;
+        if_else_clause;
+      } ->
+         let acc = f acc if_keyword in
+         let acc = f acc if_left_paren in
+         let acc = f acc if_condition in
+         let acc = f acc if_right_paren in
+         let acc = f acc if_statement in
+         let acc = f acc if_elseif_clauses in
+         let acc = f acc if_else_clause in
+         acc
+      | ElseifClause {
+        elseif_keyword;
+        elseif_left_paren;
+        elseif_condition;
+        elseif_right_paren;
+        elseif_statement;
+      } ->
+         let acc = f acc elseif_keyword in
+         let acc = f acc elseif_left_paren in
+         let acc = f acc elseif_condition in
+         let acc = f acc elseif_right_paren in
+         let acc = f acc elseif_statement in
+         acc
+      | ElseClause {
+        else_keyword;
+        else_statement;
+      } ->
+         let acc = f acc else_keyword in
+         let acc = f acc else_statement in
+         acc
+      | AlternateIfStatement {
+        alternate_if_keyword;
+        alternate_if_left_paren;
+        alternate_if_condition;
+        alternate_if_right_paren;
+        alternate_if_colon;
+        alternate_if_statement;
+        alternate_if_elseif_clauses;
+        alternate_if_else_clause;
+        alternate_if_endif_keyword;
+        alternate_if_semicolon;
+      } ->
+         let acc = f acc alternate_if_keyword in
+         let acc = f acc alternate_if_left_paren in
+         let acc = f acc alternate_if_condition in
+         let acc = f acc alternate_if_right_paren in
+         let acc = f acc alternate_if_colon in
+         let acc = f acc alternate_if_statement in
+         let acc = f acc alternate_if_elseif_clauses in
+         let acc = f acc alternate_if_else_clause in
+         let acc = f acc alternate_if_endif_keyword in
+         let acc = f acc alternate_if_semicolon in
+         acc
+      | AlternateElseifClause {
+        alternate_elseif_keyword;
+        alternate_elseif_left_paren;
+        alternate_elseif_condition;
+        alternate_elseif_right_paren;
+        alternate_elseif_colon;
+        alternate_elseif_statement;
+      } ->
+         let acc = f acc alternate_elseif_keyword in
+         let acc = f acc alternate_elseif_left_paren in
+         let acc = f acc alternate_elseif_condition in
+         let acc = f acc alternate_elseif_right_paren in
+         let acc = f acc alternate_elseif_colon in
+         let acc = f acc alternate_elseif_statement in
+         acc
+      | AlternateElseClause {
+        alternate_else_keyword;
+        alternate_else_colon;
+        alternate_else_statement;
+      } ->
+         let acc = f acc alternate_else_keyword in
+         let acc = f acc alternate_else_colon in
+         let acc = f acc alternate_else_statement in
+         acc
+      | TryStatement {
+        try_keyword;
+        try_compound_statement;
+        try_catch_clauses;
+        try_finally_clause;
+      } ->
+         let acc = f acc try_keyword in
+         let acc = f acc try_compound_statement in
+         let acc = f acc try_catch_clauses in
+         let acc = f acc try_finally_clause in
+         acc
+      | CatchClause {
+        catch_keyword;
+        catch_left_paren;
+        catch_type;
+        catch_variable;
+        catch_right_paren;
+        catch_body;
+      } ->
+         let acc = f acc catch_keyword in
+         let acc = f acc catch_left_paren in
+         let acc = f acc catch_type in
+         let acc = f acc catch_variable in
+         let acc = f acc catch_right_paren in
+         let acc = f acc catch_body in
+         acc
+      | FinallyClause {
+        finally_keyword;
+        finally_body;
+      } ->
+         let acc = f acc finally_keyword in
+         let acc = f acc finally_body in
+         acc
+      | DoStatement {
+        do_keyword;
+        do_body;
+        do_while_keyword;
+        do_left_paren;
+        do_condition;
+        do_right_paren;
+        do_semicolon;
+      } ->
+         let acc = f acc do_keyword in
+         let acc = f acc do_body in
+         let acc = f acc do_while_keyword in
+         let acc = f acc do_left_paren in
+         let acc = f acc do_condition in
+         let acc = f acc do_right_paren in
+         let acc = f acc do_semicolon in
+         acc
+      | ForStatement {
+        for_keyword;
+        for_left_paren;
+        for_initializer;
+        for_first_semicolon;
+        for_control;
+        for_second_semicolon;
+        for_end_of_loop;
+        for_right_paren;
+        for_body;
+      } ->
+         let acc = f acc for_keyword in
+         let acc = f acc for_left_paren in
+         let acc = f acc for_initializer in
+         let acc = f acc for_first_semicolon in
+         let acc = f acc for_control in
+         let acc = f acc for_second_semicolon in
+         let acc = f acc for_end_of_loop in
+         let acc = f acc for_right_paren in
+         let acc = f acc for_body in
+         acc
+      | ForeachStatement {
+        foreach_keyword;
+        foreach_left_paren;
+        foreach_collection;
+        foreach_await_keyword;
+        foreach_as;
+        foreach_key;
+        foreach_arrow;
+        foreach_value;
+        foreach_right_paren;
+        foreach_body;
+      } ->
+         let acc = f acc foreach_keyword in
+         let acc = f acc foreach_left_paren in
+         let acc = f acc foreach_collection in
+         let acc = f acc foreach_await_keyword in
+         let acc = f acc foreach_as in
+         let acc = f acc foreach_key in
+         let acc = f acc foreach_arrow in
+         let acc = f acc foreach_value in
+         let acc = f acc foreach_right_paren in
+         let acc = f acc foreach_body in
+         acc
+      | SwitchStatement {
+        switch_keyword;
+        switch_left_paren;
+        switch_expression;
+        switch_right_paren;
+        switch_left_brace;
+        switch_sections;
+        switch_right_brace;
+      } ->
+         let acc = f acc switch_keyword in
+         let acc = f acc switch_left_paren in
+         let acc = f acc switch_expression in
+         let acc = f acc switch_right_paren in
+         let acc = f acc switch_left_brace in
+         let acc = f acc switch_sections in
+         let acc = f acc switch_right_brace in
+         acc
+      | AlternateSwitchStatement {
+        alternate_switch_keyword;
+        alternate_switch_left_paren;
+        alternate_switch_expression;
+        alternate_switch_right_paren;
+        alternate_switch_opening_colon;
+        alternate_switch_sections;
+        alternate_switch_closing_endswitch;
+        alternate_switch_closing_semicolon;
+      } ->
+         let acc = f acc alternate_switch_keyword in
+         let acc = f acc alternate_switch_left_paren in
+         let acc = f acc alternate_switch_expression in
+         let acc = f acc alternate_switch_right_paren in
+         let acc = f acc alternate_switch_opening_colon in
+         let acc = f acc alternate_switch_sections in
+         let acc = f acc alternate_switch_closing_endswitch in
+         let acc = f acc alternate_switch_closing_semicolon in
+         acc
+      | SwitchSection {
+        switch_section_labels;
+        switch_section_statements;
+        switch_section_fallthrough;
+      } ->
+         let acc = f acc switch_section_labels in
+         let acc = f acc switch_section_statements in
+         let acc = f acc switch_section_fallthrough in
+         acc
+      | SwitchFallthrough {
+        fallthrough_keyword;
+        fallthrough_semicolon;
+      } ->
+         let acc = f acc fallthrough_keyword in
+         let acc = f acc fallthrough_semicolon in
+         acc
+      | CaseLabel {
+        case_keyword;
+        case_expression;
+        case_colon;
+      } ->
+         let acc = f acc case_keyword in
+         let acc = f acc case_expression in
+         let acc = f acc case_colon in
+         acc
+      | DefaultLabel {
+        default_keyword;
+        default_colon;
+      } ->
+         let acc = f acc default_keyword in
+         let acc = f acc default_colon in
+         acc
+      | ReturnStatement {
+        return_keyword;
+        return_expression;
+        return_semicolon;
+      } ->
+         let acc = f acc return_keyword in
+         let acc = f acc return_expression in
+         let acc = f acc return_semicolon in
+         acc
+      | GotoLabel {
+        goto_label_name;
+        goto_label_colon;
+      } ->
+         let acc = f acc goto_label_name in
+         let acc = f acc goto_label_colon in
+         acc
+      | GotoStatement {
+        goto_statement_keyword;
+        goto_statement_label_name;
+        goto_statement_semicolon;
+      } ->
+         let acc = f acc goto_statement_keyword in
+         let acc = f acc goto_statement_label_name in
+         let acc = f acc goto_statement_semicolon in
+         acc
+      | ThrowStatement {
+        throw_keyword;
+        throw_expression;
+        throw_semicolon;
+      } ->
+         let acc = f acc throw_keyword in
+         let acc = f acc throw_expression in
+         let acc = f acc throw_semicolon in
+         acc
+      | BreakStatement {
+        break_keyword;
+        break_level;
+        break_semicolon;
+      } ->
+         let acc = f acc break_keyword in
+         let acc = f acc break_level in
+         let acc = f acc break_semicolon in
+         acc
+      | ContinueStatement {
+        continue_keyword;
+        continue_level;
+        continue_semicolon;
+      } ->
+         let acc = f acc continue_keyword in
+         let acc = f acc continue_level in
+         let acc = f acc continue_semicolon in
+         acc
+      | EchoStatement {
+        echo_keyword;
+        echo_expressions;
+        echo_semicolon;
+      } ->
+         let acc = f acc echo_keyword in
+         let acc = f acc echo_expressions in
+         let acc = f acc echo_semicolon in
+         acc
+      | ConcurrentStatement {
+        concurrent_keyword;
+        concurrent_statement;
+      } ->
+         let acc = f acc concurrent_keyword in
+         let acc = f acc concurrent_statement in
+         acc
+      | SimpleInitializer {
+        simple_initializer_equal;
+        simple_initializer_value;
+      } ->
+         let acc = f acc simple_initializer_equal in
+         let acc = f acc simple_initializer_value in
+         acc
+      | AnonymousClass {
+        anonymous_class_class_keyword;
+        anonymous_class_left_paren;
+        anonymous_class_argument_list;
+        anonymous_class_right_paren;
+        anonymous_class_extends_keyword;
+        anonymous_class_extends_list;
+        anonymous_class_implements_keyword;
+        anonymous_class_implements_list;
+        anonymous_class_body;
+      } ->
+         let acc = f acc anonymous_class_class_keyword in
+         let acc = f acc anonymous_class_left_paren in
+         let acc = f acc anonymous_class_argument_list in
+         let acc = f acc anonymous_class_right_paren in
+         let acc = f acc anonymous_class_extends_keyword in
+         let acc = f acc anonymous_class_extends_list in
+         let acc = f acc anonymous_class_implements_keyword in
+         let acc = f acc anonymous_class_implements_list in
+         let acc = f acc anonymous_class_body in
+         acc
+      | AnonymousFunction {
+        anonymous_attribute_spec;
+        anonymous_static_keyword;
+        anonymous_async_keyword;
+        anonymous_coroutine_keyword;
+        anonymous_function_keyword;
+        anonymous_left_paren;
+        anonymous_parameters;
+        anonymous_right_paren;
+        anonymous_colon;
+        anonymous_type;
+        anonymous_use;
+        anonymous_body;
+      } ->
+         let acc = f acc anonymous_attribute_spec in
+         let acc = f acc anonymous_static_keyword in
+         let acc = f acc anonymous_async_keyword in
+         let acc = f acc anonymous_coroutine_keyword in
+         let acc = f acc anonymous_function_keyword in
+         let acc = f acc anonymous_left_paren in
+         let acc = f acc anonymous_parameters in
+         let acc = f acc anonymous_right_paren in
+         let acc = f acc anonymous_colon in
+         let acc = f acc anonymous_type in
+         let acc = f acc anonymous_use in
+         let acc = f acc anonymous_body in
+         acc
+      | Php7AnonymousFunction {
+        php7_anonymous_attribute_spec;
+        php7_anonymous_static_keyword;
+        php7_anonymous_async_keyword;
+        php7_anonymous_coroutine_keyword;
+        php7_anonymous_function_keyword;
+        php7_anonymous_left_paren;
+        php7_anonymous_parameters;
+        php7_anonymous_right_paren;
+        php7_anonymous_use;
+        php7_anonymous_colon;
+        php7_anonymous_type;
+        php7_anonymous_body;
+      } ->
+         let acc = f acc php7_anonymous_attribute_spec in
+         let acc = f acc php7_anonymous_static_keyword in
+         let acc = f acc php7_anonymous_async_keyword in
+         let acc = f acc php7_anonymous_coroutine_keyword in
+         let acc = f acc php7_anonymous_function_keyword in
+         let acc = f acc php7_anonymous_left_paren in
+         let acc = f acc php7_anonymous_parameters in
+         let acc = f acc php7_anonymous_right_paren in
+         let acc = f acc php7_anonymous_use in
+         let acc = f acc php7_anonymous_colon in
+         let acc = f acc php7_anonymous_type in
+         let acc = f acc php7_anonymous_body in
+         acc
+      | AnonymousFunctionUseClause {
+        anonymous_use_keyword;
+        anonymous_use_left_paren;
+        anonymous_use_variables;
+        anonymous_use_right_paren;
+      } ->
+         let acc = f acc anonymous_use_keyword in
+         let acc = f acc anonymous_use_left_paren in
+         let acc = f acc anonymous_use_variables in
+         let acc = f acc anonymous_use_right_paren in
+         acc
+      | LambdaExpression {
+        lambda_attribute_spec;
+        lambda_async;
+        lambda_coroutine;
+        lambda_signature;
+        lambda_arrow;
+        lambda_body;
+      } ->
+         let acc = f acc lambda_attribute_spec in
+         let acc = f acc lambda_async in
+         let acc = f acc lambda_coroutine in
+         let acc = f acc lambda_signature in
+         let acc = f acc lambda_arrow in
+         let acc = f acc lambda_body in
+         acc
+      | LambdaSignature {
+        lambda_left_paren;
+        lambda_parameters;
+        lambda_right_paren;
+        lambda_colon;
+        lambda_type;
+      } ->
+         let acc = f acc lambda_left_paren in
+         let acc = f acc lambda_parameters in
+         let acc = f acc lambda_right_paren in
+         let acc = f acc lambda_colon in
+         let acc = f acc lambda_type in
+         acc
+      | CastExpression {
+        cast_left_paren;
+        cast_type;
+        cast_right_paren;
+        cast_operand;
+      } ->
+         let acc = f acc cast_left_paren in
+         let acc = f acc cast_type in
+         let acc = f acc cast_right_paren in
+         let acc = f acc cast_operand in
+         acc
+      | ScopeResolutionExpression {
+        scope_resolution_qualifier;
+        scope_resolution_operator;
+        scope_resolution_name;
+      } ->
+         let acc = f acc scope_resolution_qualifier in
+         let acc = f acc scope_resolution_operator in
+         let acc = f acc scope_resolution_name in
+         acc
+      | MemberSelectionExpression {
+        member_object;
+        member_operator;
+        member_name;
+      } ->
+         let acc = f acc member_object in
+         let acc = f acc member_operator in
+         let acc = f acc member_name in
+         acc
+      | SafeMemberSelectionExpression {
+        safe_member_object;
+        safe_member_operator;
+        safe_member_name;
+      } ->
+         let acc = f acc safe_member_object in
+         let acc = f acc safe_member_operator in
+         let acc = f acc safe_member_name in
+         acc
+      | EmbeddedMemberSelectionExpression {
+        embedded_member_object;
+        embedded_member_operator;
+        embedded_member_name;
+      } ->
+         let acc = f acc embedded_member_object in
+         let acc = f acc embedded_member_operator in
+         let acc = f acc embedded_member_name in
+         acc
+      | YieldExpression {
+        yield_keyword;
+        yield_operand;
+      } ->
+         let acc = f acc yield_keyword in
+         let acc = f acc yield_operand in
+         acc
+      | YieldFromExpression {
+        yield_from_yield_keyword;
+        yield_from_from_keyword;
+        yield_from_operand;
+      } ->
+         let acc = f acc yield_from_yield_keyword in
+         let acc = f acc yield_from_from_keyword in
+         let acc = f acc yield_from_operand in
+         acc
+      | PrefixUnaryExpression {
+        prefix_unary_operator;
+        prefix_unary_operand;
+      } ->
+         let acc = f acc prefix_unary_operator in
+         let acc = f acc prefix_unary_operand in
+         acc
+      | PostfixUnaryExpression {
+        postfix_unary_operand;
+        postfix_unary_operator;
+      } ->
+         let acc = f acc postfix_unary_operand in
+         let acc = f acc postfix_unary_operator in
+         acc
+      | BinaryExpression {
+        binary_left_operand;
+        binary_operator;
+        binary_right_operand;
+      } ->
+         let acc = f acc binary_left_operand in
+         let acc = f acc binary_operator in
+         let acc = f acc binary_right_operand in
+         acc
+      | InstanceofExpression {
+        instanceof_left_operand;
+        instanceof_operator;
+        instanceof_right_operand;
+      } ->
+         let acc = f acc instanceof_left_operand in
+         let acc = f acc instanceof_operator in
+         let acc = f acc instanceof_right_operand in
+         acc
+      | IsExpression {
+        is_left_operand;
+        is_operator;
+        is_right_operand;
+      } ->
+         let acc = f acc is_left_operand in
+         let acc = f acc is_operator in
+         let acc = f acc is_right_operand in
+         acc
+      | AsExpression {
+        as_left_operand;
+        as_operator;
+        as_right_operand;
+      } ->
+         let acc = f acc as_left_operand in
+         let acc = f acc as_operator in
+         let acc = f acc as_right_operand in
+         acc
+      | NullableAsExpression {
+        nullable_as_left_operand;
+        nullable_as_operator;
+        nullable_as_right_operand;
+      } ->
+         let acc = f acc nullable_as_left_operand in
+         let acc = f acc nullable_as_operator in
+         let acc = f acc nullable_as_right_operand in
+         acc
+      | ConditionalExpression {
+        conditional_test;
+        conditional_question;
+        conditional_consequence;
+        conditional_colon;
+        conditional_alternative;
+      } ->
+         let acc = f acc conditional_test in
+         let acc = f acc conditional_question in
+         let acc = f acc conditional_consequence in
+         let acc = f acc conditional_colon in
+         let acc = f acc conditional_alternative in
+         acc
+      | EvalExpression {
+        eval_keyword;
+        eval_left_paren;
+        eval_argument;
+        eval_right_paren;
+      } ->
+         let acc = f acc eval_keyword in
+         let acc = f acc eval_left_paren in
+         let acc = f acc eval_argument in
+         let acc = f acc eval_right_paren in
+         acc
+      | EmptyExpression {
+        empty_keyword;
+        empty_left_paren;
+        empty_argument;
+        empty_right_paren;
+      } ->
+         let acc = f acc empty_keyword in
+         let acc = f acc empty_left_paren in
+         let acc = f acc empty_argument in
+         let acc = f acc empty_right_paren in
+         acc
+      | DefineExpression {
+        define_keyword;
+        define_left_paren;
+        define_argument_list;
+        define_right_paren;
+      } ->
+         let acc = f acc define_keyword in
+         let acc = f acc define_left_paren in
+         let acc = f acc define_argument_list in
+         let acc = f acc define_right_paren in
+         acc
+      | HaltCompilerExpression {
+        halt_compiler_keyword;
+        halt_compiler_left_paren;
+        halt_compiler_argument_list;
+        halt_compiler_right_paren;
+      } ->
+         let acc = f acc halt_compiler_keyword in
+         let acc = f acc halt_compiler_left_paren in
+         let acc = f acc halt_compiler_argument_list in
+         let acc = f acc halt_compiler_right_paren in
+         acc
+      | IssetExpression {
+        isset_keyword;
+        isset_left_paren;
+        isset_argument_list;
+        isset_right_paren;
+      } ->
+         let acc = f acc isset_keyword in
+         let acc = f acc isset_left_paren in
+         let acc = f acc isset_argument_list in
+         let acc = f acc isset_right_paren in
+         acc
+      | FunctionCallExpression {
+        function_call_receiver;
+        function_call_type_args;
+        function_call_left_paren;
+        function_call_argument_list;
+        function_call_right_paren;
+      } ->
+         let acc = f acc function_call_receiver in
+         let acc = f acc function_call_type_args in
+         let acc = f acc function_call_left_paren in
+         let acc = f acc function_call_argument_list in
+         let acc = f acc function_call_right_paren in
+         acc
+      | ParenthesizedExpression {
+        parenthesized_expression_left_paren;
+        parenthesized_expression_expression;
+        parenthesized_expression_right_paren;
+      } ->
+         let acc = f acc parenthesized_expression_left_paren in
+         let acc = f acc parenthesized_expression_expression in
+         let acc = f acc parenthesized_expression_right_paren in
+         acc
+      | BracedExpression {
+        braced_expression_left_brace;
+        braced_expression_expression;
+        braced_expression_right_brace;
+      } ->
+         let acc = f acc braced_expression_left_brace in
+         let acc = f acc braced_expression_expression in
+         let acc = f acc braced_expression_right_brace in
+         acc
+      | EmbeddedBracedExpression {
+        embedded_braced_expression_left_brace;
+        embedded_braced_expression_expression;
+        embedded_braced_expression_right_brace;
+      } ->
+         let acc = f acc embedded_braced_expression_left_brace in
+         let acc = f acc embedded_braced_expression_expression in
+         let acc = f acc embedded_braced_expression_right_brace in
+         acc
+      | ListExpression {
+        list_keyword;
+        list_left_paren;
+        list_members;
+        list_right_paren;
+      } ->
+         let acc = f acc list_keyword in
+         let acc = f acc list_left_paren in
+         let acc = f acc list_members in
+         let acc = f acc list_right_paren in
+         acc
+      | CollectionLiteralExpression {
+        collection_literal_name;
+        collection_literal_left_brace;
+        collection_literal_initializers;
+        collection_literal_right_brace;
+      } ->
+         let acc = f acc collection_literal_name in
+         let acc = f acc collection_literal_left_brace in
+         let acc = f acc collection_literal_initializers in
+         let acc = f acc collection_literal_right_brace in
+         acc
+      | ObjectCreationExpression {
+        object_creation_new_keyword;
+        object_creation_object;
+      } ->
+         let acc = f acc object_creation_new_keyword in
+         let acc = f acc object_creation_object in
+         acc
+      | ConstructorCall {
+        constructor_call_type;
+        constructor_call_left_paren;
+        constructor_call_argument_list;
+        constructor_call_right_paren;
+      } ->
+         let acc = f acc constructor_call_type in
+         let acc = f acc constructor_call_left_paren in
+         let acc = f acc constructor_call_argument_list in
+         let acc = f acc constructor_call_right_paren in
+         acc
+      | RecordCreationExpression {
+        record_creation_type;
+        record_creation_left_bracket;
+        record_creation_members;
+        record_creation_right_bracket;
+      } ->
+         let acc = f acc record_creation_type in
+         let acc = f acc record_creation_left_bracket in
+         let acc = f acc record_creation_members in
+         let acc = f acc record_creation_right_bracket in
+         acc
+      | ArrayCreationExpression {
+        array_creation_left_bracket;
+        array_creation_members;
+        array_creation_right_bracket;
+      } ->
+         let acc = f acc array_creation_left_bracket in
+         let acc = f acc array_creation_members in
+         let acc = f acc array_creation_right_bracket in
+         acc
+      | ArrayIntrinsicExpression {
+        array_intrinsic_keyword;
+        array_intrinsic_left_paren;
+        array_intrinsic_members;
+        array_intrinsic_right_paren;
+      } ->
+         let acc = f acc array_intrinsic_keyword in
+         let acc = f acc array_intrinsic_left_paren in
+         let acc = f acc array_intrinsic_members in
+         let acc = f acc array_intrinsic_right_paren in
+         acc
+      | DarrayIntrinsicExpression {
+        darray_intrinsic_keyword;
+        darray_intrinsic_explicit_type;
+        darray_intrinsic_left_bracket;
+        darray_intrinsic_members;
+        darray_intrinsic_right_bracket;
+      } ->
+         let acc = f acc darray_intrinsic_keyword in
+         let acc = f acc darray_intrinsic_explicit_type in
+         let acc = f acc darray_intrinsic_left_bracket in
+         let acc = f acc darray_intrinsic_members in
+         let acc = f acc darray_intrinsic_right_bracket in
+         acc
+      | DictionaryIntrinsicExpression {
+        dictionary_intrinsic_keyword;
+        dictionary_intrinsic_explicit_type;
+        dictionary_intrinsic_left_bracket;
+        dictionary_intrinsic_members;
+        dictionary_intrinsic_right_bracket;
+      } ->
+         let acc = f acc dictionary_intrinsic_keyword in
+         let acc = f acc dictionary_intrinsic_explicit_type in
+         let acc = f acc dictionary_intrinsic_left_bracket in
+         let acc = f acc dictionary_intrinsic_members in
+         let acc = f acc dictionary_intrinsic_right_bracket in
+         acc
+      | KeysetIntrinsicExpression {
+        keyset_intrinsic_keyword;
+        keyset_intrinsic_explicit_type;
+        keyset_intrinsic_left_bracket;
+        keyset_intrinsic_members;
+        keyset_intrinsic_right_bracket;
+      } ->
+         let acc = f acc keyset_intrinsic_keyword in
+         let acc = f acc keyset_intrinsic_explicit_type in
+         let acc = f acc keyset_intrinsic_left_bracket in
+         let acc = f acc keyset_intrinsic_members in
+         let acc = f acc keyset_intrinsic_right_bracket in
+         acc
+      | VarrayIntrinsicExpression {
+        varray_intrinsic_keyword;
+        varray_intrinsic_explicit_type;
+        varray_intrinsic_left_bracket;
+        varray_intrinsic_members;
+        varray_intrinsic_right_bracket;
+      } ->
+         let acc = f acc varray_intrinsic_keyword in
+         let acc = f acc varray_intrinsic_explicit_type in
+         let acc = f acc varray_intrinsic_left_bracket in
+         let acc = f acc varray_intrinsic_members in
+         let acc = f acc varray_intrinsic_right_bracket in
+         acc
+      | VectorIntrinsicExpression {
+        vector_intrinsic_keyword;
+        vector_intrinsic_explicit_type;
+        vector_intrinsic_left_bracket;
+        vector_intrinsic_members;
+        vector_intrinsic_right_bracket;
+      } ->
+         let acc = f acc vector_intrinsic_keyword in
+         let acc = f acc vector_intrinsic_explicit_type in
+         let acc = f acc vector_intrinsic_left_bracket in
+         let acc = f acc vector_intrinsic_members in
+         let acc = f acc vector_intrinsic_right_bracket in
+         acc
+      | ElementInitializer {
+        element_key;
+        element_arrow;
+        element_value;
+      } ->
+         let acc = f acc element_key in
+         let acc = f acc element_arrow in
+         let acc = f acc element_value in
+         acc
+      | SubscriptExpression {
+        subscript_receiver;
+        subscript_left_bracket;
+        subscript_index;
+        subscript_right_bracket;
+      } ->
+         let acc = f acc subscript_receiver in
+         let acc = f acc subscript_left_bracket in
+         let acc = f acc subscript_index in
+         let acc = f acc subscript_right_bracket in
+         acc
+      | EmbeddedSubscriptExpression {
+        embedded_subscript_receiver;
+        embedded_subscript_left_bracket;
+        embedded_subscript_index;
+        embedded_subscript_right_bracket;
+      } ->
+         let acc = f acc embedded_subscript_receiver in
+         let acc = f acc embedded_subscript_left_bracket in
+         let acc = f acc embedded_subscript_index in
+         let acc = f acc embedded_subscript_right_bracket in
+         acc
+      | AwaitableCreationExpression {
+        awaitable_attribute_spec;
+        awaitable_async;
+        awaitable_coroutine;
+        awaitable_compound_statement;
+      } ->
+         let acc = f acc awaitable_attribute_spec in
+         let acc = f acc awaitable_async in
+         let acc = f acc awaitable_coroutine in
+         let acc = f acc awaitable_compound_statement in
+         acc
+      | XHPChildrenDeclaration {
+        xhp_children_keyword;
+        xhp_children_expression;
+        xhp_children_semicolon;
+      } ->
+         let acc = f acc xhp_children_keyword in
+         let acc = f acc xhp_children_expression in
+         let acc = f acc xhp_children_semicolon in
+         acc
+      | XHPChildrenParenthesizedList {
+        xhp_children_list_left_paren;
+        xhp_children_list_xhp_children;
+        xhp_children_list_right_paren;
+      } ->
+         let acc = f acc xhp_children_list_left_paren in
+         let acc = f acc xhp_children_list_xhp_children in
+         let acc = f acc xhp_children_list_right_paren in
+         acc
+      | XHPCategoryDeclaration {
+        xhp_category_keyword;
+        xhp_category_categories;
+        xhp_category_semicolon;
+      } ->
+         let acc = f acc xhp_category_keyword in
+         let acc = f acc xhp_category_categories in
+         let acc = f acc xhp_category_semicolon in
+         acc
+      | XHPEnumType {
+        xhp_enum_optional;
+        xhp_enum_keyword;
+        xhp_enum_left_brace;
+        xhp_enum_values;
+        xhp_enum_right_brace;
+      } ->
+         let acc = f acc xhp_enum_optional in
+         let acc = f acc xhp_enum_keyword in
+         let acc = f acc xhp_enum_left_brace in
+         let acc = f acc xhp_enum_values in
+         let acc = f acc xhp_enum_right_brace in
+         acc
+      | XHPRequired {
+        xhp_required_at;
+        xhp_required_keyword;
+      } ->
+         let acc = f acc xhp_required_at in
+         let acc = f acc xhp_required_keyword in
+         acc
+      | XHPClassAttributeDeclaration {
+        xhp_attribute_keyword;
+        xhp_attribute_attributes;
+        xhp_attribute_semicolon;
+      } ->
+         let acc = f acc xhp_attribute_keyword in
+         let acc = f acc xhp_attribute_attributes in
+         let acc = f acc xhp_attribute_semicolon in
+         acc
+      | XHPClassAttribute {
+        xhp_attribute_decl_type;
+        xhp_attribute_decl_name;
+        xhp_attribute_decl_initializer;
+        xhp_attribute_decl_required;
+      } ->
+         let acc = f acc xhp_attribute_decl_type in
+         let acc = f acc xhp_attribute_decl_name in
+         let acc = f acc xhp_attribute_decl_initializer in
+         let acc = f acc xhp_attribute_decl_required in
+         acc
+      | XHPSimpleClassAttribute {
+        xhp_simple_class_attribute_type;
+      } ->
+         let acc = f acc xhp_simple_class_attribute_type in
+         acc
+      | XHPSimpleAttribute {
+        xhp_simple_attribute_name;
+        xhp_simple_attribute_equal;
+        xhp_simple_attribute_expression;
+      } ->
+         let acc = f acc xhp_simple_attribute_name in
+         let acc = f acc xhp_simple_attribute_equal in
+         let acc = f acc xhp_simple_attribute_expression in
+         acc
+      | XHPSpreadAttribute {
+        xhp_spread_attribute_left_brace;
+        xhp_spread_attribute_spread_operator;
+        xhp_spread_attribute_expression;
+        xhp_spread_attribute_right_brace;
+      } ->
+         let acc = f acc xhp_spread_attribute_left_brace in
+         let acc = f acc xhp_spread_attribute_spread_operator in
+         let acc = f acc xhp_spread_attribute_expression in
+         let acc = f acc xhp_spread_attribute_right_brace in
+         acc
+      | XHPOpen {
+        xhp_open_left_angle;
+        xhp_open_name;
+        xhp_open_attributes;
+        xhp_open_right_angle;
+      } ->
+         let acc = f acc xhp_open_left_angle in
+         let acc = f acc xhp_open_name in
+         let acc = f acc xhp_open_attributes in
+         let acc = f acc xhp_open_right_angle in
+         acc
+      | XHPExpression {
+        xhp_open;
+        xhp_body;
+        xhp_close;
+      } ->
+         let acc = f acc xhp_open in
+         let acc = f acc xhp_body in
+         let acc = f acc xhp_close in
+         acc
+      | XHPClose {
+        xhp_close_left_angle;
+        xhp_close_name;
+        xhp_close_right_angle;
+      } ->
+         let acc = f acc xhp_close_left_angle in
+         let acc = f acc xhp_close_name in
+         let acc = f acc xhp_close_right_angle in
+         acc
+      | TypeConstant {
+        type_constant_left_type;
+        type_constant_separator;
+        type_constant_right_type;
+      } ->
+         let acc = f acc type_constant_left_type in
+         let acc = f acc type_constant_separator in
+         let acc = f acc type_constant_right_type in
+         acc
+      | VectorTypeSpecifier {
+        vector_type_keyword;
+        vector_type_left_angle;
+        vector_type_type;
+        vector_type_trailing_comma;
+        vector_type_right_angle;
+      } ->
+         let acc = f acc vector_type_keyword in
+         let acc = f acc vector_type_left_angle in
+         let acc = f acc vector_type_type in
+         let acc = f acc vector_type_trailing_comma in
+         let acc = f acc vector_type_right_angle in
+         acc
+      | KeysetTypeSpecifier {
+        keyset_type_keyword;
+        keyset_type_left_angle;
+        keyset_type_type;
+        keyset_type_trailing_comma;
+        keyset_type_right_angle;
+      } ->
+         let acc = f acc keyset_type_keyword in
+         let acc = f acc keyset_type_left_angle in
+         let acc = f acc keyset_type_type in
+         let acc = f acc keyset_type_trailing_comma in
+         let acc = f acc keyset_type_right_angle in
+         acc
+      | TupleTypeExplicitSpecifier {
+        tuple_type_keyword;
+        tuple_type_left_angle;
+        tuple_type_types;
+        tuple_type_right_angle;
+      } ->
+         let acc = f acc tuple_type_keyword in
+         let acc = f acc tuple_type_left_angle in
+         let acc = f acc tuple_type_types in
+         let acc = f acc tuple_type_right_angle in
+         acc
+      | VarrayTypeSpecifier {
+        varray_keyword;
+        varray_left_angle;
+        varray_type;
+        varray_trailing_comma;
+        varray_right_angle;
+      } ->
+         let acc = f acc varray_keyword in
+         let acc = f acc varray_left_angle in
+         let acc = f acc varray_type in
+         let acc = f acc varray_trailing_comma in
+         let acc = f acc varray_right_angle in
+         acc
+      | VectorArrayTypeSpecifier {
+        vector_array_keyword;
+        vector_array_left_angle;
+        vector_array_type;
+        vector_array_right_angle;
+      } ->
+         let acc = f acc vector_array_keyword in
+         let acc = f acc vector_array_left_angle in
+         let acc = f acc vector_array_type in
+         let acc = f acc vector_array_right_angle in
+         acc
+      | TypeParameter {
+        type_attribute_spec;
+        type_reified;
+        type_variance;
+        type_name;
+        type_constraints;
+      } ->
+         let acc = f acc type_attribute_spec in
+         let acc = f acc type_reified in
+         let acc = f acc type_variance in
+         let acc = f acc type_name in
+         let acc = f acc type_constraints in
+         acc
+      | TypeConstraint {
+        constraint_keyword;
+        constraint_type;
+      } ->
+         let acc = f acc constraint_keyword in
+         let acc = f acc constraint_type in
+         acc
+      | DarrayTypeSpecifier {
+        darray_keyword;
+        darray_left_angle;
+        darray_key;
+        darray_comma;
+        darray_value;
+        darray_trailing_comma;
+        darray_right_angle;
+      } ->
+         let acc = f acc darray_keyword in
+         let acc = f acc darray_left_angle in
+         let acc = f acc darray_key in
+         let acc = f acc darray_comma in
+         let acc = f acc darray_value in
+         let acc = f acc darray_trailing_comma in
+         let acc = f acc darray_right_angle in
+         acc
+      | MapArrayTypeSpecifier {
+        map_array_keyword;
+        map_array_left_angle;
+        map_array_key;
+        map_array_comma;
+        map_array_value;
+        map_array_right_angle;
+      } ->
+         let acc = f acc map_array_keyword in
+         let acc = f acc map_array_left_angle in
+         let acc = f acc map_array_key in
+         let acc = f acc map_array_comma in
+         let acc = f acc map_array_value in
+         let acc = f acc map_array_right_angle in
+         acc
+      | DictionaryTypeSpecifier {
+        dictionary_type_keyword;
+        dictionary_type_left_angle;
+        dictionary_type_members;
+        dictionary_type_right_angle;
+      } ->
+         let acc = f acc dictionary_type_keyword in
+         let acc = f acc dictionary_type_left_angle in
+         let acc = f acc dictionary_type_members in
+         let acc = f acc dictionary_type_right_angle in
+         acc
+      | ClosureTypeSpecifier {
+        closure_outer_left_paren;
+        closure_coroutine;
+        closure_function_keyword;
+        closure_inner_left_paren;
+        closure_parameter_list;
+        closure_inner_right_paren;
+        closure_colon;
+        closure_return_type;
+        closure_outer_right_paren;
+      } ->
+         let acc = f acc closure_outer_left_paren in
+         let acc = f acc closure_coroutine in
+         let acc = f acc closure_function_keyword in
+         let acc = f acc closure_inner_left_paren in
+         let acc = f acc closure_parameter_list in
+         let acc = f acc closure_inner_right_paren in
+         let acc = f acc closure_colon in
+         let acc = f acc closure_return_type in
+         let acc = f acc closure_outer_right_paren in
+         acc
+      | ClosureParameterTypeSpecifier {
+        closure_parameter_call_convention;
+        closure_parameter_type;
+      } ->
+         let acc = f acc closure_parameter_call_convention in
+         let acc = f acc closure_parameter_type in
+         acc
+      | ClassnameTypeSpecifier {
+        classname_keyword;
+        classname_left_angle;
+        classname_type;
+        classname_trailing_comma;
+        classname_right_angle;
+      } ->
+         let acc = f acc classname_keyword in
+         let acc = f acc classname_left_angle in
+         let acc = f acc classname_type in
+         let acc = f acc classname_trailing_comma in
+         let acc = f acc classname_right_angle in
+         acc
+      | FieldSpecifier {
+        field_question;
+        field_name;
+        field_arrow;
+        field_type;
+      } ->
+         let acc = f acc field_question in
+         let acc = f acc field_name in
+         let acc = f acc field_arrow in
+         let acc = f acc field_type in
+         acc
+      | FieldInitializer {
+        field_initializer_name;
+        field_initializer_arrow;
+        field_initializer_value;
+      } ->
+         let acc = f acc field_initializer_name in
+         let acc = f acc field_initializer_arrow in
+         let acc = f acc field_initializer_value in
+         acc
+      | ShapeTypeSpecifier {
+        shape_type_keyword;
+        shape_type_left_paren;
+        shape_type_fields;
+        shape_type_ellipsis;
+        shape_type_right_paren;
+      } ->
+         let acc = f acc shape_type_keyword in
+         let acc = f acc shape_type_left_paren in
+         let acc = f acc shape_type_fields in
+         let acc = f acc shape_type_ellipsis in
+         let acc = f acc shape_type_right_paren in
+         acc
+      | ShapeExpression {
+        shape_expression_keyword;
+        shape_expression_left_paren;
+        shape_expression_fields;
+        shape_expression_right_paren;
+      } ->
+         let acc = f acc shape_expression_keyword in
+         let acc = f acc shape_expression_left_paren in
+         let acc = f acc shape_expression_fields in
+         let acc = f acc shape_expression_right_paren in
+         acc
+      | TupleExpression {
+        tuple_expression_keyword;
+        tuple_expression_left_paren;
+        tuple_expression_items;
+        tuple_expression_right_paren;
+      } ->
+         let acc = f acc tuple_expression_keyword in
+         let acc = f acc tuple_expression_left_paren in
+         let acc = f acc tuple_expression_items in
+         let acc = f acc tuple_expression_right_paren in
+         acc
+      | GenericTypeSpecifier {
+        generic_class_type;
+        generic_argument_list;
+      } ->
+         let acc = f acc generic_class_type in
+         let acc = f acc generic_argument_list in
+         acc
+      | NullableTypeSpecifier {
+        nullable_question;
+        nullable_type;
+      } ->
+         let acc = f acc nullable_question in
+         let acc = f acc nullable_type in
+         acc
+      | LikeTypeSpecifier {
+        like_tilde;
+        like_type;
+      } ->
+         let acc = f acc like_tilde in
+         let acc = f acc like_type in
+         acc
+      | SoftTypeSpecifier {
+        soft_at;
+        soft_type;
+      } ->
+         let acc = f acc soft_at in
+         let acc = f acc soft_type in
+         acc
+      | ReifiedTypeArgument {
+        reified_type_argument_reified;
+        reified_type_argument_type;
+      } ->
+         let acc = f acc reified_type_argument_reified in
+         let acc = f acc reified_type_argument_type in
+         acc
+      | TypeArguments {
+        type_arguments_left_angle;
+        type_arguments_types;
+        type_arguments_right_angle;
+      } ->
+         let acc = f acc type_arguments_left_angle in
+         let acc = f acc type_arguments_types in
+         let acc = f acc type_arguments_right_angle in
+         acc
+      | TypeParameters {
+        type_parameters_left_angle;
+        type_parameters_parameters;
+        type_parameters_right_angle;
+      } ->
+         let acc = f acc type_parameters_left_angle in
+         let acc = f acc type_parameters_parameters in
+         let acc = f acc type_parameters_right_angle in
+         acc
+      | TupleTypeSpecifier {
+        tuple_left_paren;
+        tuple_types;
+        tuple_right_paren;
+      } ->
+         let acc = f acc tuple_left_paren in
+         let acc = f acc tuple_types in
+         let acc = f acc tuple_right_paren in
+         acc
+      | ErrorSyntax {
+        error_error;
+      } ->
+         let acc = f acc error_error in
+         acc
+      | ListItem {
+        list_item;
+        list_separator;
+      } ->
+         let acc = f acc list_item in
+         let acc = f acc list_separator in
+         acc
+      | PocketAtomExpression {
+        pocket_atom_glyph;
+        pocket_atom_expression;
+      } ->
+         let acc = f acc pocket_atom_glyph in
+         let acc = f acc pocket_atom_expression in
+         acc
+      | PocketIdentifierExpression {
+        pocket_identifier_qualifier;
+        pocket_identifier_pu_operator;
+        pocket_identifier_field;
+        pocket_identifier_operator;
+        pocket_identifier_name;
+      } ->
+         let acc = f acc pocket_identifier_qualifier in
+         let acc = f acc pocket_identifier_pu_operator in
+         let acc = f acc pocket_identifier_field in
+         let acc = f acc pocket_identifier_operator in
+         let acc = f acc pocket_identifier_name in
+         acc
+      | PocketAtomMappingDeclaration {
+        pocket_atom_mapping_glyph;
+        pocket_atom_mapping_name;
+        pocket_atom_mapping_left_paren;
+        pocket_atom_mapping_mappings;
+        pocket_atom_mapping_right_paren;
+        pocket_atom_mapping_semicolon;
+      } ->
+         let acc = f acc pocket_atom_mapping_glyph in
+         let acc = f acc pocket_atom_mapping_name in
+         let acc = f acc pocket_atom_mapping_left_paren in
+         let acc = f acc pocket_atom_mapping_mappings in
+         let acc = f acc pocket_atom_mapping_right_paren in
+         let acc = f acc pocket_atom_mapping_semicolon in
+         acc
+      | PocketEnumDeclaration {
+        pocket_enum_modifiers;
+        pocket_enum_enum;
+        pocket_enum_name;
+        pocket_enum_left_brace;
+        pocket_enum_fields;
+        pocket_enum_right_brace;
+      } ->
+         let acc = f acc pocket_enum_modifiers in
+         let acc = f acc pocket_enum_enum in
+         let acc = f acc pocket_enum_name in
+         let acc = f acc pocket_enum_left_brace in
+         let acc = f acc pocket_enum_fields in
+         let acc = f acc pocket_enum_right_brace in
+         acc
+      | PocketFieldTypeExprDeclaration {
+        pocket_field_type_expr_case;
+        pocket_field_type_expr_type;
+        pocket_field_type_expr_name;
+        pocket_field_type_expr_semicolon;
+      } ->
+         let acc = f acc pocket_field_type_expr_case in
+         let acc = f acc pocket_field_type_expr_type in
+         let acc = f acc pocket_field_type_expr_name in
+         let acc = f acc pocket_field_type_expr_semicolon in
+         acc
+      | PocketFieldTypeDeclaration {
+        pocket_field_type_case;
+        pocket_field_type_type;
+        pocket_field_type_name;
+        pocket_field_type_semicolon;
+      } ->
+         let acc = f acc pocket_field_type_case in
+         let acc = f acc pocket_field_type_type in
+         let acc = f acc pocket_field_type_name in
+         let acc = f acc pocket_field_type_semicolon in
+         acc
+      | PocketMappingIdDeclaration {
+        pocket_mapping_id_name;
+        pocket_mapping_id_initializer;
+      } ->
+         let acc = f acc pocket_mapping_id_name in
+         let acc = f acc pocket_mapping_id_initializer in
+         acc
+      | PocketMappingTypeDeclaration {
+        pocket_mapping_type_keyword;
+        pocket_mapping_type_name;
+        pocket_mapping_type_equal;
+        pocket_mapping_type_type;
+      } ->
+         let acc = f acc pocket_mapping_type_keyword in
+         let acc = f acc pocket_mapping_type_name in
+         let acc = f acc pocket_mapping_type_equal in
+         let acc = f acc pocket_mapping_type_type in
+         acc
 
 
     (* The order that the children are returned in should match the order
        that they appear in the source text *)
-    let children node =
-      match node.syntax with
+    let children_from_syntax s =
+      match s with
       | Missing -> []
       | Token _ -> []
       | SyntaxList x -> x
@@ -2106,6 +2496,11 @@ module WithToken(Token: TokenType) = struct
       } -> [
         script_declarations;
       ]
+      | QualifiedName {
+        qualified_name_parts;
+      } -> [
+        qualified_name_parts;
+      ]
       | SimpleTypeSpecifier {
         simple_type_specifier;
       } -> [
@@ -2116,20 +2511,35 @@ module WithToken(Token: TokenType) = struct
       } -> [
         literal_expression;
       ]
+      | PrefixedStringExpression {
+        prefixed_string_name;
+        prefixed_string_str;
+      } -> [
+        prefixed_string_name;
+        prefixed_string_str;
+      ]
       | VariableExpression {
         variable_expression;
       } -> [
         variable_expression;
       ]
-      | QualifiedNameExpression {
-        qualified_name_expression;
-      } -> [
-        qualified_name_expression;
-      ]
       | PipeVariableExpression {
         pipe_variable_expression;
       } -> [
         pipe_variable_expression;
+      ]
+      | FileAttributeSpecification {
+        file_attribute_specification_left_double_angle;
+        file_attribute_specification_keyword;
+        file_attribute_specification_colon;
+        file_attribute_specification_attributes;
+        file_attribute_specification_right_double_angle;
+      } -> [
+        file_attribute_specification_left_double_angle;
+        file_attribute_specification_keyword;
+        file_attribute_specification_colon;
+        file_attribute_specification_attributes;
+        file_attribute_specification_right_double_angle;
       ]
       | EnumDeclaration {
         enum_attribute_spec;
@@ -2163,6 +2573,34 @@ module WithToken(Token: TokenType) = struct
         enumerator_value;
         enumerator_semicolon;
       ]
+      | RecordDeclaration {
+        record_attribute_spec;
+        record_keyword;
+        record_name;
+        record_left_brace;
+        record_fields;
+        record_right_brace;
+      } -> [
+        record_attribute_spec;
+        record_keyword;
+        record_name;
+        record_left_brace;
+        record_fields;
+        record_right_brace;
+      ]
+      | RecordField {
+        record_field_name;
+        record_field_colon;
+        record_field_type;
+        record_field_init;
+        record_field_comma;
+      } -> [
+        record_field_name;
+        record_field_colon;
+        record_field_type;
+        record_field_init;
+        record_field_comma;
+      ]
       | AliasDeclaration {
         alias_attribute_spec;
         alias_keyword;
@@ -2183,11 +2621,13 @@ module WithToken(Token: TokenType) = struct
         alias_semicolon;
       ]
       | PropertyDeclaration {
+        property_attribute_spec;
         property_modifiers;
         property_type;
         property_declarators;
         property_semicolon;
       } -> [
+        property_attribute_spec;
         property_modifiers;
         property_type;
         property_declarators;
@@ -2272,10 +2712,8 @@ module WithToken(Token: TokenType) = struct
         function_body;
       ]
       | FunctionDeclarationHeader {
-        function_async;
-        function_coroutine;
+        function_modifiers;
         function_keyword;
-        function_ampersand;
         function_name;
         function_type_parameter_list;
         function_left_paren;
@@ -2285,10 +2723,8 @@ module WithToken(Token: TokenType) = struct
         function_type;
         function_where_clause;
       } -> [
-        function_async;
-        function_coroutine;
+        function_modifiers;
         function_keyword;
-        function_ampersand;
         function_name;
         function_type_parameter_list;
         function_left_paren;
@@ -2316,16 +2752,27 @@ module WithToken(Token: TokenType) = struct
       ]
       | MethodishDeclaration {
         methodish_attribute;
-        methodish_modifiers;
         methodish_function_decl_header;
         methodish_function_body;
         methodish_semicolon;
       } -> [
         methodish_attribute;
-        methodish_modifiers;
         methodish_function_decl_header;
         methodish_function_body;
         methodish_semicolon;
+      ]
+      | MethodishTraitResolution {
+        methodish_trait_attribute;
+        methodish_trait_function_decl_header;
+        methodish_trait_equal;
+        methodish_trait_name;
+        methodish_trait_semicolon;
+      } -> [
+        methodish_trait_attribute;
+        methodish_trait_function_decl_header;
+        methodish_trait_equal;
+        methodish_trait_name;
+        methodish_trait_semicolon;
       ]
       | ClassishDeclaration {
         classish_attribute;
@@ -2371,12 +2818,12 @@ module WithToken(Token: TokenType) = struct
       | TraitUseAliasItem {
         trait_use_alias_item_aliasing_name;
         trait_use_alias_item_keyword;
-        trait_use_alias_item_visibility;
+        trait_use_alias_item_modifiers;
         trait_use_alias_item_aliased_name;
       } -> [
         trait_use_alias_item_aliasing_name;
         trait_use_alias_item_keyword;
-        trait_use_alias_item_visibility;
+        trait_use_alias_item_modifiers;
         trait_use_alias_item_aliased_name;
       ]
       | TraitUseConflictResolution {
@@ -2413,12 +2860,14 @@ module WithToken(Token: TokenType) = struct
         require_semicolon;
       ]
       | ConstDeclaration {
+        const_visibility;
         const_abstract;
         const_keyword;
         const_type_specifier;
         const_declarators;
         const_semicolon;
       } -> [
+        const_visibility;
         const_abstract;
         const_keyword;
         const_type_specifier;
@@ -2433,19 +2882,23 @@ module WithToken(Token: TokenType) = struct
         constant_declarator_initializer;
       ]
       | TypeConstDeclaration {
+        type_const_attribute_spec;
         type_const_abstract;
         type_const_keyword;
         type_const_type_keyword;
         type_const_name;
+        type_const_type_parameters;
         type_const_type_constraint;
         type_const_equal;
         type_const_type_specifier;
         type_const_semicolon;
       } -> [
+        type_const_attribute_spec;
         type_const_abstract;
         type_const_keyword;
         type_const_type_keyword;
         type_const_name;
+        type_const_type_parameters;
         type_const_type_constraint;
         type_const_equal;
         type_const_type_specifier;
@@ -2461,19 +2914,25 @@ module WithToken(Token: TokenType) = struct
       | ParameterDeclaration {
         parameter_attribute;
         parameter_visibility;
+        parameter_call_convention;
         parameter_type;
         parameter_name;
         parameter_default_value;
       } -> [
         parameter_attribute;
         parameter_visibility;
+        parameter_call_convention;
         parameter_type;
         parameter_name;
         parameter_default_value;
       ]
       | VariadicParameter {
+        variadic_parameter_call_convention;
+        variadic_parameter_type;
         variadic_parameter_ellipsis;
       } -> [
+        variadic_parameter_call_convention;
+        variadic_parameter_type;
         variadic_parameter_ellipsis;
       ]
       | AttributeSpecification {
@@ -2484,17 +2943,6 @@ module WithToken(Token: TokenType) = struct
         attribute_specification_left_double_angle;
         attribute_specification_attributes;
         attribute_specification_right_double_angle;
-      ]
-      | Attribute {
-        attribute_name;
-        attribute_left_paren;
-        attribute_values;
-        attribute_right_paren;
-      } -> [
-        attribute_name;
-        attribute_left_paren;
-        attribute_values;
-        attribute_right_paren;
       ]
       | InclusionExpression {
         inclusion_require;
@@ -2518,6 +2966,17 @@ module WithToken(Token: TokenType) = struct
         compound_left_brace;
         compound_statements;
         compound_right_brace;
+      ]
+      | AlternateLoopStatement {
+        alternate_loop_opening_colon;
+        alternate_loop_statements;
+        alternate_loop_closing_keyword;
+        alternate_loop_closing_semicolon;
+      } -> [
+        alternate_loop_opening_colon;
+        alternate_loop_statements;
+        alternate_loop_closing_keyword;
+        alternate_loop_closing_semicolon;
       ]
       | ExpressionStatement {
         expression_statement_expression;
@@ -2556,6 +3015,73 @@ module WithToken(Token: TokenType) = struct
         unset_variables;
         unset_right_paren;
         unset_semicolon;
+      ]
+      | LetStatement {
+        let_statement_keyword;
+        let_statement_name;
+        let_statement_colon;
+        let_statement_type;
+        let_statement_initializer;
+        let_statement_semicolon;
+      } -> [
+        let_statement_keyword;
+        let_statement_name;
+        let_statement_colon;
+        let_statement_type;
+        let_statement_initializer;
+        let_statement_semicolon;
+      ]
+      | UsingStatementBlockScoped {
+        using_block_await_keyword;
+        using_block_using_keyword;
+        using_block_left_paren;
+        using_block_expressions;
+        using_block_right_paren;
+        using_block_body;
+      } -> [
+        using_block_await_keyword;
+        using_block_using_keyword;
+        using_block_left_paren;
+        using_block_expressions;
+        using_block_right_paren;
+        using_block_body;
+      ]
+      | UsingStatementFunctionScoped {
+        using_function_await_keyword;
+        using_function_using_keyword;
+        using_function_expression;
+        using_function_semicolon;
+      } -> [
+        using_function_await_keyword;
+        using_function_using_keyword;
+        using_function_expression;
+        using_function_semicolon;
+      ]
+      | DeclareDirectiveStatement {
+        declare_directive_keyword;
+        declare_directive_left_paren;
+        declare_directive_expression;
+        declare_directive_right_paren;
+        declare_directive_semicolon;
+      } -> [
+        declare_directive_keyword;
+        declare_directive_left_paren;
+        declare_directive_expression;
+        declare_directive_right_paren;
+        declare_directive_semicolon;
+      ]
+      | DeclareBlockStatement {
+        declare_block_keyword;
+        declare_block_left_paren;
+        declare_block_expression;
+        declare_block_right_paren;
+        declare_block_body;
+      } -> [
+        declare_block_keyword;
+        declare_block_left_paren;
+        declare_block_expression;
+        declare_block_right_paren;
+        declare_block_body;
       ]
       | WhileStatement {
         while_keyword;
@@ -2606,6 +3132,53 @@ module WithToken(Token: TokenType) = struct
       } -> [
         else_keyword;
         else_statement;
+      ]
+      | AlternateIfStatement {
+        alternate_if_keyword;
+        alternate_if_left_paren;
+        alternate_if_condition;
+        alternate_if_right_paren;
+        alternate_if_colon;
+        alternate_if_statement;
+        alternate_if_elseif_clauses;
+        alternate_if_else_clause;
+        alternate_if_endif_keyword;
+        alternate_if_semicolon;
+      } -> [
+        alternate_if_keyword;
+        alternate_if_left_paren;
+        alternate_if_condition;
+        alternate_if_right_paren;
+        alternate_if_colon;
+        alternate_if_statement;
+        alternate_if_elseif_clauses;
+        alternate_if_else_clause;
+        alternate_if_endif_keyword;
+        alternate_if_semicolon;
+      ]
+      | AlternateElseifClause {
+        alternate_elseif_keyword;
+        alternate_elseif_left_paren;
+        alternate_elseif_condition;
+        alternate_elseif_right_paren;
+        alternate_elseif_colon;
+        alternate_elseif_statement;
+      } -> [
+        alternate_elseif_keyword;
+        alternate_elseif_left_paren;
+        alternate_elseif_condition;
+        alternate_elseif_right_paren;
+        alternate_elseif_colon;
+        alternate_elseif_statement;
+      ]
+      | AlternateElseClause {
+        alternate_else_keyword;
+        alternate_else_colon;
+        alternate_else_statement;
+      } -> [
+        alternate_else_keyword;
+        alternate_else_colon;
+        alternate_else_statement;
       ]
       | TryStatement {
         try_keyword;
@@ -2718,6 +3291,25 @@ module WithToken(Token: TokenType) = struct
         switch_sections;
         switch_right_brace;
       ]
+      | AlternateSwitchStatement {
+        alternate_switch_keyword;
+        alternate_switch_left_paren;
+        alternate_switch_expression;
+        alternate_switch_right_paren;
+        alternate_switch_opening_colon;
+        alternate_switch_sections;
+        alternate_switch_closing_endswitch;
+        alternate_switch_closing_semicolon;
+      } -> [
+        alternate_switch_keyword;
+        alternate_switch_left_paren;
+        alternate_switch_expression;
+        alternate_switch_right_paren;
+        alternate_switch_opening_colon;
+        alternate_switch_sections;
+        alternate_switch_closing_endswitch;
+        alternate_switch_closing_semicolon;
+      ]
       | SwitchSection {
         switch_section_labels;
         switch_section_statements;
@@ -2802,22 +3394,6 @@ module WithToken(Token: TokenType) = struct
         continue_level;
         continue_semicolon;
       ]
-      | FunctionStaticStatement {
-        static_static_keyword;
-        static_declarations;
-        static_semicolon;
-      } -> [
-        static_static_keyword;
-        static_declarations;
-        static_semicolon;
-      ]
-      | StaticDeclarator {
-        static_name;
-        static_initializer;
-      } -> [
-        static_name;
-        static_initializer;
-      ]
       | EchoStatement {
         echo_keyword;
         echo_expressions;
@@ -2827,14 +3403,12 @@ module WithToken(Token: TokenType) = struct
         echo_expressions;
         echo_semicolon;
       ]
-      | GlobalStatement {
-        global_keyword;
-        global_variables;
-        global_semicolon;
+      | ConcurrentStatement {
+        concurrent_keyword;
+        concurrent_statement;
       } -> [
-        global_keyword;
-        global_variables;
-        global_semicolon;
+        concurrent_keyword;
+        concurrent_statement;
       ]
       | SimpleInitializer {
         simple_initializer_equal;
@@ -2843,7 +3417,29 @@ module WithToken(Token: TokenType) = struct
         simple_initializer_equal;
         simple_initializer_value;
       ]
+      | AnonymousClass {
+        anonymous_class_class_keyword;
+        anonymous_class_left_paren;
+        anonymous_class_argument_list;
+        anonymous_class_right_paren;
+        anonymous_class_extends_keyword;
+        anonymous_class_extends_list;
+        anonymous_class_implements_keyword;
+        anonymous_class_implements_list;
+        anonymous_class_body;
+      } -> [
+        anonymous_class_class_keyword;
+        anonymous_class_left_paren;
+        anonymous_class_argument_list;
+        anonymous_class_right_paren;
+        anonymous_class_extends_keyword;
+        anonymous_class_extends_list;
+        anonymous_class_implements_keyword;
+        anonymous_class_implements_list;
+        anonymous_class_body;
+      ]
       | AnonymousFunction {
+        anonymous_attribute_spec;
         anonymous_static_keyword;
         anonymous_async_keyword;
         anonymous_coroutine_keyword;
@@ -2856,6 +3452,7 @@ module WithToken(Token: TokenType) = struct
         anonymous_use;
         anonymous_body;
       } -> [
+        anonymous_attribute_spec;
         anonymous_static_keyword;
         anonymous_async_keyword;
         anonymous_coroutine_keyword;
@@ -2867,6 +3464,33 @@ module WithToken(Token: TokenType) = struct
         anonymous_type;
         anonymous_use;
         anonymous_body;
+      ]
+      | Php7AnonymousFunction {
+        php7_anonymous_attribute_spec;
+        php7_anonymous_static_keyword;
+        php7_anonymous_async_keyword;
+        php7_anonymous_coroutine_keyword;
+        php7_anonymous_function_keyword;
+        php7_anonymous_left_paren;
+        php7_anonymous_parameters;
+        php7_anonymous_right_paren;
+        php7_anonymous_use;
+        php7_anonymous_colon;
+        php7_anonymous_type;
+        php7_anonymous_body;
+      } -> [
+        php7_anonymous_attribute_spec;
+        php7_anonymous_static_keyword;
+        php7_anonymous_async_keyword;
+        php7_anonymous_coroutine_keyword;
+        php7_anonymous_function_keyword;
+        php7_anonymous_left_paren;
+        php7_anonymous_parameters;
+        php7_anonymous_right_paren;
+        php7_anonymous_use;
+        php7_anonymous_colon;
+        php7_anonymous_type;
+        php7_anonymous_body;
       ]
       | AnonymousFunctionUseClause {
         anonymous_use_keyword;
@@ -2880,12 +3504,14 @@ module WithToken(Token: TokenType) = struct
         anonymous_use_right_paren;
       ]
       | LambdaExpression {
+        lambda_attribute_spec;
         lambda_async;
         lambda_coroutine;
         lambda_signature;
         lambda_arrow;
         lambda_body;
       } -> [
+        lambda_attribute_spec;
         lambda_async;
         lambda_coroutine;
         lambda_signature;
@@ -3000,6 +3626,33 @@ module WithToken(Token: TokenType) = struct
         instanceof_operator;
         instanceof_right_operand;
       ]
+      | IsExpression {
+        is_left_operand;
+        is_operator;
+        is_right_operand;
+      } -> [
+        is_left_operand;
+        is_operator;
+        is_right_operand;
+      ]
+      | AsExpression {
+        as_left_operand;
+        as_operator;
+        as_right_operand;
+      } -> [
+        as_left_operand;
+        as_operator;
+        as_right_operand;
+      ]
+      | NullableAsExpression {
+        nullable_as_left_operand;
+        nullable_as_operator;
+        nullable_as_right_operand;
+      } -> [
+        nullable_as_left_operand;
+        nullable_as_operator;
+        nullable_as_right_operand;
+      ]
       | ConditionalExpression {
         conditional_test;
         conditional_question;
@@ -3046,6 +3699,17 @@ module WithToken(Token: TokenType) = struct
         define_argument_list;
         define_right_paren;
       ]
+      | HaltCompilerExpression {
+        halt_compiler_keyword;
+        halt_compiler_left_paren;
+        halt_compiler_argument_list;
+        halt_compiler_right_paren;
+      } -> [
+        halt_compiler_keyword;
+        halt_compiler_left_paren;
+        halt_compiler_argument_list;
+        halt_compiler_right_paren;
+      ]
       | IssetExpression {
         isset_keyword;
         isset_left_paren;
@@ -3059,11 +3723,13 @@ module WithToken(Token: TokenType) = struct
       ]
       | FunctionCallExpression {
         function_call_receiver;
+        function_call_type_args;
         function_call_left_paren;
         function_call_argument_list;
         function_call_right_paren;
       } -> [
         function_call_receiver;
+        function_call_type_args;
         function_call_left_paren;
         function_call_argument_list;
         function_call_right_paren;
@@ -3119,16 +3785,32 @@ module WithToken(Token: TokenType) = struct
       ]
       | ObjectCreationExpression {
         object_creation_new_keyword;
-        object_creation_type;
-        object_creation_left_paren;
-        object_creation_argument_list;
-        object_creation_right_paren;
+        object_creation_object;
       } -> [
         object_creation_new_keyword;
-        object_creation_type;
-        object_creation_left_paren;
-        object_creation_argument_list;
-        object_creation_right_paren;
+        object_creation_object;
+      ]
+      | ConstructorCall {
+        constructor_call_type;
+        constructor_call_left_paren;
+        constructor_call_argument_list;
+        constructor_call_right_paren;
+      } -> [
+        constructor_call_type;
+        constructor_call_left_paren;
+        constructor_call_argument_list;
+        constructor_call_right_paren;
+      ]
+      | RecordCreationExpression {
+        record_creation_type;
+        record_creation_left_bracket;
+        record_creation_members;
+        record_creation_right_bracket;
+      } -> [
+        record_creation_type;
+        record_creation_left_bracket;
+        record_creation_members;
+        record_creation_right_bracket;
       ]
       | ArrayCreationExpression {
         array_creation_left_bracket;
@@ -3152,55 +3834,65 @@ module WithToken(Token: TokenType) = struct
       ]
       | DarrayIntrinsicExpression {
         darray_intrinsic_keyword;
+        darray_intrinsic_explicit_type;
         darray_intrinsic_left_bracket;
         darray_intrinsic_members;
         darray_intrinsic_right_bracket;
       } -> [
         darray_intrinsic_keyword;
+        darray_intrinsic_explicit_type;
         darray_intrinsic_left_bracket;
         darray_intrinsic_members;
         darray_intrinsic_right_bracket;
       ]
       | DictionaryIntrinsicExpression {
         dictionary_intrinsic_keyword;
+        dictionary_intrinsic_explicit_type;
         dictionary_intrinsic_left_bracket;
         dictionary_intrinsic_members;
         dictionary_intrinsic_right_bracket;
       } -> [
         dictionary_intrinsic_keyword;
+        dictionary_intrinsic_explicit_type;
         dictionary_intrinsic_left_bracket;
         dictionary_intrinsic_members;
         dictionary_intrinsic_right_bracket;
       ]
       | KeysetIntrinsicExpression {
         keyset_intrinsic_keyword;
+        keyset_intrinsic_explicit_type;
         keyset_intrinsic_left_bracket;
         keyset_intrinsic_members;
         keyset_intrinsic_right_bracket;
       } -> [
         keyset_intrinsic_keyword;
+        keyset_intrinsic_explicit_type;
         keyset_intrinsic_left_bracket;
         keyset_intrinsic_members;
         keyset_intrinsic_right_bracket;
       ]
       | VarrayIntrinsicExpression {
         varray_intrinsic_keyword;
+        varray_intrinsic_explicit_type;
         varray_intrinsic_left_bracket;
         varray_intrinsic_members;
         varray_intrinsic_right_bracket;
       } -> [
         varray_intrinsic_keyword;
+        varray_intrinsic_explicit_type;
         varray_intrinsic_left_bracket;
         varray_intrinsic_members;
         varray_intrinsic_right_bracket;
       ]
       | VectorIntrinsicExpression {
         vector_intrinsic_keyword;
+        vector_intrinsic_explicit_type;
         vector_intrinsic_left_bracket;
         vector_intrinsic_members;
         vector_intrinsic_right_bracket;
       } -> [
         vector_intrinsic_keyword;
+        vector_intrinsic_explicit_type;
         vector_intrinsic_left_bracket;
         vector_intrinsic_members;
         vector_intrinsic_right_bracket;
@@ -3237,10 +3929,12 @@ module WithToken(Token: TokenType) = struct
         embedded_subscript_right_bracket;
       ]
       | AwaitableCreationExpression {
+        awaitable_attribute_spec;
         awaitable_async;
         awaitable_coroutine;
         awaitable_compound_statement;
       } -> [
+        awaitable_attribute_spec;
         awaitable_async;
         awaitable_coroutine;
         awaitable_compound_statement;
@@ -3273,11 +3967,13 @@ module WithToken(Token: TokenType) = struct
         xhp_category_semicolon;
       ]
       | XHPEnumType {
+        xhp_enum_optional;
         xhp_enum_keyword;
         xhp_enum_left_brace;
         xhp_enum_values;
         xhp_enum_right_brace;
       } -> [
+        xhp_enum_optional;
         xhp_enum_keyword;
         xhp_enum_left_brace;
         xhp_enum_values;
@@ -3315,14 +4011,25 @@ module WithToken(Token: TokenType) = struct
       } -> [
         xhp_simple_class_attribute_type;
       ]
-      | XHPAttribute {
-        xhp_attribute_name;
-        xhp_attribute_equal;
-        xhp_attribute_expression;
+      | XHPSimpleAttribute {
+        xhp_simple_attribute_name;
+        xhp_simple_attribute_equal;
+        xhp_simple_attribute_expression;
       } -> [
-        xhp_attribute_name;
-        xhp_attribute_equal;
-        xhp_attribute_expression;
+        xhp_simple_attribute_name;
+        xhp_simple_attribute_equal;
+        xhp_simple_attribute_expression;
+      ]
+      | XHPSpreadAttribute {
+        xhp_spread_attribute_left_brace;
+        xhp_spread_attribute_spread_operator;
+        xhp_spread_attribute_expression;
+        xhp_spread_attribute_right_brace;
+      } -> [
+        xhp_spread_attribute_left_brace;
+        xhp_spread_attribute_spread_operator;
+        xhp_spread_attribute_expression;
+        xhp_spread_attribute_right_brace;
       ]
       | XHPOpen {
         xhp_open_left_angle;
@@ -3424,10 +4131,14 @@ module WithToken(Token: TokenType) = struct
         vector_array_right_angle;
       ]
       | TypeParameter {
+        type_attribute_spec;
+        type_reified;
         type_variance;
         type_name;
         type_constraints;
       } -> [
+        type_attribute_spec;
+        type_reified;
         type_variance;
         type_name;
         type_constraints;
@@ -3487,7 +4198,7 @@ module WithToken(Token: TokenType) = struct
         closure_coroutine;
         closure_function_keyword;
         closure_inner_left_paren;
-        closure_parameter_types;
+        closure_parameter_list;
         closure_inner_right_paren;
         closure_colon;
         closure_return_type;
@@ -3497,11 +4208,18 @@ module WithToken(Token: TokenType) = struct
         closure_coroutine;
         closure_function_keyword;
         closure_inner_left_paren;
-        closure_parameter_types;
+        closure_parameter_list;
         closure_inner_right_paren;
         closure_colon;
         closure_return_type;
         closure_outer_right_paren;
+      ]
+      | ClosureParameterTypeSpecifier {
+        closure_parameter_call_convention;
+        closure_parameter_type;
+      } -> [
+        closure_parameter_call_convention;
+        closure_parameter_type;
       ]
       | ClassnameTypeSpecifier {
         classname_keyword;
@@ -3585,12 +4303,26 @@ module WithToken(Token: TokenType) = struct
         nullable_question;
         nullable_type;
       ]
+      | LikeTypeSpecifier {
+        like_tilde;
+        like_type;
+      } -> [
+        like_tilde;
+        like_type;
+      ]
       | SoftTypeSpecifier {
         soft_at;
         soft_type;
       } -> [
         soft_at;
         soft_type;
+      ]
+      | ReifiedTypeArgument {
+        reified_type_argument_reified;
+        reified_type_argument_type;
+      } -> [
+        reified_type_argument_reified;
+        reified_type_argument_type;
       ]
       | TypeArguments {
         type_arguments_left_angle;
@@ -3631,7 +4363,100 @@ module WithToken(Token: TokenType) = struct
         list_item;
         list_separator;
       ]
+      | PocketAtomExpression {
+        pocket_atom_glyph;
+        pocket_atom_expression;
+      } -> [
+        pocket_atom_glyph;
+        pocket_atom_expression;
+      ]
+      | PocketIdentifierExpression {
+        pocket_identifier_qualifier;
+        pocket_identifier_pu_operator;
+        pocket_identifier_field;
+        pocket_identifier_operator;
+        pocket_identifier_name;
+      } -> [
+        pocket_identifier_qualifier;
+        pocket_identifier_pu_operator;
+        pocket_identifier_field;
+        pocket_identifier_operator;
+        pocket_identifier_name;
+      ]
+      | PocketAtomMappingDeclaration {
+        pocket_atom_mapping_glyph;
+        pocket_atom_mapping_name;
+        pocket_atom_mapping_left_paren;
+        pocket_atom_mapping_mappings;
+        pocket_atom_mapping_right_paren;
+        pocket_atom_mapping_semicolon;
+      } -> [
+        pocket_atom_mapping_glyph;
+        pocket_atom_mapping_name;
+        pocket_atom_mapping_left_paren;
+        pocket_atom_mapping_mappings;
+        pocket_atom_mapping_right_paren;
+        pocket_atom_mapping_semicolon;
+      ]
+      | PocketEnumDeclaration {
+        pocket_enum_modifiers;
+        pocket_enum_enum;
+        pocket_enum_name;
+        pocket_enum_left_brace;
+        pocket_enum_fields;
+        pocket_enum_right_brace;
+      } -> [
+        pocket_enum_modifiers;
+        pocket_enum_enum;
+        pocket_enum_name;
+        pocket_enum_left_brace;
+        pocket_enum_fields;
+        pocket_enum_right_brace;
+      ]
+      | PocketFieldTypeExprDeclaration {
+        pocket_field_type_expr_case;
+        pocket_field_type_expr_type;
+        pocket_field_type_expr_name;
+        pocket_field_type_expr_semicolon;
+      } -> [
+        pocket_field_type_expr_case;
+        pocket_field_type_expr_type;
+        pocket_field_type_expr_name;
+        pocket_field_type_expr_semicolon;
+      ]
+      | PocketFieldTypeDeclaration {
+        pocket_field_type_case;
+        pocket_field_type_type;
+        pocket_field_type_name;
+        pocket_field_type_semicolon;
+      } -> [
+        pocket_field_type_case;
+        pocket_field_type_type;
+        pocket_field_type_name;
+        pocket_field_type_semicolon;
+      ]
+      | PocketMappingIdDeclaration {
+        pocket_mapping_id_name;
+        pocket_mapping_id_initializer;
+      } -> [
+        pocket_mapping_id_name;
+        pocket_mapping_id_initializer;
+      ]
+      | PocketMappingTypeDeclaration {
+        pocket_mapping_type_keyword;
+        pocket_mapping_type_name;
+        pocket_mapping_type_equal;
+        pocket_mapping_type_type;
+      } -> [
+        pocket_mapping_type_keyword;
+        pocket_mapping_type_name;
+        pocket_mapping_type_equal;
+        pocket_mapping_type_type;
+      ]
 
+
+    let children node =
+      children_from_syntax node.syntax
 
     let children_names node =
       match node.syntax with
@@ -3648,6 +4473,11 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "script_declarations";
       ]
+      | QualifiedName {
+        qualified_name_parts;
+      } -> [
+        "qualified_name_parts";
+      ]
       | SimpleTypeSpecifier {
         simple_type_specifier;
       } -> [
@@ -3658,20 +4488,35 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "literal_expression";
       ]
+      | PrefixedStringExpression {
+        prefixed_string_name;
+        prefixed_string_str;
+      } -> [
+        "prefixed_string_name";
+        "prefixed_string_str";
+      ]
       | VariableExpression {
         variable_expression;
       } -> [
         "variable_expression";
       ]
-      | QualifiedNameExpression {
-        qualified_name_expression;
-      } -> [
-        "qualified_name_expression";
-      ]
       | PipeVariableExpression {
         pipe_variable_expression;
       } -> [
         "pipe_variable_expression";
+      ]
+      | FileAttributeSpecification {
+        file_attribute_specification_left_double_angle;
+        file_attribute_specification_keyword;
+        file_attribute_specification_colon;
+        file_attribute_specification_attributes;
+        file_attribute_specification_right_double_angle;
+      } -> [
+        "file_attribute_specification_left_double_angle";
+        "file_attribute_specification_keyword";
+        "file_attribute_specification_colon";
+        "file_attribute_specification_attributes";
+        "file_attribute_specification_right_double_angle";
       ]
       | EnumDeclaration {
         enum_attribute_spec;
@@ -3705,6 +4550,34 @@ module WithToken(Token: TokenType) = struct
         "enumerator_value";
         "enumerator_semicolon";
       ]
+      | RecordDeclaration {
+        record_attribute_spec;
+        record_keyword;
+        record_name;
+        record_left_brace;
+        record_fields;
+        record_right_brace;
+      } -> [
+        "record_attribute_spec";
+        "record_keyword";
+        "record_name";
+        "record_left_brace";
+        "record_fields";
+        "record_right_brace";
+      ]
+      | RecordField {
+        record_field_name;
+        record_field_colon;
+        record_field_type;
+        record_field_init;
+        record_field_comma;
+      } -> [
+        "record_field_name";
+        "record_field_colon";
+        "record_field_type";
+        "record_field_init";
+        "record_field_comma";
+      ]
       | AliasDeclaration {
         alias_attribute_spec;
         alias_keyword;
@@ -3725,11 +4598,13 @@ module WithToken(Token: TokenType) = struct
         "alias_semicolon";
       ]
       | PropertyDeclaration {
+        property_attribute_spec;
         property_modifiers;
         property_type;
         property_declarators;
         property_semicolon;
       } -> [
+        "property_attribute_spec";
         "property_modifiers";
         "property_type";
         "property_declarators";
@@ -3814,10 +4689,8 @@ module WithToken(Token: TokenType) = struct
         "function_body";
       ]
       | FunctionDeclarationHeader {
-        function_async;
-        function_coroutine;
+        function_modifiers;
         function_keyword;
-        function_ampersand;
         function_name;
         function_type_parameter_list;
         function_left_paren;
@@ -3827,10 +4700,8 @@ module WithToken(Token: TokenType) = struct
         function_type;
         function_where_clause;
       } -> [
-        "function_async";
-        "function_coroutine";
+        "function_modifiers";
         "function_keyword";
-        "function_ampersand";
         "function_name";
         "function_type_parameter_list";
         "function_left_paren";
@@ -3858,16 +4729,27 @@ module WithToken(Token: TokenType) = struct
       ]
       | MethodishDeclaration {
         methodish_attribute;
-        methodish_modifiers;
         methodish_function_decl_header;
         methodish_function_body;
         methodish_semicolon;
       } -> [
         "methodish_attribute";
-        "methodish_modifiers";
         "methodish_function_decl_header";
         "methodish_function_body";
         "methodish_semicolon";
+      ]
+      | MethodishTraitResolution {
+        methodish_trait_attribute;
+        methodish_trait_function_decl_header;
+        methodish_trait_equal;
+        methodish_trait_name;
+        methodish_trait_semicolon;
+      } -> [
+        "methodish_trait_attribute";
+        "methodish_trait_function_decl_header";
+        "methodish_trait_equal";
+        "methodish_trait_name";
+        "methodish_trait_semicolon";
       ]
       | ClassishDeclaration {
         classish_attribute;
@@ -3913,12 +4795,12 @@ module WithToken(Token: TokenType) = struct
       | TraitUseAliasItem {
         trait_use_alias_item_aliasing_name;
         trait_use_alias_item_keyword;
-        trait_use_alias_item_visibility;
+        trait_use_alias_item_modifiers;
         trait_use_alias_item_aliased_name;
       } -> [
         "trait_use_alias_item_aliasing_name";
         "trait_use_alias_item_keyword";
-        "trait_use_alias_item_visibility";
+        "trait_use_alias_item_modifiers";
         "trait_use_alias_item_aliased_name";
       ]
       | TraitUseConflictResolution {
@@ -3955,12 +4837,14 @@ module WithToken(Token: TokenType) = struct
         "require_semicolon";
       ]
       | ConstDeclaration {
+        const_visibility;
         const_abstract;
         const_keyword;
         const_type_specifier;
         const_declarators;
         const_semicolon;
       } -> [
+        "const_visibility";
         "const_abstract";
         "const_keyword";
         "const_type_specifier";
@@ -3975,19 +4859,23 @@ module WithToken(Token: TokenType) = struct
         "constant_declarator_initializer";
       ]
       | TypeConstDeclaration {
+        type_const_attribute_spec;
         type_const_abstract;
         type_const_keyword;
         type_const_type_keyword;
         type_const_name;
+        type_const_type_parameters;
         type_const_type_constraint;
         type_const_equal;
         type_const_type_specifier;
         type_const_semicolon;
       } -> [
+        "type_const_attribute_spec";
         "type_const_abstract";
         "type_const_keyword";
         "type_const_type_keyword";
         "type_const_name";
+        "type_const_type_parameters";
         "type_const_type_constraint";
         "type_const_equal";
         "type_const_type_specifier";
@@ -4003,19 +4891,25 @@ module WithToken(Token: TokenType) = struct
       | ParameterDeclaration {
         parameter_attribute;
         parameter_visibility;
+        parameter_call_convention;
         parameter_type;
         parameter_name;
         parameter_default_value;
       } -> [
         "parameter_attribute";
         "parameter_visibility";
+        "parameter_call_convention";
         "parameter_type";
         "parameter_name";
         "parameter_default_value";
       ]
       | VariadicParameter {
+        variadic_parameter_call_convention;
+        variadic_parameter_type;
         variadic_parameter_ellipsis;
       } -> [
+        "variadic_parameter_call_convention";
+        "variadic_parameter_type";
         "variadic_parameter_ellipsis";
       ]
       | AttributeSpecification {
@@ -4026,17 +4920,6 @@ module WithToken(Token: TokenType) = struct
         "attribute_specification_left_double_angle";
         "attribute_specification_attributes";
         "attribute_specification_right_double_angle";
-      ]
-      | Attribute {
-        attribute_name;
-        attribute_left_paren;
-        attribute_values;
-        attribute_right_paren;
-      } -> [
-        "attribute_name";
-        "attribute_left_paren";
-        "attribute_values";
-        "attribute_right_paren";
       ]
       | InclusionExpression {
         inclusion_require;
@@ -4060,6 +4943,17 @@ module WithToken(Token: TokenType) = struct
         "compound_left_brace";
         "compound_statements";
         "compound_right_brace";
+      ]
+      | AlternateLoopStatement {
+        alternate_loop_opening_colon;
+        alternate_loop_statements;
+        alternate_loop_closing_keyword;
+        alternate_loop_closing_semicolon;
+      } -> [
+        "alternate_loop_opening_colon";
+        "alternate_loop_statements";
+        "alternate_loop_closing_keyword";
+        "alternate_loop_closing_semicolon";
       ]
       | ExpressionStatement {
         expression_statement_expression;
@@ -4098,6 +4992,73 @@ module WithToken(Token: TokenType) = struct
         "unset_variables";
         "unset_right_paren";
         "unset_semicolon";
+      ]
+      | LetStatement {
+        let_statement_keyword;
+        let_statement_name;
+        let_statement_colon;
+        let_statement_type;
+        let_statement_initializer;
+        let_statement_semicolon;
+      } -> [
+        "let_statement_keyword";
+        "let_statement_name";
+        "let_statement_colon";
+        "let_statement_type";
+        "let_statement_initializer";
+        "let_statement_semicolon";
+      ]
+      | UsingStatementBlockScoped {
+        using_block_await_keyword;
+        using_block_using_keyword;
+        using_block_left_paren;
+        using_block_expressions;
+        using_block_right_paren;
+        using_block_body;
+      } -> [
+        "using_block_await_keyword";
+        "using_block_using_keyword";
+        "using_block_left_paren";
+        "using_block_expressions";
+        "using_block_right_paren";
+        "using_block_body";
+      ]
+      | UsingStatementFunctionScoped {
+        using_function_await_keyword;
+        using_function_using_keyword;
+        using_function_expression;
+        using_function_semicolon;
+      } -> [
+        "using_function_await_keyword";
+        "using_function_using_keyword";
+        "using_function_expression";
+        "using_function_semicolon";
+      ]
+      | DeclareDirectiveStatement {
+        declare_directive_keyword;
+        declare_directive_left_paren;
+        declare_directive_expression;
+        declare_directive_right_paren;
+        declare_directive_semicolon;
+      } -> [
+        "declare_directive_keyword";
+        "declare_directive_left_paren";
+        "declare_directive_expression";
+        "declare_directive_right_paren";
+        "declare_directive_semicolon";
+      ]
+      | DeclareBlockStatement {
+        declare_block_keyword;
+        declare_block_left_paren;
+        declare_block_expression;
+        declare_block_right_paren;
+        declare_block_body;
+      } -> [
+        "declare_block_keyword";
+        "declare_block_left_paren";
+        "declare_block_expression";
+        "declare_block_right_paren";
+        "declare_block_body";
       ]
       | WhileStatement {
         while_keyword;
@@ -4148,6 +5109,53 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "else_keyword";
         "else_statement";
+      ]
+      | AlternateIfStatement {
+        alternate_if_keyword;
+        alternate_if_left_paren;
+        alternate_if_condition;
+        alternate_if_right_paren;
+        alternate_if_colon;
+        alternate_if_statement;
+        alternate_if_elseif_clauses;
+        alternate_if_else_clause;
+        alternate_if_endif_keyword;
+        alternate_if_semicolon;
+      } -> [
+        "alternate_if_keyword";
+        "alternate_if_left_paren";
+        "alternate_if_condition";
+        "alternate_if_right_paren";
+        "alternate_if_colon";
+        "alternate_if_statement";
+        "alternate_if_elseif_clauses";
+        "alternate_if_else_clause";
+        "alternate_if_endif_keyword";
+        "alternate_if_semicolon";
+      ]
+      | AlternateElseifClause {
+        alternate_elseif_keyword;
+        alternate_elseif_left_paren;
+        alternate_elseif_condition;
+        alternate_elseif_right_paren;
+        alternate_elseif_colon;
+        alternate_elseif_statement;
+      } -> [
+        "alternate_elseif_keyword";
+        "alternate_elseif_left_paren";
+        "alternate_elseif_condition";
+        "alternate_elseif_right_paren";
+        "alternate_elseif_colon";
+        "alternate_elseif_statement";
+      ]
+      | AlternateElseClause {
+        alternate_else_keyword;
+        alternate_else_colon;
+        alternate_else_statement;
+      } -> [
+        "alternate_else_keyword";
+        "alternate_else_colon";
+        "alternate_else_statement";
       ]
       | TryStatement {
         try_keyword;
@@ -4260,6 +5268,25 @@ module WithToken(Token: TokenType) = struct
         "switch_sections";
         "switch_right_brace";
       ]
+      | AlternateSwitchStatement {
+        alternate_switch_keyword;
+        alternate_switch_left_paren;
+        alternate_switch_expression;
+        alternate_switch_right_paren;
+        alternate_switch_opening_colon;
+        alternate_switch_sections;
+        alternate_switch_closing_endswitch;
+        alternate_switch_closing_semicolon;
+      } -> [
+        "alternate_switch_keyword";
+        "alternate_switch_left_paren";
+        "alternate_switch_expression";
+        "alternate_switch_right_paren";
+        "alternate_switch_opening_colon";
+        "alternate_switch_sections";
+        "alternate_switch_closing_endswitch";
+        "alternate_switch_closing_semicolon";
+      ]
       | SwitchSection {
         switch_section_labels;
         switch_section_statements;
@@ -4344,22 +5371,6 @@ module WithToken(Token: TokenType) = struct
         "continue_level";
         "continue_semicolon";
       ]
-      | FunctionStaticStatement {
-        static_static_keyword;
-        static_declarations;
-        static_semicolon;
-      } -> [
-        "static_static_keyword";
-        "static_declarations";
-        "static_semicolon";
-      ]
-      | StaticDeclarator {
-        static_name;
-        static_initializer;
-      } -> [
-        "static_name";
-        "static_initializer";
-      ]
       | EchoStatement {
         echo_keyword;
         echo_expressions;
@@ -4369,14 +5380,12 @@ module WithToken(Token: TokenType) = struct
         "echo_expressions";
         "echo_semicolon";
       ]
-      | GlobalStatement {
-        global_keyword;
-        global_variables;
-        global_semicolon;
+      | ConcurrentStatement {
+        concurrent_keyword;
+        concurrent_statement;
       } -> [
-        "global_keyword";
-        "global_variables";
-        "global_semicolon";
+        "concurrent_keyword";
+        "concurrent_statement";
       ]
       | SimpleInitializer {
         simple_initializer_equal;
@@ -4385,7 +5394,29 @@ module WithToken(Token: TokenType) = struct
         "simple_initializer_equal";
         "simple_initializer_value";
       ]
+      | AnonymousClass {
+        anonymous_class_class_keyword;
+        anonymous_class_left_paren;
+        anonymous_class_argument_list;
+        anonymous_class_right_paren;
+        anonymous_class_extends_keyword;
+        anonymous_class_extends_list;
+        anonymous_class_implements_keyword;
+        anonymous_class_implements_list;
+        anonymous_class_body;
+      } -> [
+        "anonymous_class_class_keyword";
+        "anonymous_class_left_paren";
+        "anonymous_class_argument_list";
+        "anonymous_class_right_paren";
+        "anonymous_class_extends_keyword";
+        "anonymous_class_extends_list";
+        "anonymous_class_implements_keyword";
+        "anonymous_class_implements_list";
+        "anonymous_class_body";
+      ]
       | AnonymousFunction {
+        anonymous_attribute_spec;
         anonymous_static_keyword;
         anonymous_async_keyword;
         anonymous_coroutine_keyword;
@@ -4398,6 +5429,7 @@ module WithToken(Token: TokenType) = struct
         anonymous_use;
         anonymous_body;
       } -> [
+        "anonymous_attribute_spec";
         "anonymous_static_keyword";
         "anonymous_async_keyword";
         "anonymous_coroutine_keyword";
@@ -4409,6 +5441,33 @@ module WithToken(Token: TokenType) = struct
         "anonymous_type";
         "anonymous_use";
         "anonymous_body";
+      ]
+      | Php7AnonymousFunction {
+        php7_anonymous_attribute_spec;
+        php7_anonymous_static_keyword;
+        php7_anonymous_async_keyword;
+        php7_anonymous_coroutine_keyword;
+        php7_anonymous_function_keyword;
+        php7_anonymous_left_paren;
+        php7_anonymous_parameters;
+        php7_anonymous_right_paren;
+        php7_anonymous_use;
+        php7_anonymous_colon;
+        php7_anonymous_type;
+        php7_anonymous_body;
+      } -> [
+        "php7_anonymous_attribute_spec";
+        "php7_anonymous_static_keyword";
+        "php7_anonymous_async_keyword";
+        "php7_anonymous_coroutine_keyword";
+        "php7_anonymous_function_keyword";
+        "php7_anonymous_left_paren";
+        "php7_anonymous_parameters";
+        "php7_anonymous_right_paren";
+        "php7_anonymous_use";
+        "php7_anonymous_colon";
+        "php7_anonymous_type";
+        "php7_anonymous_body";
       ]
       | AnonymousFunctionUseClause {
         anonymous_use_keyword;
@@ -4422,12 +5481,14 @@ module WithToken(Token: TokenType) = struct
         "anonymous_use_right_paren";
       ]
       | LambdaExpression {
+        lambda_attribute_spec;
         lambda_async;
         lambda_coroutine;
         lambda_signature;
         lambda_arrow;
         lambda_body;
       } -> [
+        "lambda_attribute_spec";
         "lambda_async";
         "lambda_coroutine";
         "lambda_signature";
@@ -4542,6 +5603,33 @@ module WithToken(Token: TokenType) = struct
         "instanceof_operator";
         "instanceof_right_operand";
       ]
+      | IsExpression {
+        is_left_operand;
+        is_operator;
+        is_right_operand;
+      } -> [
+        "is_left_operand";
+        "is_operator";
+        "is_right_operand";
+      ]
+      | AsExpression {
+        as_left_operand;
+        as_operator;
+        as_right_operand;
+      } -> [
+        "as_left_operand";
+        "as_operator";
+        "as_right_operand";
+      ]
+      | NullableAsExpression {
+        nullable_as_left_operand;
+        nullable_as_operator;
+        nullable_as_right_operand;
+      } -> [
+        "nullable_as_left_operand";
+        "nullable_as_operator";
+        "nullable_as_right_operand";
+      ]
       | ConditionalExpression {
         conditional_test;
         conditional_question;
@@ -4588,6 +5676,17 @@ module WithToken(Token: TokenType) = struct
         "define_argument_list";
         "define_right_paren";
       ]
+      | HaltCompilerExpression {
+        halt_compiler_keyword;
+        halt_compiler_left_paren;
+        halt_compiler_argument_list;
+        halt_compiler_right_paren;
+      } -> [
+        "halt_compiler_keyword";
+        "halt_compiler_left_paren";
+        "halt_compiler_argument_list";
+        "halt_compiler_right_paren";
+      ]
       | IssetExpression {
         isset_keyword;
         isset_left_paren;
@@ -4601,11 +5700,13 @@ module WithToken(Token: TokenType) = struct
       ]
       | FunctionCallExpression {
         function_call_receiver;
+        function_call_type_args;
         function_call_left_paren;
         function_call_argument_list;
         function_call_right_paren;
       } -> [
         "function_call_receiver";
+        "function_call_type_args";
         "function_call_left_paren";
         "function_call_argument_list";
         "function_call_right_paren";
@@ -4661,16 +5762,32 @@ module WithToken(Token: TokenType) = struct
       ]
       | ObjectCreationExpression {
         object_creation_new_keyword;
-        object_creation_type;
-        object_creation_left_paren;
-        object_creation_argument_list;
-        object_creation_right_paren;
+        object_creation_object;
       } -> [
         "object_creation_new_keyword";
-        "object_creation_type";
-        "object_creation_left_paren";
-        "object_creation_argument_list";
-        "object_creation_right_paren";
+        "object_creation_object";
+      ]
+      | ConstructorCall {
+        constructor_call_type;
+        constructor_call_left_paren;
+        constructor_call_argument_list;
+        constructor_call_right_paren;
+      } -> [
+        "constructor_call_type";
+        "constructor_call_left_paren";
+        "constructor_call_argument_list";
+        "constructor_call_right_paren";
+      ]
+      | RecordCreationExpression {
+        record_creation_type;
+        record_creation_left_bracket;
+        record_creation_members;
+        record_creation_right_bracket;
+      } -> [
+        "record_creation_type";
+        "record_creation_left_bracket";
+        "record_creation_members";
+        "record_creation_right_bracket";
       ]
       | ArrayCreationExpression {
         array_creation_left_bracket;
@@ -4694,55 +5811,65 @@ module WithToken(Token: TokenType) = struct
       ]
       | DarrayIntrinsicExpression {
         darray_intrinsic_keyword;
+        darray_intrinsic_explicit_type;
         darray_intrinsic_left_bracket;
         darray_intrinsic_members;
         darray_intrinsic_right_bracket;
       } -> [
         "darray_intrinsic_keyword";
+        "darray_intrinsic_explicit_type";
         "darray_intrinsic_left_bracket";
         "darray_intrinsic_members";
         "darray_intrinsic_right_bracket";
       ]
       | DictionaryIntrinsicExpression {
         dictionary_intrinsic_keyword;
+        dictionary_intrinsic_explicit_type;
         dictionary_intrinsic_left_bracket;
         dictionary_intrinsic_members;
         dictionary_intrinsic_right_bracket;
       } -> [
         "dictionary_intrinsic_keyword";
+        "dictionary_intrinsic_explicit_type";
         "dictionary_intrinsic_left_bracket";
         "dictionary_intrinsic_members";
         "dictionary_intrinsic_right_bracket";
       ]
       | KeysetIntrinsicExpression {
         keyset_intrinsic_keyword;
+        keyset_intrinsic_explicit_type;
         keyset_intrinsic_left_bracket;
         keyset_intrinsic_members;
         keyset_intrinsic_right_bracket;
       } -> [
         "keyset_intrinsic_keyword";
+        "keyset_intrinsic_explicit_type";
         "keyset_intrinsic_left_bracket";
         "keyset_intrinsic_members";
         "keyset_intrinsic_right_bracket";
       ]
       | VarrayIntrinsicExpression {
         varray_intrinsic_keyword;
+        varray_intrinsic_explicit_type;
         varray_intrinsic_left_bracket;
         varray_intrinsic_members;
         varray_intrinsic_right_bracket;
       } -> [
         "varray_intrinsic_keyword";
+        "varray_intrinsic_explicit_type";
         "varray_intrinsic_left_bracket";
         "varray_intrinsic_members";
         "varray_intrinsic_right_bracket";
       ]
       | VectorIntrinsicExpression {
         vector_intrinsic_keyword;
+        vector_intrinsic_explicit_type;
         vector_intrinsic_left_bracket;
         vector_intrinsic_members;
         vector_intrinsic_right_bracket;
       } -> [
         "vector_intrinsic_keyword";
+        "vector_intrinsic_explicit_type";
         "vector_intrinsic_left_bracket";
         "vector_intrinsic_members";
         "vector_intrinsic_right_bracket";
@@ -4779,10 +5906,12 @@ module WithToken(Token: TokenType) = struct
         "embedded_subscript_right_bracket";
       ]
       | AwaitableCreationExpression {
+        awaitable_attribute_spec;
         awaitable_async;
         awaitable_coroutine;
         awaitable_compound_statement;
       } -> [
+        "awaitable_attribute_spec";
         "awaitable_async";
         "awaitable_coroutine";
         "awaitable_compound_statement";
@@ -4815,11 +5944,13 @@ module WithToken(Token: TokenType) = struct
         "xhp_category_semicolon";
       ]
       | XHPEnumType {
+        xhp_enum_optional;
         xhp_enum_keyword;
         xhp_enum_left_brace;
         xhp_enum_values;
         xhp_enum_right_brace;
       } -> [
+        "xhp_enum_optional";
         "xhp_enum_keyword";
         "xhp_enum_left_brace";
         "xhp_enum_values";
@@ -4857,14 +5988,25 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "xhp_simple_class_attribute_type";
       ]
-      | XHPAttribute {
-        xhp_attribute_name;
-        xhp_attribute_equal;
-        xhp_attribute_expression;
+      | XHPSimpleAttribute {
+        xhp_simple_attribute_name;
+        xhp_simple_attribute_equal;
+        xhp_simple_attribute_expression;
       } -> [
-        "xhp_attribute_name";
-        "xhp_attribute_equal";
-        "xhp_attribute_expression";
+        "xhp_simple_attribute_name";
+        "xhp_simple_attribute_equal";
+        "xhp_simple_attribute_expression";
+      ]
+      | XHPSpreadAttribute {
+        xhp_spread_attribute_left_brace;
+        xhp_spread_attribute_spread_operator;
+        xhp_spread_attribute_expression;
+        xhp_spread_attribute_right_brace;
+      } -> [
+        "xhp_spread_attribute_left_brace";
+        "xhp_spread_attribute_spread_operator";
+        "xhp_spread_attribute_expression";
+        "xhp_spread_attribute_right_brace";
       ]
       | XHPOpen {
         xhp_open_left_angle;
@@ -4966,10 +6108,14 @@ module WithToken(Token: TokenType) = struct
         "vector_array_right_angle";
       ]
       | TypeParameter {
+        type_attribute_spec;
+        type_reified;
         type_variance;
         type_name;
         type_constraints;
       } -> [
+        "type_attribute_spec";
+        "type_reified";
         "type_variance";
         "type_name";
         "type_constraints";
@@ -5029,7 +6175,7 @@ module WithToken(Token: TokenType) = struct
         closure_coroutine;
         closure_function_keyword;
         closure_inner_left_paren;
-        closure_parameter_types;
+        closure_parameter_list;
         closure_inner_right_paren;
         closure_colon;
         closure_return_type;
@@ -5039,11 +6185,18 @@ module WithToken(Token: TokenType) = struct
         "closure_coroutine";
         "closure_function_keyword";
         "closure_inner_left_paren";
-        "closure_parameter_types";
+        "closure_parameter_list";
         "closure_inner_right_paren";
         "closure_colon";
         "closure_return_type";
         "closure_outer_right_paren";
+      ]
+      | ClosureParameterTypeSpecifier {
+        closure_parameter_call_convention;
+        closure_parameter_type;
+      } -> [
+        "closure_parameter_call_convention";
+        "closure_parameter_type";
       ]
       | ClassnameTypeSpecifier {
         classname_keyword;
@@ -5127,12 +6280,26 @@ module WithToken(Token: TokenType) = struct
         "nullable_question";
         "nullable_type";
       ]
+      | LikeTypeSpecifier {
+        like_tilde;
+        like_type;
+      } -> [
+        "like_tilde";
+        "like_type";
+      ]
       | SoftTypeSpecifier {
         soft_at;
         soft_type;
       } -> [
         "soft_at";
         "soft_type";
+      ]
+      | ReifiedTypeArgument {
+        reified_type_argument_reified;
+        reified_type_argument_type;
+      } -> [
+        "reified_type_argument_reified";
+        "reified_type_argument_type";
       ]
       | TypeArguments {
         type_arguments_left_angle;
@@ -5173,26 +6340,120 @@ module WithToken(Token: TokenType) = struct
         "list_item";
         "list_separator";
       ]
+      | PocketAtomExpression {
+        pocket_atom_glyph;
+        pocket_atom_expression;
+      } -> [
+        "pocket_atom_glyph";
+        "pocket_atom_expression";
+      ]
+      | PocketIdentifierExpression {
+        pocket_identifier_qualifier;
+        pocket_identifier_pu_operator;
+        pocket_identifier_field;
+        pocket_identifier_operator;
+        pocket_identifier_name;
+      } -> [
+        "pocket_identifier_qualifier";
+        "pocket_identifier_pu_operator";
+        "pocket_identifier_field";
+        "pocket_identifier_operator";
+        "pocket_identifier_name";
+      ]
+      | PocketAtomMappingDeclaration {
+        pocket_atom_mapping_glyph;
+        pocket_atom_mapping_name;
+        pocket_atom_mapping_left_paren;
+        pocket_atom_mapping_mappings;
+        pocket_atom_mapping_right_paren;
+        pocket_atom_mapping_semicolon;
+      } -> [
+        "pocket_atom_mapping_glyph";
+        "pocket_atom_mapping_name";
+        "pocket_atom_mapping_left_paren";
+        "pocket_atom_mapping_mappings";
+        "pocket_atom_mapping_right_paren";
+        "pocket_atom_mapping_semicolon";
+      ]
+      | PocketEnumDeclaration {
+        pocket_enum_modifiers;
+        pocket_enum_enum;
+        pocket_enum_name;
+        pocket_enum_left_brace;
+        pocket_enum_fields;
+        pocket_enum_right_brace;
+      } -> [
+        "pocket_enum_modifiers";
+        "pocket_enum_enum";
+        "pocket_enum_name";
+        "pocket_enum_left_brace";
+        "pocket_enum_fields";
+        "pocket_enum_right_brace";
+      ]
+      | PocketFieldTypeExprDeclaration {
+        pocket_field_type_expr_case;
+        pocket_field_type_expr_type;
+        pocket_field_type_expr_name;
+        pocket_field_type_expr_semicolon;
+      } -> [
+        "pocket_field_type_expr_case";
+        "pocket_field_type_expr_type";
+        "pocket_field_type_expr_name";
+        "pocket_field_type_expr_semicolon";
+      ]
+      | PocketFieldTypeDeclaration {
+        pocket_field_type_case;
+        pocket_field_type_type;
+        pocket_field_type_name;
+        pocket_field_type_semicolon;
+      } -> [
+        "pocket_field_type_case";
+        "pocket_field_type_type";
+        "pocket_field_type_name";
+        "pocket_field_type_semicolon";
+      ]
+      | PocketMappingIdDeclaration {
+        pocket_mapping_id_name;
+        pocket_mapping_id_initializer;
+      } -> [
+        "pocket_mapping_id_name";
+        "pocket_mapping_id_initializer";
+      ]
+      | PocketMappingTypeDeclaration {
+        pocket_mapping_type_keyword;
+        pocket_mapping_type_name;
+        pocket_mapping_type_equal;
+        pocket_mapping_type_type;
+      } -> [
+        "pocket_mapping_type_keyword";
+        "pocket_mapping_type_name";
+        "pocket_mapping_type_equal";
+        "pocket_mapping_type_type";
+      ]
 
 
-    let rec to_json node =
+    let rec to_json ?(with_value = false) node =
       let open Hh_json in
       let ch = match node.syntax with
       | Token t -> [ "token", Token.to_json t ]
-      | SyntaxList x -> [ ("elements", JSON_Array (List.map to_json x)) ]
+      | SyntaxList x -> [ ("elements",
+        JSON_Array (List.map ~f:(to_json ~with_value) x)) ]
       | _ ->
         let rec aux acc c n =
           match c, n with
           | ([], []) -> acc
           | ((hc :: tc), (hn :: tn)) ->
-            aux ((hn, to_json hc) :: acc) tc tn
+            aux ((hn, (to_json ~with_value) hc) :: acc) tc tn
           | _ -> failwith "mismatch between children and names" in
         List.rev (aux [] (children node) (children_names node)) in
       let k = ("kind", JSON_String (SyntaxKind.to_string (kind node))) in
-      JSON_Object (k :: ch)
+      let v = if with_value then
+        ("value", SyntaxValue.to_json node.value) :: ch
+        else ch in
+      JSON_Object (k :: v)
 
     let binary_operator_kind b =
-      match syntax b.binary_operator with
+      match syntax b with
       | Token token ->
         let kind = Token.kind token in
         if Operator.is_trailing_operator_token kind then
@@ -5246,6 +6507,12 @@ module WithToken(Token: TokenType) = struct
         Script {
           script_declarations;
         }
+      | (SyntaxKind.QualifiedName, [
+          qualified_name_parts;
+        ]) ->
+        QualifiedName {
+          qualified_name_parts;
+        }
       | (SyntaxKind.SimpleTypeSpecifier, [
           simple_type_specifier;
         ]) ->
@@ -5258,23 +6525,39 @@ module WithToken(Token: TokenType) = struct
         LiteralExpression {
           literal_expression;
         }
+      | (SyntaxKind.PrefixedStringExpression, [
+          prefixed_string_name;
+          prefixed_string_str;
+        ]) ->
+        PrefixedStringExpression {
+          prefixed_string_name;
+          prefixed_string_str;
+        }
       | (SyntaxKind.VariableExpression, [
           variable_expression;
         ]) ->
         VariableExpression {
           variable_expression;
         }
-      | (SyntaxKind.QualifiedNameExpression, [
-          qualified_name_expression;
-        ]) ->
-        QualifiedNameExpression {
-          qualified_name_expression;
-        }
       | (SyntaxKind.PipeVariableExpression, [
           pipe_variable_expression;
         ]) ->
         PipeVariableExpression {
           pipe_variable_expression;
+        }
+      | (SyntaxKind.FileAttributeSpecification, [
+          file_attribute_specification_left_double_angle;
+          file_attribute_specification_keyword;
+          file_attribute_specification_colon;
+          file_attribute_specification_attributes;
+          file_attribute_specification_right_double_angle;
+        ]) ->
+        FileAttributeSpecification {
+          file_attribute_specification_left_double_angle;
+          file_attribute_specification_keyword;
+          file_attribute_specification_colon;
+          file_attribute_specification_attributes;
+          file_attribute_specification_right_double_angle;
         }
       | (SyntaxKind.EnumDeclaration, [
           enum_attribute_spec;
@@ -5310,6 +6593,36 @@ module WithToken(Token: TokenType) = struct
           enumerator_value;
           enumerator_semicolon;
         }
+      | (SyntaxKind.RecordDeclaration, [
+          record_attribute_spec;
+          record_keyword;
+          record_name;
+          record_left_brace;
+          record_fields;
+          record_right_brace;
+        ]) ->
+        RecordDeclaration {
+          record_attribute_spec;
+          record_keyword;
+          record_name;
+          record_left_brace;
+          record_fields;
+          record_right_brace;
+        }
+      | (SyntaxKind.RecordField, [
+          record_field_name;
+          record_field_colon;
+          record_field_type;
+          record_field_init;
+          record_field_comma;
+        ]) ->
+        RecordField {
+          record_field_name;
+          record_field_colon;
+          record_field_type;
+          record_field_init;
+          record_field_comma;
+        }
       | (SyntaxKind.AliasDeclaration, [
           alias_attribute_spec;
           alias_keyword;
@@ -5331,12 +6644,14 @@ module WithToken(Token: TokenType) = struct
           alias_semicolon;
         }
       | (SyntaxKind.PropertyDeclaration, [
+          property_attribute_spec;
           property_modifiers;
           property_type;
           property_declarators;
           property_semicolon;
         ]) ->
         PropertyDeclaration {
+          property_attribute_spec;
           property_modifiers;
           property_type;
           property_declarators;
@@ -5429,10 +6744,8 @@ module WithToken(Token: TokenType) = struct
           function_body;
         }
       | (SyntaxKind.FunctionDeclarationHeader, [
-          function_async;
-          function_coroutine;
+          function_modifiers;
           function_keyword;
-          function_ampersand;
           function_name;
           function_type_parameter_list;
           function_left_paren;
@@ -5443,10 +6756,8 @@ module WithToken(Token: TokenType) = struct
           function_where_clause;
         ]) ->
         FunctionDeclarationHeader {
-          function_async;
-          function_coroutine;
+          function_modifiers;
           function_keyword;
-          function_ampersand;
           function_name;
           function_type_parameter_list;
           function_left_paren;
@@ -5476,17 +6787,29 @@ module WithToken(Token: TokenType) = struct
         }
       | (SyntaxKind.MethodishDeclaration, [
           methodish_attribute;
-          methodish_modifiers;
           methodish_function_decl_header;
           methodish_function_body;
           methodish_semicolon;
         ]) ->
         MethodishDeclaration {
           methodish_attribute;
-          methodish_modifiers;
           methodish_function_decl_header;
           methodish_function_body;
           methodish_semicolon;
+        }
+      | (SyntaxKind.MethodishTraitResolution, [
+          methodish_trait_attribute;
+          methodish_trait_function_decl_header;
+          methodish_trait_equal;
+          methodish_trait_name;
+          methodish_trait_semicolon;
+        ]) ->
+        MethodishTraitResolution {
+          methodish_trait_attribute;
+          methodish_trait_function_decl_header;
+          methodish_trait_equal;
+          methodish_trait_name;
+          methodish_trait_semicolon;
         }
       | (SyntaxKind.ClassishDeclaration, [
           classish_attribute;
@@ -5535,13 +6858,13 @@ module WithToken(Token: TokenType) = struct
       | (SyntaxKind.TraitUseAliasItem, [
           trait_use_alias_item_aliasing_name;
           trait_use_alias_item_keyword;
-          trait_use_alias_item_visibility;
+          trait_use_alias_item_modifiers;
           trait_use_alias_item_aliased_name;
         ]) ->
         TraitUseAliasItem {
           trait_use_alias_item_aliasing_name;
           trait_use_alias_item_keyword;
-          trait_use_alias_item_visibility;
+          trait_use_alias_item_modifiers;
           trait_use_alias_item_aliased_name;
         }
       | (SyntaxKind.TraitUseConflictResolution, [
@@ -5581,6 +6904,7 @@ module WithToken(Token: TokenType) = struct
           require_semicolon;
         }
       | (SyntaxKind.ConstDeclaration, [
+          const_visibility;
           const_abstract;
           const_keyword;
           const_type_specifier;
@@ -5588,6 +6912,7 @@ module WithToken(Token: TokenType) = struct
           const_semicolon;
         ]) ->
         ConstDeclaration {
+          const_visibility;
           const_abstract;
           const_keyword;
           const_type_specifier;
@@ -5603,20 +6928,24 @@ module WithToken(Token: TokenType) = struct
           constant_declarator_initializer;
         }
       | (SyntaxKind.TypeConstDeclaration, [
+          type_const_attribute_spec;
           type_const_abstract;
           type_const_keyword;
           type_const_type_keyword;
           type_const_name;
+          type_const_type_parameters;
           type_const_type_constraint;
           type_const_equal;
           type_const_type_specifier;
           type_const_semicolon;
         ]) ->
         TypeConstDeclaration {
+          type_const_attribute_spec;
           type_const_abstract;
           type_const_keyword;
           type_const_type_keyword;
           type_const_name;
+          type_const_type_parameters;
           type_const_type_constraint;
           type_const_equal;
           type_const_type_specifier;
@@ -5633,6 +6962,7 @@ module WithToken(Token: TokenType) = struct
       | (SyntaxKind.ParameterDeclaration, [
           parameter_attribute;
           parameter_visibility;
+          parameter_call_convention;
           parameter_type;
           parameter_name;
           parameter_default_value;
@@ -5640,14 +6970,19 @@ module WithToken(Token: TokenType) = struct
         ParameterDeclaration {
           parameter_attribute;
           parameter_visibility;
+          parameter_call_convention;
           parameter_type;
           parameter_name;
           parameter_default_value;
         }
       | (SyntaxKind.VariadicParameter, [
+          variadic_parameter_call_convention;
+          variadic_parameter_type;
           variadic_parameter_ellipsis;
         ]) ->
         VariadicParameter {
+          variadic_parameter_call_convention;
+          variadic_parameter_type;
           variadic_parameter_ellipsis;
         }
       | (SyntaxKind.AttributeSpecification, [
@@ -5659,18 +6994,6 @@ module WithToken(Token: TokenType) = struct
           attribute_specification_left_double_angle;
           attribute_specification_attributes;
           attribute_specification_right_double_angle;
-        }
-      | (SyntaxKind.Attribute, [
-          attribute_name;
-          attribute_left_paren;
-          attribute_values;
-          attribute_right_paren;
-        ]) ->
-        Attribute {
-          attribute_name;
-          attribute_left_paren;
-          attribute_values;
-          attribute_right_paren;
         }
       | (SyntaxKind.InclusionExpression, [
           inclusion_require;
@@ -5697,6 +7020,18 @@ module WithToken(Token: TokenType) = struct
           compound_left_brace;
           compound_statements;
           compound_right_brace;
+        }
+      | (SyntaxKind.AlternateLoopStatement, [
+          alternate_loop_opening_colon;
+          alternate_loop_statements;
+          alternate_loop_closing_keyword;
+          alternate_loop_closing_semicolon;
+        ]) ->
+        AlternateLoopStatement {
+          alternate_loop_opening_colon;
+          alternate_loop_statements;
+          alternate_loop_closing_keyword;
+          alternate_loop_closing_semicolon;
         }
       | (SyntaxKind.ExpressionStatement, [
           expression_statement_expression;
@@ -5739,6 +7074,78 @@ module WithToken(Token: TokenType) = struct
           unset_variables;
           unset_right_paren;
           unset_semicolon;
+        }
+      | (SyntaxKind.LetStatement, [
+          let_statement_keyword;
+          let_statement_name;
+          let_statement_colon;
+          let_statement_type;
+          let_statement_initializer;
+          let_statement_semicolon;
+        ]) ->
+        LetStatement {
+          let_statement_keyword;
+          let_statement_name;
+          let_statement_colon;
+          let_statement_type;
+          let_statement_initializer;
+          let_statement_semicolon;
+        }
+      | (SyntaxKind.UsingStatementBlockScoped, [
+          using_block_await_keyword;
+          using_block_using_keyword;
+          using_block_left_paren;
+          using_block_expressions;
+          using_block_right_paren;
+          using_block_body;
+        ]) ->
+        UsingStatementBlockScoped {
+          using_block_await_keyword;
+          using_block_using_keyword;
+          using_block_left_paren;
+          using_block_expressions;
+          using_block_right_paren;
+          using_block_body;
+        }
+      | (SyntaxKind.UsingStatementFunctionScoped, [
+          using_function_await_keyword;
+          using_function_using_keyword;
+          using_function_expression;
+          using_function_semicolon;
+        ]) ->
+        UsingStatementFunctionScoped {
+          using_function_await_keyword;
+          using_function_using_keyword;
+          using_function_expression;
+          using_function_semicolon;
+        }
+      | (SyntaxKind.DeclareDirectiveStatement, [
+          declare_directive_keyword;
+          declare_directive_left_paren;
+          declare_directive_expression;
+          declare_directive_right_paren;
+          declare_directive_semicolon;
+        ]) ->
+        DeclareDirectiveStatement {
+          declare_directive_keyword;
+          declare_directive_left_paren;
+          declare_directive_expression;
+          declare_directive_right_paren;
+          declare_directive_semicolon;
+        }
+      | (SyntaxKind.DeclareBlockStatement, [
+          declare_block_keyword;
+          declare_block_left_paren;
+          declare_block_expression;
+          declare_block_right_paren;
+          declare_block_body;
+        ]) ->
+        DeclareBlockStatement {
+          declare_block_keyword;
+          declare_block_left_paren;
+          declare_block_expression;
+          declare_block_right_paren;
+          declare_block_body;
         }
       | (SyntaxKind.WhileStatement, [
           while_keyword;
@@ -5793,6 +7200,56 @@ module WithToken(Token: TokenType) = struct
         ElseClause {
           else_keyword;
           else_statement;
+        }
+      | (SyntaxKind.AlternateIfStatement, [
+          alternate_if_keyword;
+          alternate_if_left_paren;
+          alternate_if_condition;
+          alternate_if_right_paren;
+          alternate_if_colon;
+          alternate_if_statement;
+          alternate_if_elseif_clauses;
+          alternate_if_else_clause;
+          alternate_if_endif_keyword;
+          alternate_if_semicolon;
+        ]) ->
+        AlternateIfStatement {
+          alternate_if_keyword;
+          alternate_if_left_paren;
+          alternate_if_condition;
+          alternate_if_right_paren;
+          alternate_if_colon;
+          alternate_if_statement;
+          alternate_if_elseif_clauses;
+          alternate_if_else_clause;
+          alternate_if_endif_keyword;
+          alternate_if_semicolon;
+        }
+      | (SyntaxKind.AlternateElseifClause, [
+          alternate_elseif_keyword;
+          alternate_elseif_left_paren;
+          alternate_elseif_condition;
+          alternate_elseif_right_paren;
+          alternate_elseif_colon;
+          alternate_elseif_statement;
+        ]) ->
+        AlternateElseifClause {
+          alternate_elseif_keyword;
+          alternate_elseif_left_paren;
+          alternate_elseif_condition;
+          alternate_elseif_right_paren;
+          alternate_elseif_colon;
+          alternate_elseif_statement;
+        }
+      | (SyntaxKind.AlternateElseClause, [
+          alternate_else_keyword;
+          alternate_else_colon;
+          alternate_else_statement;
+        ]) ->
+        AlternateElseClause {
+          alternate_else_keyword;
+          alternate_else_colon;
+          alternate_else_statement;
         }
       | (SyntaxKind.TryStatement, [
           try_keyword;
@@ -5912,6 +7369,26 @@ module WithToken(Token: TokenType) = struct
           switch_sections;
           switch_right_brace;
         }
+      | (SyntaxKind.AlternateSwitchStatement, [
+          alternate_switch_keyword;
+          alternate_switch_left_paren;
+          alternate_switch_expression;
+          alternate_switch_right_paren;
+          alternate_switch_opening_colon;
+          alternate_switch_sections;
+          alternate_switch_closing_endswitch;
+          alternate_switch_closing_semicolon;
+        ]) ->
+        AlternateSwitchStatement {
+          alternate_switch_keyword;
+          alternate_switch_left_paren;
+          alternate_switch_expression;
+          alternate_switch_right_paren;
+          alternate_switch_opening_colon;
+          alternate_switch_sections;
+          alternate_switch_closing_endswitch;
+          alternate_switch_closing_semicolon;
+        }
       | (SyntaxKind.SwitchSection, [
           switch_section_labels;
           switch_section_statements;
@@ -6006,24 +7483,6 @@ module WithToken(Token: TokenType) = struct
           continue_level;
           continue_semicolon;
         }
-      | (SyntaxKind.FunctionStaticStatement, [
-          static_static_keyword;
-          static_declarations;
-          static_semicolon;
-        ]) ->
-        FunctionStaticStatement {
-          static_static_keyword;
-          static_declarations;
-          static_semicolon;
-        }
-      | (SyntaxKind.StaticDeclarator, [
-          static_name;
-          static_initializer;
-        ]) ->
-        StaticDeclarator {
-          static_name;
-          static_initializer;
-        }
       | (SyntaxKind.EchoStatement, [
           echo_keyword;
           echo_expressions;
@@ -6034,15 +7493,13 @@ module WithToken(Token: TokenType) = struct
           echo_expressions;
           echo_semicolon;
         }
-      | (SyntaxKind.GlobalStatement, [
-          global_keyword;
-          global_variables;
-          global_semicolon;
+      | (SyntaxKind.ConcurrentStatement, [
+          concurrent_keyword;
+          concurrent_statement;
         ]) ->
-        GlobalStatement {
-          global_keyword;
-          global_variables;
-          global_semicolon;
+        ConcurrentStatement {
+          concurrent_keyword;
+          concurrent_statement;
         }
       | (SyntaxKind.SimpleInitializer, [
           simple_initializer_equal;
@@ -6052,7 +7509,30 @@ module WithToken(Token: TokenType) = struct
           simple_initializer_equal;
           simple_initializer_value;
         }
+      | (SyntaxKind.AnonymousClass, [
+          anonymous_class_class_keyword;
+          anonymous_class_left_paren;
+          anonymous_class_argument_list;
+          anonymous_class_right_paren;
+          anonymous_class_extends_keyword;
+          anonymous_class_extends_list;
+          anonymous_class_implements_keyword;
+          anonymous_class_implements_list;
+          anonymous_class_body;
+        ]) ->
+        AnonymousClass {
+          anonymous_class_class_keyword;
+          anonymous_class_left_paren;
+          anonymous_class_argument_list;
+          anonymous_class_right_paren;
+          anonymous_class_extends_keyword;
+          anonymous_class_extends_list;
+          anonymous_class_implements_keyword;
+          anonymous_class_implements_list;
+          anonymous_class_body;
+        }
       | (SyntaxKind.AnonymousFunction, [
+          anonymous_attribute_spec;
           anonymous_static_keyword;
           anonymous_async_keyword;
           anonymous_coroutine_keyword;
@@ -6066,6 +7546,7 @@ module WithToken(Token: TokenType) = struct
           anonymous_body;
         ]) ->
         AnonymousFunction {
+          anonymous_attribute_spec;
           anonymous_static_keyword;
           anonymous_async_keyword;
           anonymous_coroutine_keyword;
@@ -6077,6 +7558,34 @@ module WithToken(Token: TokenType) = struct
           anonymous_type;
           anonymous_use;
           anonymous_body;
+        }
+      | (SyntaxKind.Php7AnonymousFunction, [
+          php7_anonymous_attribute_spec;
+          php7_anonymous_static_keyword;
+          php7_anonymous_async_keyword;
+          php7_anonymous_coroutine_keyword;
+          php7_anonymous_function_keyword;
+          php7_anonymous_left_paren;
+          php7_anonymous_parameters;
+          php7_anonymous_right_paren;
+          php7_anonymous_use;
+          php7_anonymous_colon;
+          php7_anonymous_type;
+          php7_anonymous_body;
+        ]) ->
+        Php7AnonymousFunction {
+          php7_anonymous_attribute_spec;
+          php7_anonymous_static_keyword;
+          php7_anonymous_async_keyword;
+          php7_anonymous_coroutine_keyword;
+          php7_anonymous_function_keyword;
+          php7_anonymous_left_paren;
+          php7_anonymous_parameters;
+          php7_anonymous_right_paren;
+          php7_anonymous_use;
+          php7_anonymous_colon;
+          php7_anonymous_type;
+          php7_anonymous_body;
         }
       | (SyntaxKind.AnonymousFunctionUseClause, [
           anonymous_use_keyword;
@@ -6091,6 +7600,7 @@ module WithToken(Token: TokenType) = struct
           anonymous_use_right_paren;
         }
       | (SyntaxKind.LambdaExpression, [
+          lambda_attribute_spec;
           lambda_async;
           lambda_coroutine;
           lambda_signature;
@@ -6098,6 +7608,7 @@ module WithToken(Token: TokenType) = struct
           lambda_body;
         ]) ->
         LambdaExpression {
+          lambda_attribute_spec;
           lambda_async;
           lambda_coroutine;
           lambda_signature;
@@ -6224,6 +7735,36 @@ module WithToken(Token: TokenType) = struct
           instanceof_operator;
           instanceof_right_operand;
         }
+      | (SyntaxKind.IsExpression, [
+          is_left_operand;
+          is_operator;
+          is_right_operand;
+        ]) ->
+        IsExpression {
+          is_left_operand;
+          is_operator;
+          is_right_operand;
+        }
+      | (SyntaxKind.AsExpression, [
+          as_left_operand;
+          as_operator;
+          as_right_operand;
+        ]) ->
+        AsExpression {
+          as_left_operand;
+          as_operator;
+          as_right_operand;
+        }
+      | (SyntaxKind.NullableAsExpression, [
+          nullable_as_left_operand;
+          nullable_as_operator;
+          nullable_as_right_operand;
+        ]) ->
+        NullableAsExpression {
+          nullable_as_left_operand;
+          nullable_as_operator;
+          nullable_as_right_operand;
+        }
       | (SyntaxKind.ConditionalExpression, [
           conditional_test;
           conditional_question;
@@ -6274,6 +7815,18 @@ module WithToken(Token: TokenType) = struct
           define_argument_list;
           define_right_paren;
         }
+      | (SyntaxKind.HaltCompilerExpression, [
+          halt_compiler_keyword;
+          halt_compiler_left_paren;
+          halt_compiler_argument_list;
+          halt_compiler_right_paren;
+        ]) ->
+        HaltCompilerExpression {
+          halt_compiler_keyword;
+          halt_compiler_left_paren;
+          halt_compiler_argument_list;
+          halt_compiler_right_paren;
+        }
       | (SyntaxKind.IssetExpression, [
           isset_keyword;
           isset_left_paren;
@@ -6288,12 +7841,14 @@ module WithToken(Token: TokenType) = struct
         }
       | (SyntaxKind.FunctionCallExpression, [
           function_call_receiver;
+          function_call_type_args;
           function_call_left_paren;
           function_call_argument_list;
           function_call_right_paren;
         ]) ->
         FunctionCallExpression {
           function_call_receiver;
+          function_call_type_args;
           function_call_left_paren;
           function_call_argument_list;
           function_call_right_paren;
@@ -6354,17 +7909,35 @@ module WithToken(Token: TokenType) = struct
         }
       | (SyntaxKind.ObjectCreationExpression, [
           object_creation_new_keyword;
-          object_creation_type;
-          object_creation_left_paren;
-          object_creation_argument_list;
-          object_creation_right_paren;
+          object_creation_object;
         ]) ->
         ObjectCreationExpression {
           object_creation_new_keyword;
-          object_creation_type;
-          object_creation_left_paren;
-          object_creation_argument_list;
-          object_creation_right_paren;
+          object_creation_object;
+        }
+      | (SyntaxKind.ConstructorCall, [
+          constructor_call_type;
+          constructor_call_left_paren;
+          constructor_call_argument_list;
+          constructor_call_right_paren;
+        ]) ->
+        ConstructorCall {
+          constructor_call_type;
+          constructor_call_left_paren;
+          constructor_call_argument_list;
+          constructor_call_right_paren;
+        }
+      | (SyntaxKind.RecordCreationExpression, [
+          record_creation_type;
+          record_creation_left_bracket;
+          record_creation_members;
+          record_creation_right_bracket;
+        ]) ->
+        RecordCreationExpression {
+          record_creation_type;
+          record_creation_left_bracket;
+          record_creation_members;
+          record_creation_right_bracket;
         }
       | (SyntaxKind.ArrayCreationExpression, [
           array_creation_left_bracket;
@@ -6390,60 +7963,70 @@ module WithToken(Token: TokenType) = struct
         }
       | (SyntaxKind.DarrayIntrinsicExpression, [
           darray_intrinsic_keyword;
+          darray_intrinsic_explicit_type;
           darray_intrinsic_left_bracket;
           darray_intrinsic_members;
           darray_intrinsic_right_bracket;
         ]) ->
         DarrayIntrinsicExpression {
           darray_intrinsic_keyword;
+          darray_intrinsic_explicit_type;
           darray_intrinsic_left_bracket;
           darray_intrinsic_members;
           darray_intrinsic_right_bracket;
         }
       | (SyntaxKind.DictionaryIntrinsicExpression, [
           dictionary_intrinsic_keyword;
+          dictionary_intrinsic_explicit_type;
           dictionary_intrinsic_left_bracket;
           dictionary_intrinsic_members;
           dictionary_intrinsic_right_bracket;
         ]) ->
         DictionaryIntrinsicExpression {
           dictionary_intrinsic_keyword;
+          dictionary_intrinsic_explicit_type;
           dictionary_intrinsic_left_bracket;
           dictionary_intrinsic_members;
           dictionary_intrinsic_right_bracket;
         }
       | (SyntaxKind.KeysetIntrinsicExpression, [
           keyset_intrinsic_keyword;
+          keyset_intrinsic_explicit_type;
           keyset_intrinsic_left_bracket;
           keyset_intrinsic_members;
           keyset_intrinsic_right_bracket;
         ]) ->
         KeysetIntrinsicExpression {
           keyset_intrinsic_keyword;
+          keyset_intrinsic_explicit_type;
           keyset_intrinsic_left_bracket;
           keyset_intrinsic_members;
           keyset_intrinsic_right_bracket;
         }
       | (SyntaxKind.VarrayIntrinsicExpression, [
           varray_intrinsic_keyword;
+          varray_intrinsic_explicit_type;
           varray_intrinsic_left_bracket;
           varray_intrinsic_members;
           varray_intrinsic_right_bracket;
         ]) ->
         VarrayIntrinsicExpression {
           varray_intrinsic_keyword;
+          varray_intrinsic_explicit_type;
           varray_intrinsic_left_bracket;
           varray_intrinsic_members;
           varray_intrinsic_right_bracket;
         }
       | (SyntaxKind.VectorIntrinsicExpression, [
           vector_intrinsic_keyword;
+          vector_intrinsic_explicit_type;
           vector_intrinsic_left_bracket;
           vector_intrinsic_members;
           vector_intrinsic_right_bracket;
         ]) ->
         VectorIntrinsicExpression {
           vector_intrinsic_keyword;
+          vector_intrinsic_explicit_type;
           vector_intrinsic_left_bracket;
           vector_intrinsic_members;
           vector_intrinsic_right_bracket;
@@ -6483,11 +8066,13 @@ module WithToken(Token: TokenType) = struct
           embedded_subscript_right_bracket;
         }
       | (SyntaxKind.AwaitableCreationExpression, [
+          awaitable_attribute_spec;
           awaitable_async;
           awaitable_coroutine;
           awaitable_compound_statement;
         ]) ->
         AwaitableCreationExpression {
+          awaitable_attribute_spec;
           awaitable_async;
           awaitable_coroutine;
           awaitable_compound_statement;
@@ -6523,12 +8108,14 @@ module WithToken(Token: TokenType) = struct
           xhp_category_semicolon;
         }
       | (SyntaxKind.XHPEnumType, [
+          xhp_enum_optional;
           xhp_enum_keyword;
           xhp_enum_left_brace;
           xhp_enum_values;
           xhp_enum_right_brace;
         ]) ->
         XHPEnumType {
+          xhp_enum_optional;
           xhp_enum_keyword;
           xhp_enum_left_brace;
           xhp_enum_values;
@@ -6570,15 +8157,27 @@ module WithToken(Token: TokenType) = struct
         XHPSimpleClassAttribute {
           xhp_simple_class_attribute_type;
         }
-      | (SyntaxKind.XHPAttribute, [
-          xhp_attribute_name;
-          xhp_attribute_equal;
-          xhp_attribute_expression;
+      | (SyntaxKind.XHPSimpleAttribute, [
+          xhp_simple_attribute_name;
+          xhp_simple_attribute_equal;
+          xhp_simple_attribute_expression;
         ]) ->
-        XHPAttribute {
-          xhp_attribute_name;
-          xhp_attribute_equal;
-          xhp_attribute_expression;
+        XHPSimpleAttribute {
+          xhp_simple_attribute_name;
+          xhp_simple_attribute_equal;
+          xhp_simple_attribute_expression;
+        }
+      | (SyntaxKind.XHPSpreadAttribute, [
+          xhp_spread_attribute_left_brace;
+          xhp_spread_attribute_spread_operator;
+          xhp_spread_attribute_expression;
+          xhp_spread_attribute_right_brace;
+        ]) ->
+        XHPSpreadAttribute {
+          xhp_spread_attribute_left_brace;
+          xhp_spread_attribute_spread_operator;
+          xhp_spread_attribute_expression;
+          xhp_spread_attribute_right_brace;
         }
       | (SyntaxKind.XHPOpen, [
           xhp_open_left_angle;
@@ -6689,11 +8288,15 @@ module WithToken(Token: TokenType) = struct
           vector_array_right_angle;
         }
       | (SyntaxKind.TypeParameter, [
+          type_attribute_spec;
+          type_reified;
           type_variance;
           type_name;
           type_constraints;
         ]) ->
         TypeParameter {
+          type_attribute_spec;
+          type_reified;
           type_variance;
           type_name;
           type_constraints;
@@ -6757,7 +8360,7 @@ module WithToken(Token: TokenType) = struct
           closure_coroutine;
           closure_function_keyword;
           closure_inner_left_paren;
-          closure_parameter_types;
+          closure_parameter_list;
           closure_inner_right_paren;
           closure_colon;
           closure_return_type;
@@ -6768,11 +8371,19 @@ module WithToken(Token: TokenType) = struct
           closure_coroutine;
           closure_function_keyword;
           closure_inner_left_paren;
-          closure_parameter_types;
+          closure_parameter_list;
           closure_inner_right_paren;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
+        }
+      | (SyntaxKind.ClosureParameterTypeSpecifier, [
+          closure_parameter_call_convention;
+          closure_parameter_type;
+        ]) ->
+        ClosureParameterTypeSpecifier {
+          closure_parameter_call_convention;
+          closure_parameter_type;
         }
       | (SyntaxKind.ClassnameTypeSpecifier, [
           classname_keyword;
@@ -6864,6 +8475,14 @@ module WithToken(Token: TokenType) = struct
           nullable_question;
           nullable_type;
         }
+      | (SyntaxKind.LikeTypeSpecifier, [
+          like_tilde;
+          like_type;
+        ]) ->
+        LikeTypeSpecifier {
+          like_tilde;
+          like_type;
+        }
       | (SyntaxKind.SoftTypeSpecifier, [
           soft_at;
           soft_type;
@@ -6871,6 +8490,14 @@ module WithToken(Token: TokenType) = struct
         SoftTypeSpecifier {
           soft_at;
           soft_type;
+        }
+      | (SyntaxKind.ReifiedTypeArgument, [
+          reified_type_argument_reified;
+          reified_type_argument_type;
+        ]) ->
+        ReifiedTypeArgument {
+          reified_type_argument_reified;
+          reified_type_argument_type;
         }
       | (SyntaxKind.TypeArguments, [
           type_arguments_left_angle;
@@ -6916,6 +8543,104 @@ module WithToken(Token: TokenType) = struct
           list_item;
           list_separator;
         }
+      | (SyntaxKind.PocketAtomExpression, [
+          pocket_atom_glyph;
+          pocket_atom_expression;
+        ]) ->
+        PocketAtomExpression {
+          pocket_atom_glyph;
+          pocket_atom_expression;
+        }
+      | (SyntaxKind.PocketIdentifierExpression, [
+          pocket_identifier_qualifier;
+          pocket_identifier_pu_operator;
+          pocket_identifier_field;
+          pocket_identifier_operator;
+          pocket_identifier_name;
+        ]) ->
+        PocketIdentifierExpression {
+          pocket_identifier_qualifier;
+          pocket_identifier_pu_operator;
+          pocket_identifier_field;
+          pocket_identifier_operator;
+          pocket_identifier_name;
+        }
+      | (SyntaxKind.PocketAtomMappingDeclaration, [
+          pocket_atom_mapping_glyph;
+          pocket_atom_mapping_name;
+          pocket_atom_mapping_left_paren;
+          pocket_atom_mapping_mappings;
+          pocket_atom_mapping_right_paren;
+          pocket_atom_mapping_semicolon;
+        ]) ->
+        PocketAtomMappingDeclaration {
+          pocket_atom_mapping_glyph;
+          pocket_atom_mapping_name;
+          pocket_atom_mapping_left_paren;
+          pocket_atom_mapping_mappings;
+          pocket_atom_mapping_right_paren;
+          pocket_atom_mapping_semicolon;
+        }
+      | (SyntaxKind.PocketEnumDeclaration, [
+          pocket_enum_modifiers;
+          pocket_enum_enum;
+          pocket_enum_name;
+          pocket_enum_left_brace;
+          pocket_enum_fields;
+          pocket_enum_right_brace;
+        ]) ->
+        PocketEnumDeclaration {
+          pocket_enum_modifiers;
+          pocket_enum_enum;
+          pocket_enum_name;
+          pocket_enum_left_brace;
+          pocket_enum_fields;
+          pocket_enum_right_brace;
+        }
+      | (SyntaxKind.PocketFieldTypeExprDeclaration, [
+          pocket_field_type_expr_case;
+          pocket_field_type_expr_type;
+          pocket_field_type_expr_name;
+          pocket_field_type_expr_semicolon;
+        ]) ->
+        PocketFieldTypeExprDeclaration {
+          pocket_field_type_expr_case;
+          pocket_field_type_expr_type;
+          pocket_field_type_expr_name;
+          pocket_field_type_expr_semicolon;
+        }
+      | (SyntaxKind.PocketFieldTypeDeclaration, [
+          pocket_field_type_case;
+          pocket_field_type_type;
+          pocket_field_type_name;
+          pocket_field_type_semicolon;
+        ]) ->
+        PocketFieldTypeDeclaration {
+          pocket_field_type_case;
+          pocket_field_type_type;
+          pocket_field_type_name;
+          pocket_field_type_semicolon;
+        }
+      | (SyntaxKind.PocketMappingIdDeclaration, [
+          pocket_mapping_id_name;
+          pocket_mapping_id_initializer;
+        ]) ->
+        PocketMappingIdDeclaration {
+          pocket_mapping_id_name;
+          pocket_mapping_id_initializer;
+        }
+      | (SyntaxKind.PocketMappingTypeDeclaration, [
+          pocket_mapping_type_keyword;
+          pocket_mapping_type_name;
+          pocket_mapping_type_equal;
+          pocket_mapping_type_type;
+        ]) ->
+        PocketMappingTypeDeclaration {
+          pocket_mapping_type_keyword;
+          pocket_mapping_type_name;
+          pocket_mapping_type_equal;
+          pocket_mapping_type_type;
+        }
       | (SyntaxKind.Missing, []) -> Missing
       | (SyntaxKind.SyntaxList, items) -> SyntaxList items
       | _ -> failwith
@@ -6935,14 +8660,19 @@ module WithToken(Token: TokenType) = struct
 
     module type ValueBuilderType = sig
       val value_from_children:
-        Full_fidelity_syntax_kind.t -> t list -> SyntaxValue.t
+        Full_fidelity_source_text.t ->
+        int -> (* offset *)
+        Full_fidelity_syntax_kind.t ->
+        t list ->
+        SyntaxValue.t
       val value_from_token: Token.t -> SyntaxValue.t
+      val value_from_syntax: syntax -> SyntaxValue.t
     end
 
     module WithValueBuilder(ValueBuilder: ValueBuilderType) = struct
-      let from_children kind ts =
+      let from_children text offset kind ts =
         let syntax = syntax_from_children kind ts in
-        let value = ValueBuilder.value_from_children kind ts in
+        let value = ValueBuilder.value_from_children text offset kind ts in
         make syntax value
 
       let make_token token =
@@ -6950,1914 +8680,2963 @@ module WithToken(Token: TokenType) = struct
         let value = ValueBuilder.value_from_token token in
         make syntax value
 
-      let make_missing () =
-        from_children SyntaxKind.Missing []
+      let make_missing text offset =
+        from_children text offset SyntaxKind.Missing []
 
       (* An empty list is represented by Missing; everything else is a
         SyntaxList, even if the list has only one item. *)
-      let make_list items =
+      let make_list text offset items =
         match items with
-        | [] -> make_missing()
-        | _ -> from_children SyntaxKind.SyntaxList items
-
-    let make_end_of_file
-      end_of_file_token
-    =
-      from_children SyntaxKind.EndOfFile [
-        end_of_file_token;
-      ]
-
-    let make_script
-      script_declarations
-    =
-      from_children SyntaxKind.Script [
-        script_declarations;
-      ]
-
-    let make_simple_type_specifier
-      simple_type_specifier
-    =
-      from_children SyntaxKind.SimpleTypeSpecifier [
-        simple_type_specifier;
-      ]
-
-    let make_literal_expression
-      literal_expression
-    =
-      from_children SyntaxKind.LiteralExpression [
-        literal_expression;
-      ]
-
-    let make_variable_expression
-      variable_expression
-    =
-      from_children SyntaxKind.VariableExpression [
-        variable_expression;
-      ]
-
-    let make_qualified_name_expression
-      qualified_name_expression
-    =
-      from_children SyntaxKind.QualifiedNameExpression [
-        qualified_name_expression;
-      ]
-
-    let make_pipe_variable_expression
-      pipe_variable_expression
-    =
-      from_children SyntaxKind.PipeVariableExpression [
-        pipe_variable_expression;
-      ]
-
-    let make_enum_declaration
-      enum_attribute_spec
-      enum_keyword
-      enum_name
-      enum_colon
-      enum_base
-      enum_type
-      enum_left_brace
-      enum_enumerators
-      enum_right_brace
-    =
-      from_children SyntaxKind.EnumDeclaration [
-        enum_attribute_spec;
-        enum_keyword;
-        enum_name;
-        enum_colon;
-        enum_base;
-        enum_type;
-        enum_left_brace;
-        enum_enumerators;
-        enum_right_brace;
-      ]
-
-    let make_enumerator
-      enumerator_name
-      enumerator_equal
-      enumerator_value
-      enumerator_semicolon
-    =
-      from_children SyntaxKind.Enumerator [
-        enumerator_name;
-        enumerator_equal;
-        enumerator_value;
-        enumerator_semicolon;
-      ]
-
-    let make_alias_declaration
-      alias_attribute_spec
-      alias_keyword
-      alias_name
-      alias_generic_parameter
-      alias_constraint
-      alias_equal
-      alias_type
-      alias_semicolon
-    =
-      from_children SyntaxKind.AliasDeclaration [
-        alias_attribute_spec;
-        alias_keyword;
-        alias_name;
-        alias_generic_parameter;
-        alias_constraint;
-        alias_equal;
-        alias_type;
-        alias_semicolon;
-      ]
-
-    let make_property_declaration
-      property_modifiers
-      property_type
-      property_declarators
-      property_semicolon
-    =
-      from_children SyntaxKind.PropertyDeclaration [
-        property_modifiers;
-        property_type;
-        property_declarators;
-        property_semicolon;
-      ]
-
-    let make_property_declarator
-      property_name
-      property_initializer
-    =
-      from_children SyntaxKind.PropertyDeclarator [
-        property_name;
-        property_initializer;
-      ]
-
-    let make_namespace_declaration
-      namespace_keyword
-      namespace_name
-      namespace_body
-    =
-      from_children SyntaxKind.NamespaceDeclaration [
-        namespace_keyword;
-        namespace_name;
-        namespace_body;
-      ]
-
-    let make_namespace_body
-      namespace_left_brace
-      namespace_declarations
-      namespace_right_brace
-    =
-      from_children SyntaxKind.NamespaceBody [
-        namespace_left_brace;
-        namespace_declarations;
-        namespace_right_brace;
-      ]
-
-    let make_namespace_empty_body
-      namespace_semicolon
-    =
-      from_children SyntaxKind.NamespaceEmptyBody [
-        namespace_semicolon;
-      ]
-
-    let make_namespace_use_declaration
-      namespace_use_keyword
-      namespace_use_kind
-      namespace_use_clauses
-      namespace_use_semicolon
-    =
-      from_children SyntaxKind.NamespaceUseDeclaration [
-        namespace_use_keyword;
-        namespace_use_kind;
-        namespace_use_clauses;
-        namespace_use_semicolon;
-      ]
-
-    let make_namespace_group_use_declaration
-      namespace_group_use_keyword
-      namespace_group_use_kind
-      namespace_group_use_prefix
-      namespace_group_use_left_brace
-      namespace_group_use_clauses
-      namespace_group_use_right_brace
-      namespace_group_use_semicolon
-    =
-      from_children SyntaxKind.NamespaceGroupUseDeclaration [
-        namespace_group_use_keyword;
-        namespace_group_use_kind;
-        namespace_group_use_prefix;
-        namespace_group_use_left_brace;
-        namespace_group_use_clauses;
-        namespace_group_use_right_brace;
-        namespace_group_use_semicolon;
-      ]
-
-    let make_namespace_use_clause
-      namespace_use_clause_kind
-      namespace_use_name
-      namespace_use_as
-      namespace_use_alias
-    =
-      from_children SyntaxKind.NamespaceUseClause [
-        namespace_use_clause_kind;
-        namespace_use_name;
-        namespace_use_as;
-        namespace_use_alias;
-      ]
-
-    let make_function_declaration
-      function_attribute_spec
-      function_declaration_header
-      function_body
-    =
-      from_children SyntaxKind.FunctionDeclaration [
-        function_attribute_spec;
-        function_declaration_header;
-        function_body;
-      ]
-
-    let make_function_declaration_header
-      function_async
-      function_coroutine
-      function_keyword
-      function_ampersand
-      function_name
-      function_type_parameter_list
-      function_left_paren
-      function_parameter_list
-      function_right_paren
-      function_colon
-      function_type
-      function_where_clause
-    =
-      from_children SyntaxKind.FunctionDeclarationHeader [
-        function_async;
-        function_coroutine;
-        function_keyword;
-        function_ampersand;
-        function_name;
-        function_type_parameter_list;
-        function_left_paren;
-        function_parameter_list;
-        function_right_paren;
-        function_colon;
-        function_type;
-        function_where_clause;
-      ]
-
-    let make_where_clause
-      where_clause_keyword
-      where_clause_constraints
-    =
-      from_children SyntaxKind.WhereClause [
-        where_clause_keyword;
-        where_clause_constraints;
-      ]
-
-    let make_where_constraint
-      where_constraint_left_type
-      where_constraint_operator
-      where_constraint_right_type
-    =
-      from_children SyntaxKind.WhereConstraint [
-        where_constraint_left_type;
-        where_constraint_operator;
-        where_constraint_right_type;
-      ]
-
-    let make_methodish_declaration
-      methodish_attribute
-      methodish_modifiers
-      methodish_function_decl_header
-      methodish_function_body
-      methodish_semicolon
-    =
-      from_children SyntaxKind.MethodishDeclaration [
-        methodish_attribute;
-        methodish_modifiers;
-        methodish_function_decl_header;
-        methodish_function_body;
-        methodish_semicolon;
-      ]
-
-    let make_classish_declaration
-      classish_attribute
-      classish_modifiers
-      classish_keyword
-      classish_name
-      classish_type_parameters
-      classish_extends_keyword
-      classish_extends_list
-      classish_implements_keyword
-      classish_implements_list
-      classish_body
-    =
-      from_children SyntaxKind.ClassishDeclaration [
-        classish_attribute;
-        classish_modifiers;
-        classish_keyword;
-        classish_name;
-        classish_type_parameters;
-        classish_extends_keyword;
-        classish_extends_list;
-        classish_implements_keyword;
-        classish_implements_list;
-        classish_body;
-      ]
-
-    let make_classish_body
-      classish_body_left_brace
-      classish_body_elements
-      classish_body_right_brace
-    =
-      from_children SyntaxKind.ClassishBody [
-        classish_body_left_brace;
-        classish_body_elements;
-        classish_body_right_brace;
-      ]
-
-    let make_trait_use_precedence_item
-      trait_use_precedence_item_name
-      trait_use_precedence_item_keyword
-      trait_use_precedence_item_removed_names
-    =
-      from_children SyntaxKind.TraitUsePrecedenceItem [
-        trait_use_precedence_item_name;
-        trait_use_precedence_item_keyword;
-        trait_use_precedence_item_removed_names;
-      ]
-
-    let make_trait_use_alias_item
-      trait_use_alias_item_aliasing_name
-      trait_use_alias_item_keyword
-      trait_use_alias_item_visibility
-      trait_use_alias_item_aliased_name
-    =
-      from_children SyntaxKind.TraitUseAliasItem [
-        trait_use_alias_item_aliasing_name;
-        trait_use_alias_item_keyword;
-        trait_use_alias_item_visibility;
-        trait_use_alias_item_aliased_name;
-      ]
-
-    let make_trait_use_conflict_resolution
-      trait_use_conflict_resolution_keyword
-      trait_use_conflict_resolution_names
-      trait_use_conflict_resolution_left_brace
-      trait_use_conflict_resolution_clauses
-      trait_use_conflict_resolution_right_brace
-    =
-      from_children SyntaxKind.TraitUseConflictResolution [
-        trait_use_conflict_resolution_keyword;
-        trait_use_conflict_resolution_names;
-        trait_use_conflict_resolution_left_brace;
-        trait_use_conflict_resolution_clauses;
-        trait_use_conflict_resolution_right_brace;
-      ]
-
-    let make_trait_use
-      trait_use_keyword
-      trait_use_names
-      trait_use_semicolon
-    =
-      from_children SyntaxKind.TraitUse [
-        trait_use_keyword;
-        trait_use_names;
-        trait_use_semicolon;
-      ]
-
-    let make_require_clause
-      require_keyword
-      require_kind
-      require_name
-      require_semicolon
-    =
-      from_children SyntaxKind.RequireClause [
-        require_keyword;
-        require_kind;
-        require_name;
-        require_semicolon;
-      ]
-
-    let make_const_declaration
-      const_abstract
-      const_keyword
-      const_type_specifier
-      const_declarators
-      const_semicolon
-    =
-      from_children SyntaxKind.ConstDeclaration [
-        const_abstract;
-        const_keyword;
-        const_type_specifier;
-        const_declarators;
-        const_semicolon;
-      ]
-
-    let make_constant_declarator
-      constant_declarator_name
-      constant_declarator_initializer
-    =
-      from_children SyntaxKind.ConstantDeclarator [
-        constant_declarator_name;
-        constant_declarator_initializer;
-      ]
-
-    let make_type_const_declaration
-      type_const_abstract
-      type_const_keyword
-      type_const_type_keyword
-      type_const_name
-      type_const_type_constraint
-      type_const_equal
-      type_const_type_specifier
-      type_const_semicolon
-    =
-      from_children SyntaxKind.TypeConstDeclaration [
-        type_const_abstract;
-        type_const_keyword;
-        type_const_type_keyword;
-        type_const_name;
-        type_const_type_constraint;
-        type_const_equal;
-        type_const_type_specifier;
-        type_const_semicolon;
-      ]
-
-    let make_decorated_expression
-      decorated_expression_decorator
-      decorated_expression_expression
-    =
-      from_children SyntaxKind.DecoratedExpression [
-        decorated_expression_decorator;
-        decorated_expression_expression;
-      ]
-
-    let make_parameter_declaration
-      parameter_attribute
-      parameter_visibility
-      parameter_type
-      parameter_name
-      parameter_default_value
-    =
-      from_children SyntaxKind.ParameterDeclaration [
-        parameter_attribute;
-        parameter_visibility;
-        parameter_type;
-        parameter_name;
-        parameter_default_value;
-      ]
-
-    let make_variadic_parameter
-      variadic_parameter_ellipsis
-    =
-      from_children SyntaxKind.VariadicParameter [
-        variadic_parameter_ellipsis;
-      ]
-
-    let make_attribute_specification
-      attribute_specification_left_double_angle
-      attribute_specification_attributes
-      attribute_specification_right_double_angle
-    =
-      from_children SyntaxKind.AttributeSpecification [
-        attribute_specification_left_double_angle;
-        attribute_specification_attributes;
-        attribute_specification_right_double_angle;
-      ]
-
-    let make_attribute
-      attribute_name
-      attribute_left_paren
-      attribute_values
-      attribute_right_paren
-    =
-      from_children SyntaxKind.Attribute [
-        attribute_name;
-        attribute_left_paren;
-        attribute_values;
-        attribute_right_paren;
-      ]
-
-    let make_inclusion_expression
-      inclusion_require
-      inclusion_filename
-    =
-      from_children SyntaxKind.InclusionExpression [
-        inclusion_require;
-        inclusion_filename;
-      ]
-
-    let make_inclusion_directive
-      inclusion_expression
-      inclusion_semicolon
-    =
-      from_children SyntaxKind.InclusionDirective [
-        inclusion_expression;
-        inclusion_semicolon;
-      ]
-
-    let make_compound_statement
-      compound_left_brace
-      compound_statements
-      compound_right_brace
-    =
-      from_children SyntaxKind.CompoundStatement [
-        compound_left_brace;
-        compound_statements;
-        compound_right_brace;
-      ]
-
-    let make_expression_statement
-      expression_statement_expression
-      expression_statement_semicolon
-    =
-      from_children SyntaxKind.ExpressionStatement [
-        expression_statement_expression;
-        expression_statement_semicolon;
-      ]
-
-    let make_markup_section
-      markup_prefix
-      markup_text
-      markup_suffix
-      markup_expression
-    =
-      from_children SyntaxKind.MarkupSection [
-        markup_prefix;
-        markup_text;
-        markup_suffix;
-        markup_expression;
-      ]
-
-    let make_markup_suffix
-      markup_suffix_less_than_question
-      markup_suffix_name
-    =
-      from_children SyntaxKind.MarkupSuffix [
-        markup_suffix_less_than_question;
-        markup_suffix_name;
-      ]
-
-    let make_unset_statement
-      unset_keyword
-      unset_left_paren
-      unset_variables
-      unset_right_paren
-      unset_semicolon
-    =
-      from_children SyntaxKind.UnsetStatement [
-        unset_keyword;
-        unset_left_paren;
-        unset_variables;
-        unset_right_paren;
-        unset_semicolon;
-      ]
-
-    let make_while_statement
-      while_keyword
-      while_left_paren
-      while_condition
-      while_right_paren
-      while_body
-    =
-      from_children SyntaxKind.WhileStatement [
-        while_keyword;
-        while_left_paren;
-        while_condition;
-        while_right_paren;
-        while_body;
-      ]
-
-    let make_if_statement
-      if_keyword
-      if_left_paren
-      if_condition
-      if_right_paren
-      if_statement
-      if_elseif_clauses
-      if_else_clause
-    =
-      from_children SyntaxKind.IfStatement [
-        if_keyword;
-        if_left_paren;
-        if_condition;
-        if_right_paren;
-        if_statement;
-        if_elseif_clauses;
-        if_else_clause;
-      ]
-
-    let make_elseif_clause
-      elseif_keyword
-      elseif_left_paren
-      elseif_condition
-      elseif_right_paren
-      elseif_statement
-    =
-      from_children SyntaxKind.ElseifClause [
-        elseif_keyword;
-        elseif_left_paren;
-        elseif_condition;
-        elseif_right_paren;
-        elseif_statement;
-      ]
-
-    let make_else_clause
-      else_keyword
-      else_statement
-    =
-      from_children SyntaxKind.ElseClause [
-        else_keyword;
-        else_statement;
-      ]
-
-    let make_try_statement
-      try_keyword
-      try_compound_statement
-      try_catch_clauses
-      try_finally_clause
-    =
-      from_children SyntaxKind.TryStatement [
-        try_keyword;
-        try_compound_statement;
-        try_catch_clauses;
-        try_finally_clause;
-      ]
-
-    let make_catch_clause
-      catch_keyword
-      catch_left_paren
-      catch_type
-      catch_variable
-      catch_right_paren
-      catch_body
-    =
-      from_children SyntaxKind.CatchClause [
-        catch_keyword;
-        catch_left_paren;
-        catch_type;
-        catch_variable;
-        catch_right_paren;
-        catch_body;
-      ]
-
-    let make_finally_clause
-      finally_keyword
-      finally_body
-    =
-      from_children SyntaxKind.FinallyClause [
-        finally_keyword;
-        finally_body;
-      ]
-
-    let make_do_statement
-      do_keyword
-      do_body
-      do_while_keyword
-      do_left_paren
-      do_condition
-      do_right_paren
-      do_semicolon
-    =
-      from_children SyntaxKind.DoStatement [
-        do_keyword;
-        do_body;
-        do_while_keyword;
-        do_left_paren;
-        do_condition;
-        do_right_paren;
-        do_semicolon;
-      ]
-
-    let make_for_statement
-      for_keyword
-      for_left_paren
-      for_initializer
-      for_first_semicolon
-      for_control
-      for_second_semicolon
-      for_end_of_loop
-      for_right_paren
-      for_body
-    =
-      from_children SyntaxKind.ForStatement [
-        for_keyword;
-        for_left_paren;
-        for_initializer;
-        for_first_semicolon;
-        for_control;
-        for_second_semicolon;
-        for_end_of_loop;
-        for_right_paren;
-        for_body;
-      ]
-
-    let make_foreach_statement
-      foreach_keyword
-      foreach_left_paren
-      foreach_collection
-      foreach_await_keyword
-      foreach_as
-      foreach_key
-      foreach_arrow
-      foreach_value
-      foreach_right_paren
-      foreach_body
-    =
-      from_children SyntaxKind.ForeachStatement [
-        foreach_keyword;
-        foreach_left_paren;
-        foreach_collection;
-        foreach_await_keyword;
-        foreach_as;
-        foreach_key;
-        foreach_arrow;
-        foreach_value;
-        foreach_right_paren;
-        foreach_body;
-      ]
-
-    let make_switch_statement
-      switch_keyword
-      switch_left_paren
-      switch_expression
-      switch_right_paren
-      switch_left_brace
-      switch_sections
-      switch_right_brace
-    =
-      from_children SyntaxKind.SwitchStatement [
-        switch_keyword;
-        switch_left_paren;
-        switch_expression;
-        switch_right_paren;
-        switch_left_brace;
-        switch_sections;
-        switch_right_brace;
-      ]
-
-    let make_switch_section
-      switch_section_labels
-      switch_section_statements
-      switch_section_fallthrough
-    =
-      from_children SyntaxKind.SwitchSection [
-        switch_section_labels;
-        switch_section_statements;
-        switch_section_fallthrough;
-      ]
-
-    let make_switch_fallthrough
-      fallthrough_keyword
-      fallthrough_semicolon
-    =
-      from_children SyntaxKind.SwitchFallthrough [
-        fallthrough_keyword;
-        fallthrough_semicolon;
-      ]
-
-    let make_case_label
-      case_keyword
-      case_expression
-      case_colon
-    =
-      from_children SyntaxKind.CaseLabel [
-        case_keyword;
-        case_expression;
-        case_colon;
-      ]
-
-    let make_default_label
-      default_keyword
-      default_colon
-    =
-      from_children SyntaxKind.DefaultLabel [
-        default_keyword;
-        default_colon;
-      ]
-
-    let make_return_statement
-      return_keyword
-      return_expression
-      return_semicolon
-    =
-      from_children SyntaxKind.ReturnStatement [
-        return_keyword;
-        return_expression;
-        return_semicolon;
-      ]
-
-    let make_goto_label
-      goto_label_name
-      goto_label_colon
-    =
-      from_children SyntaxKind.GotoLabel [
-        goto_label_name;
-        goto_label_colon;
-      ]
-
-    let make_goto_statement
-      goto_statement_keyword
-      goto_statement_label_name
-      goto_statement_semicolon
-    =
-      from_children SyntaxKind.GotoStatement [
-        goto_statement_keyword;
-        goto_statement_label_name;
-        goto_statement_semicolon;
-      ]
-
-    let make_throw_statement
-      throw_keyword
-      throw_expression
-      throw_semicolon
-    =
-      from_children SyntaxKind.ThrowStatement [
-        throw_keyword;
-        throw_expression;
-        throw_semicolon;
-      ]
-
-    let make_break_statement
-      break_keyword
-      break_level
-      break_semicolon
-    =
-      from_children SyntaxKind.BreakStatement [
-        break_keyword;
-        break_level;
-        break_semicolon;
-      ]
-
-    let make_continue_statement
-      continue_keyword
-      continue_level
-      continue_semicolon
-    =
-      from_children SyntaxKind.ContinueStatement [
-        continue_keyword;
-        continue_level;
-        continue_semicolon;
-      ]
-
-    let make_function_static_statement
-      static_static_keyword
-      static_declarations
-      static_semicolon
-    =
-      from_children SyntaxKind.FunctionStaticStatement [
-        static_static_keyword;
-        static_declarations;
-        static_semicolon;
-      ]
-
-    let make_static_declarator
-      static_name
-      static_initializer
-    =
-      from_children SyntaxKind.StaticDeclarator [
-        static_name;
-        static_initializer;
-      ]
-
-    let make_echo_statement
-      echo_keyword
-      echo_expressions
-      echo_semicolon
-    =
-      from_children SyntaxKind.EchoStatement [
-        echo_keyword;
-        echo_expressions;
-        echo_semicolon;
-      ]
-
-    let make_global_statement
-      global_keyword
-      global_variables
-      global_semicolon
-    =
-      from_children SyntaxKind.GlobalStatement [
-        global_keyword;
-        global_variables;
-        global_semicolon;
-      ]
-
-    let make_simple_initializer
-      simple_initializer_equal
-      simple_initializer_value
-    =
-      from_children SyntaxKind.SimpleInitializer [
-        simple_initializer_equal;
-        simple_initializer_value;
-      ]
-
-    let make_anonymous_function
-      anonymous_static_keyword
-      anonymous_async_keyword
-      anonymous_coroutine_keyword
-      anonymous_function_keyword
-      anonymous_left_paren
-      anonymous_parameters
-      anonymous_right_paren
-      anonymous_colon
-      anonymous_type
-      anonymous_use
-      anonymous_body
-    =
-      from_children SyntaxKind.AnonymousFunction [
-        anonymous_static_keyword;
-        anonymous_async_keyword;
-        anonymous_coroutine_keyword;
-        anonymous_function_keyword;
-        anonymous_left_paren;
-        anonymous_parameters;
-        anonymous_right_paren;
-        anonymous_colon;
-        anonymous_type;
-        anonymous_use;
-        anonymous_body;
-      ]
-
-    let make_anonymous_function_use_clause
-      anonymous_use_keyword
-      anonymous_use_left_paren
-      anonymous_use_variables
-      anonymous_use_right_paren
-    =
-      from_children SyntaxKind.AnonymousFunctionUseClause [
-        anonymous_use_keyword;
-        anonymous_use_left_paren;
-        anonymous_use_variables;
-        anonymous_use_right_paren;
-      ]
-
-    let make_lambda_expression
-      lambda_async
-      lambda_coroutine
-      lambda_signature
-      lambda_arrow
-      lambda_body
-    =
-      from_children SyntaxKind.LambdaExpression [
-        lambda_async;
-        lambda_coroutine;
-        lambda_signature;
-        lambda_arrow;
-        lambda_body;
-      ]
-
-    let make_lambda_signature
-      lambda_left_paren
-      lambda_parameters
-      lambda_right_paren
-      lambda_colon
-      lambda_type
-    =
-      from_children SyntaxKind.LambdaSignature [
-        lambda_left_paren;
-        lambda_parameters;
-        lambda_right_paren;
-        lambda_colon;
-        lambda_type;
-      ]
-
-    let make_cast_expression
-      cast_left_paren
-      cast_type
-      cast_right_paren
-      cast_operand
-    =
-      from_children SyntaxKind.CastExpression [
-        cast_left_paren;
-        cast_type;
-        cast_right_paren;
-        cast_operand;
-      ]
-
-    let make_scope_resolution_expression
-      scope_resolution_qualifier
-      scope_resolution_operator
-      scope_resolution_name
-    =
-      from_children SyntaxKind.ScopeResolutionExpression [
-        scope_resolution_qualifier;
-        scope_resolution_operator;
-        scope_resolution_name;
-      ]
-
-    let make_member_selection_expression
-      member_object
-      member_operator
-      member_name
-    =
-      from_children SyntaxKind.MemberSelectionExpression [
-        member_object;
-        member_operator;
-        member_name;
-      ]
-
-    let make_safe_member_selection_expression
-      safe_member_object
-      safe_member_operator
-      safe_member_name
-    =
-      from_children SyntaxKind.SafeMemberSelectionExpression [
-        safe_member_object;
-        safe_member_operator;
-        safe_member_name;
-      ]
-
-    let make_embedded_member_selection_expression
-      embedded_member_object
-      embedded_member_operator
-      embedded_member_name
-    =
-      from_children SyntaxKind.EmbeddedMemberSelectionExpression [
-        embedded_member_object;
-        embedded_member_operator;
-        embedded_member_name;
-      ]
-
-    let make_yield_expression
-      yield_keyword
-      yield_operand
-    =
-      from_children SyntaxKind.YieldExpression [
-        yield_keyword;
-        yield_operand;
-      ]
-
-    let make_yield_from_expression
-      yield_from_yield_keyword
-      yield_from_from_keyword
-      yield_from_operand
-    =
-      from_children SyntaxKind.YieldFromExpression [
-        yield_from_yield_keyword;
-        yield_from_from_keyword;
-        yield_from_operand;
-      ]
-
-    let make_prefix_unary_expression
-      prefix_unary_operator
-      prefix_unary_operand
-    =
-      from_children SyntaxKind.PrefixUnaryExpression [
-        prefix_unary_operator;
-        prefix_unary_operand;
-      ]
-
-    let make_postfix_unary_expression
-      postfix_unary_operand
-      postfix_unary_operator
-    =
-      from_children SyntaxKind.PostfixUnaryExpression [
-        postfix_unary_operand;
-        postfix_unary_operator;
-      ]
-
-    let make_binary_expression
-      binary_left_operand
-      binary_operator
-      binary_right_operand
-    =
-      from_children SyntaxKind.BinaryExpression [
-        binary_left_operand;
-        binary_operator;
-        binary_right_operand;
-      ]
-
-    let make_instanceof_expression
-      instanceof_left_operand
-      instanceof_operator
-      instanceof_right_operand
-    =
-      from_children SyntaxKind.InstanceofExpression [
-        instanceof_left_operand;
-        instanceof_operator;
-        instanceof_right_operand;
-      ]
-
-    let make_conditional_expression
-      conditional_test
-      conditional_question
-      conditional_consequence
-      conditional_colon
-      conditional_alternative
-    =
-      from_children SyntaxKind.ConditionalExpression [
-        conditional_test;
-        conditional_question;
-        conditional_consequence;
-        conditional_colon;
-        conditional_alternative;
-      ]
-
-    let make_eval_expression
-      eval_keyword
-      eval_left_paren
-      eval_argument
-      eval_right_paren
-    =
-      from_children SyntaxKind.EvalExpression [
-        eval_keyword;
-        eval_left_paren;
-        eval_argument;
-        eval_right_paren;
-      ]
-
-    let make_empty_expression
-      empty_keyword
-      empty_left_paren
-      empty_argument
-      empty_right_paren
-    =
-      from_children SyntaxKind.EmptyExpression [
-        empty_keyword;
-        empty_left_paren;
-        empty_argument;
-        empty_right_paren;
-      ]
-
-    let make_define_expression
-      define_keyword
-      define_left_paren
-      define_argument_list
-      define_right_paren
-    =
-      from_children SyntaxKind.DefineExpression [
-        define_keyword;
-        define_left_paren;
-        define_argument_list;
-        define_right_paren;
-      ]
-
-    let make_isset_expression
-      isset_keyword
-      isset_left_paren
-      isset_argument_list
-      isset_right_paren
-    =
-      from_children SyntaxKind.IssetExpression [
-        isset_keyword;
-        isset_left_paren;
-        isset_argument_list;
-        isset_right_paren;
-      ]
-
-    let make_function_call_expression
-      function_call_receiver
-      function_call_left_paren
-      function_call_argument_list
-      function_call_right_paren
-    =
-      from_children SyntaxKind.FunctionCallExpression [
-        function_call_receiver;
-        function_call_left_paren;
-        function_call_argument_list;
-        function_call_right_paren;
-      ]
-
-    let make_parenthesized_expression
-      parenthesized_expression_left_paren
-      parenthesized_expression_expression
-      parenthesized_expression_right_paren
-    =
-      from_children SyntaxKind.ParenthesizedExpression [
-        parenthesized_expression_left_paren;
-        parenthesized_expression_expression;
-        parenthesized_expression_right_paren;
-      ]
-
-    let make_braced_expression
-      braced_expression_left_brace
-      braced_expression_expression
-      braced_expression_right_brace
-    =
-      from_children SyntaxKind.BracedExpression [
-        braced_expression_left_brace;
-        braced_expression_expression;
-        braced_expression_right_brace;
-      ]
-
-    let make_embedded_braced_expression
-      embedded_braced_expression_left_brace
-      embedded_braced_expression_expression
-      embedded_braced_expression_right_brace
-    =
-      from_children SyntaxKind.EmbeddedBracedExpression [
-        embedded_braced_expression_left_brace;
-        embedded_braced_expression_expression;
-        embedded_braced_expression_right_brace;
-      ]
-
-    let make_list_expression
-      list_keyword
-      list_left_paren
-      list_members
-      list_right_paren
-    =
-      from_children SyntaxKind.ListExpression [
-        list_keyword;
-        list_left_paren;
-        list_members;
-        list_right_paren;
-      ]
-
-    let make_collection_literal_expression
-      collection_literal_name
-      collection_literal_left_brace
-      collection_literal_initializers
-      collection_literal_right_brace
-    =
-      from_children SyntaxKind.CollectionLiteralExpression [
-        collection_literal_name;
-        collection_literal_left_brace;
-        collection_literal_initializers;
-        collection_literal_right_brace;
-      ]
-
-    let make_object_creation_expression
-      object_creation_new_keyword
-      object_creation_type
-      object_creation_left_paren
-      object_creation_argument_list
-      object_creation_right_paren
-    =
-      from_children SyntaxKind.ObjectCreationExpression [
-        object_creation_new_keyword;
-        object_creation_type;
-        object_creation_left_paren;
-        object_creation_argument_list;
-        object_creation_right_paren;
-      ]
-
-    let make_array_creation_expression
-      array_creation_left_bracket
-      array_creation_members
-      array_creation_right_bracket
-    =
-      from_children SyntaxKind.ArrayCreationExpression [
-        array_creation_left_bracket;
-        array_creation_members;
-        array_creation_right_bracket;
-      ]
-
-    let make_array_intrinsic_expression
-      array_intrinsic_keyword
-      array_intrinsic_left_paren
-      array_intrinsic_members
-      array_intrinsic_right_paren
-    =
-      from_children SyntaxKind.ArrayIntrinsicExpression [
-        array_intrinsic_keyword;
-        array_intrinsic_left_paren;
-        array_intrinsic_members;
-        array_intrinsic_right_paren;
-      ]
-
-    let make_darray_intrinsic_expression
-      darray_intrinsic_keyword
-      darray_intrinsic_left_bracket
-      darray_intrinsic_members
-      darray_intrinsic_right_bracket
-    =
-      from_children SyntaxKind.DarrayIntrinsicExpression [
-        darray_intrinsic_keyword;
-        darray_intrinsic_left_bracket;
-        darray_intrinsic_members;
-        darray_intrinsic_right_bracket;
-      ]
-
-    let make_dictionary_intrinsic_expression
-      dictionary_intrinsic_keyword
-      dictionary_intrinsic_left_bracket
-      dictionary_intrinsic_members
-      dictionary_intrinsic_right_bracket
-    =
-      from_children SyntaxKind.DictionaryIntrinsicExpression [
-        dictionary_intrinsic_keyword;
-        dictionary_intrinsic_left_bracket;
-        dictionary_intrinsic_members;
-        dictionary_intrinsic_right_bracket;
-      ]
-
-    let make_keyset_intrinsic_expression
-      keyset_intrinsic_keyword
-      keyset_intrinsic_left_bracket
-      keyset_intrinsic_members
-      keyset_intrinsic_right_bracket
-    =
-      from_children SyntaxKind.KeysetIntrinsicExpression [
-        keyset_intrinsic_keyword;
-        keyset_intrinsic_left_bracket;
-        keyset_intrinsic_members;
-        keyset_intrinsic_right_bracket;
-      ]
-
-    let make_varray_intrinsic_expression
-      varray_intrinsic_keyword
-      varray_intrinsic_left_bracket
-      varray_intrinsic_members
-      varray_intrinsic_right_bracket
-    =
-      from_children SyntaxKind.VarrayIntrinsicExpression [
-        varray_intrinsic_keyword;
-        varray_intrinsic_left_bracket;
-        varray_intrinsic_members;
-        varray_intrinsic_right_bracket;
-      ]
-
-    let make_vector_intrinsic_expression
-      vector_intrinsic_keyword
-      vector_intrinsic_left_bracket
-      vector_intrinsic_members
-      vector_intrinsic_right_bracket
-    =
-      from_children SyntaxKind.VectorIntrinsicExpression [
-        vector_intrinsic_keyword;
-        vector_intrinsic_left_bracket;
-        vector_intrinsic_members;
-        vector_intrinsic_right_bracket;
-      ]
-
-    let make_element_initializer
-      element_key
-      element_arrow
-      element_value
-    =
-      from_children SyntaxKind.ElementInitializer [
-        element_key;
-        element_arrow;
-        element_value;
-      ]
-
-    let make_subscript_expression
-      subscript_receiver
-      subscript_left_bracket
-      subscript_index
-      subscript_right_bracket
-    =
-      from_children SyntaxKind.SubscriptExpression [
-        subscript_receiver;
-        subscript_left_bracket;
-        subscript_index;
-        subscript_right_bracket;
-      ]
-
-    let make_embedded_subscript_expression
-      embedded_subscript_receiver
-      embedded_subscript_left_bracket
-      embedded_subscript_index
-      embedded_subscript_right_bracket
-    =
-      from_children SyntaxKind.EmbeddedSubscriptExpression [
-        embedded_subscript_receiver;
-        embedded_subscript_left_bracket;
-        embedded_subscript_index;
-        embedded_subscript_right_bracket;
-      ]
-
-    let make_awaitable_creation_expression
-      awaitable_async
-      awaitable_coroutine
-      awaitable_compound_statement
-    =
-      from_children SyntaxKind.AwaitableCreationExpression [
-        awaitable_async;
-        awaitable_coroutine;
-        awaitable_compound_statement;
-      ]
-
-    let make_xhp_children_declaration
-      xhp_children_keyword
-      xhp_children_expression
-      xhp_children_semicolon
-    =
-      from_children SyntaxKind.XHPChildrenDeclaration [
-        xhp_children_keyword;
-        xhp_children_expression;
-        xhp_children_semicolon;
-      ]
-
-    let make_xhp_children_parenthesized_list
-      xhp_children_list_left_paren
-      xhp_children_list_xhp_children
-      xhp_children_list_right_paren
-    =
-      from_children SyntaxKind.XHPChildrenParenthesizedList [
-        xhp_children_list_left_paren;
-        xhp_children_list_xhp_children;
-        xhp_children_list_right_paren;
-      ]
-
-    let make_xhp_category_declaration
-      xhp_category_keyword
-      xhp_category_categories
-      xhp_category_semicolon
-    =
-      from_children SyntaxKind.XHPCategoryDeclaration [
-        xhp_category_keyword;
-        xhp_category_categories;
-        xhp_category_semicolon;
-      ]
-
-    let make_xhp_enum_type
-      xhp_enum_keyword
-      xhp_enum_left_brace
-      xhp_enum_values
-      xhp_enum_right_brace
-    =
-      from_children SyntaxKind.XHPEnumType [
-        xhp_enum_keyword;
-        xhp_enum_left_brace;
-        xhp_enum_values;
-        xhp_enum_right_brace;
-      ]
-
-    let make_xhp_required
-      xhp_required_at
-      xhp_required_keyword
-    =
-      from_children SyntaxKind.XHPRequired [
-        xhp_required_at;
-        xhp_required_keyword;
-      ]
-
-    let make_xhp_class_attribute_declaration
-      xhp_attribute_keyword
-      xhp_attribute_attributes
-      xhp_attribute_semicolon
-    =
-      from_children SyntaxKind.XHPClassAttributeDeclaration [
-        xhp_attribute_keyword;
-        xhp_attribute_attributes;
-        xhp_attribute_semicolon;
-      ]
-
-    let make_xhp_class_attribute
-      xhp_attribute_decl_type
-      xhp_attribute_decl_name
-      xhp_attribute_decl_initializer
-      xhp_attribute_decl_required
-    =
-      from_children SyntaxKind.XHPClassAttribute [
-        xhp_attribute_decl_type;
-        xhp_attribute_decl_name;
-        xhp_attribute_decl_initializer;
-        xhp_attribute_decl_required;
-      ]
-
-    let make_xhp_simple_class_attribute
-      xhp_simple_class_attribute_type
-    =
-      from_children SyntaxKind.XHPSimpleClassAttribute [
-        xhp_simple_class_attribute_type;
-      ]
-
-    let make_xhp_attribute
-      xhp_attribute_name
-      xhp_attribute_equal
-      xhp_attribute_expression
-    =
-      from_children SyntaxKind.XHPAttribute [
-        xhp_attribute_name;
-        xhp_attribute_equal;
-        xhp_attribute_expression;
-      ]
-
-    let make_xhp_open
-      xhp_open_left_angle
-      xhp_open_name
-      xhp_open_attributes
-      xhp_open_right_angle
-    =
-      from_children SyntaxKind.XHPOpen [
-        xhp_open_left_angle;
-        xhp_open_name;
-        xhp_open_attributes;
-        xhp_open_right_angle;
-      ]
-
-    let make_xhp_expression
-      xhp_open
-      xhp_body
-      xhp_close
-    =
-      from_children SyntaxKind.XHPExpression [
-        xhp_open;
-        xhp_body;
-        xhp_close;
-      ]
-
-    let make_xhp_close
-      xhp_close_left_angle
-      xhp_close_name
-      xhp_close_right_angle
-    =
-      from_children SyntaxKind.XHPClose [
-        xhp_close_left_angle;
-        xhp_close_name;
-        xhp_close_right_angle;
-      ]
-
-    let make_type_constant
-      type_constant_left_type
-      type_constant_separator
-      type_constant_right_type
-    =
-      from_children SyntaxKind.TypeConstant [
-        type_constant_left_type;
-        type_constant_separator;
-        type_constant_right_type;
-      ]
-
-    let make_vector_type_specifier
-      vector_type_keyword
-      vector_type_left_angle
-      vector_type_type
-      vector_type_trailing_comma
-      vector_type_right_angle
-    =
-      from_children SyntaxKind.VectorTypeSpecifier [
-        vector_type_keyword;
-        vector_type_left_angle;
-        vector_type_type;
-        vector_type_trailing_comma;
-        vector_type_right_angle;
-      ]
-
-    let make_keyset_type_specifier
-      keyset_type_keyword
-      keyset_type_left_angle
-      keyset_type_type
-      keyset_type_trailing_comma
-      keyset_type_right_angle
-    =
-      from_children SyntaxKind.KeysetTypeSpecifier [
-        keyset_type_keyword;
-        keyset_type_left_angle;
-        keyset_type_type;
-        keyset_type_trailing_comma;
-        keyset_type_right_angle;
-      ]
-
-    let make_tuple_type_explicit_specifier
-      tuple_type_keyword
-      tuple_type_left_angle
-      tuple_type_types
-      tuple_type_right_angle
-    =
-      from_children SyntaxKind.TupleTypeExplicitSpecifier [
-        tuple_type_keyword;
-        tuple_type_left_angle;
-        tuple_type_types;
-        tuple_type_right_angle;
-      ]
-
-    let make_varray_type_specifier
-      varray_keyword
-      varray_left_angle
-      varray_type
-      varray_trailing_comma
-      varray_right_angle
-    =
-      from_children SyntaxKind.VarrayTypeSpecifier [
-        varray_keyword;
-        varray_left_angle;
-        varray_type;
-        varray_trailing_comma;
-        varray_right_angle;
-      ]
-
-    let make_vector_array_type_specifier
-      vector_array_keyword
-      vector_array_left_angle
-      vector_array_type
-      vector_array_right_angle
-    =
-      from_children SyntaxKind.VectorArrayTypeSpecifier [
-        vector_array_keyword;
-        vector_array_left_angle;
-        vector_array_type;
-        vector_array_right_angle;
-      ]
-
-    let make_type_parameter
-      type_variance
-      type_name
-      type_constraints
-    =
-      from_children SyntaxKind.TypeParameter [
-        type_variance;
-        type_name;
-        type_constraints;
-      ]
-
-    let make_type_constraint
-      constraint_keyword
-      constraint_type
-    =
-      from_children SyntaxKind.TypeConstraint [
-        constraint_keyword;
-        constraint_type;
-      ]
-
-    let make_darray_type_specifier
-      darray_keyword
-      darray_left_angle
-      darray_key
-      darray_comma
-      darray_value
-      darray_trailing_comma
-      darray_right_angle
-    =
-      from_children SyntaxKind.DarrayTypeSpecifier [
-        darray_keyword;
-        darray_left_angle;
-        darray_key;
-        darray_comma;
-        darray_value;
-        darray_trailing_comma;
-        darray_right_angle;
-      ]
-
-    let make_map_array_type_specifier
-      map_array_keyword
-      map_array_left_angle
-      map_array_key
-      map_array_comma
-      map_array_value
-      map_array_right_angle
-    =
-      from_children SyntaxKind.MapArrayTypeSpecifier [
-        map_array_keyword;
-        map_array_left_angle;
-        map_array_key;
-        map_array_comma;
-        map_array_value;
-        map_array_right_angle;
-      ]
-
-    let make_dictionary_type_specifier
-      dictionary_type_keyword
-      dictionary_type_left_angle
-      dictionary_type_members
-      dictionary_type_right_angle
-    =
-      from_children SyntaxKind.DictionaryTypeSpecifier [
-        dictionary_type_keyword;
-        dictionary_type_left_angle;
-        dictionary_type_members;
-        dictionary_type_right_angle;
-      ]
-
-    let make_closure_type_specifier
-      closure_outer_left_paren
-      closure_coroutine
-      closure_function_keyword
-      closure_inner_left_paren
-      closure_parameter_types
-      closure_inner_right_paren
-      closure_colon
-      closure_return_type
-      closure_outer_right_paren
-    =
-      from_children SyntaxKind.ClosureTypeSpecifier [
-        closure_outer_left_paren;
-        closure_coroutine;
-        closure_function_keyword;
-        closure_inner_left_paren;
-        closure_parameter_types;
-        closure_inner_right_paren;
-        closure_colon;
-        closure_return_type;
-        closure_outer_right_paren;
-      ]
-
-    let make_classname_type_specifier
-      classname_keyword
-      classname_left_angle
-      classname_type
-      classname_trailing_comma
-      classname_right_angle
-    =
-      from_children SyntaxKind.ClassnameTypeSpecifier [
-        classname_keyword;
-        classname_left_angle;
-        classname_type;
-        classname_trailing_comma;
-        classname_right_angle;
-      ]
-
-    let make_field_specifier
-      field_question
-      field_name
-      field_arrow
-      field_type
-    =
-      from_children SyntaxKind.FieldSpecifier [
-        field_question;
-        field_name;
-        field_arrow;
-        field_type;
-      ]
-
-    let make_field_initializer
-      field_initializer_name
-      field_initializer_arrow
-      field_initializer_value
-    =
-      from_children SyntaxKind.FieldInitializer [
-        field_initializer_name;
-        field_initializer_arrow;
-        field_initializer_value;
-      ]
-
-    let make_shape_type_specifier
-      shape_type_keyword
-      shape_type_left_paren
-      shape_type_fields
-      shape_type_ellipsis
-      shape_type_right_paren
-    =
-      from_children SyntaxKind.ShapeTypeSpecifier [
-        shape_type_keyword;
-        shape_type_left_paren;
-        shape_type_fields;
-        shape_type_ellipsis;
-        shape_type_right_paren;
-      ]
-
-    let make_shape_expression
-      shape_expression_keyword
-      shape_expression_left_paren
-      shape_expression_fields
-      shape_expression_right_paren
-    =
-      from_children SyntaxKind.ShapeExpression [
-        shape_expression_keyword;
-        shape_expression_left_paren;
-        shape_expression_fields;
-        shape_expression_right_paren;
-      ]
-
-    let make_tuple_expression
-      tuple_expression_keyword
-      tuple_expression_left_paren
-      tuple_expression_items
-      tuple_expression_right_paren
-    =
-      from_children SyntaxKind.TupleExpression [
-        tuple_expression_keyword;
-        tuple_expression_left_paren;
-        tuple_expression_items;
-        tuple_expression_right_paren;
-      ]
-
-    let make_generic_type_specifier
-      generic_class_type
-      generic_argument_list
-    =
-      from_children SyntaxKind.GenericTypeSpecifier [
-        generic_class_type;
-        generic_argument_list;
-      ]
-
-    let make_nullable_type_specifier
-      nullable_question
-      nullable_type
-    =
-      from_children SyntaxKind.NullableTypeSpecifier [
-        nullable_question;
-        nullable_type;
-      ]
-
-    let make_soft_type_specifier
-      soft_at
-      soft_type
-    =
-      from_children SyntaxKind.SoftTypeSpecifier [
-        soft_at;
-        soft_type;
-      ]
-
-    let make_type_arguments
-      type_arguments_left_angle
-      type_arguments_types
-      type_arguments_right_angle
-    =
-      from_children SyntaxKind.TypeArguments [
-        type_arguments_left_angle;
-        type_arguments_types;
-        type_arguments_right_angle;
-      ]
-
-    let make_type_parameters
-      type_parameters_left_angle
-      type_parameters_parameters
-      type_parameters_right_angle
-    =
-      from_children SyntaxKind.TypeParameters [
-        type_parameters_left_angle;
-        type_parameters_parameters;
-        type_parameters_right_angle;
-      ]
-
-    let make_tuple_type_specifier
-      tuple_left_paren
-      tuple_types
-      tuple_right_paren
-    =
-      from_children SyntaxKind.TupleTypeSpecifier [
-        tuple_left_paren;
-        tuple_types;
-        tuple_right_paren;
-      ]
-
-    let make_error
-      error_error
-    =
-      from_children SyntaxKind.ErrorSyntax [
-        error_error;
-      ]
-
-    let make_list_item
-      list_item
-      list_separator
-    =
-      from_children SyntaxKind.ListItem [
-        list_item;
-        list_separator;
-      ]
-
-
-
-      (* Takes a node and a function from token to token and returns a node with
-      the function applied to the leading token, if there is one. *)
-      let modify_leading_token node f =
-        let rec aux nodes =
-          match nodes with
-          | [] -> (nodes, false)
-          | h :: t ->
-            begin
-            match get_token h with
-            | Some token ->
-              let new_token = f token in
-              let new_token = make_token new_token in
-              ((new_token :: t), true)
-            | None ->
-              let (new_children, success) = aux (children h) in
-              if success then
-                let new_head = from_children (kind h) new_children in
-                ((new_head :: t), true)
-              else
-                let (new_tail, success) = aux t in
-                if success then
-                  ((h :: new_tail), true)
-                else
-                  (nodes, false)
-              end in
-        let (results, _) = aux [node] in
-        match results with
-        | [] -> failwith
-          "how did we get a smaller list out than we started with?"
-        | h :: [] -> h
-        | _ -> failwith
-          "how did we get a larger list out than we started with?"
-
-      (* Takes a node and a function from token to token and returns a node with
-      the function applied to the trailing token, if there is one. *)
-      let modify_trailing_token node f =
-        (* We have a list of nodes, reversed, so the rightmost node is first. *)
-        let rec aux nodes =
-          match nodes with
-          | [] -> (nodes, false)
-          | h :: t ->
-            begin
-            match get_token h with
-            | Some token ->
-              let new_token = f token in
-              let new_token = make_token new_token in
-              ((new_token :: t), true)
-            | None ->
-              let (new_children, success) = aux (List.rev (children h)) in
-              if success then
-                let new_children = List.rev new_children in
-                let new_head = from_children (kind h) new_children in
-                ((new_head :: t), true)
-              else
-                let (new_tail, success) = aux t in
-                if success then
-                  ((h :: new_tail), true)
-                else
-                  (nodes, false)
-              end in
-        let (results, _) = aux [node] in
-        match results with
-        | [] -> failwith
-          "how did we get a smaller list out than we started with?"
-        | h :: [] -> h
-        | _ -> failwith
-          "how did we get a larger list out than we started with?"
+        | [] -> make_missing text offset
+        | _ -> from_children text offset SyntaxKind.SyntaxList items
+
+      let make_end_of_file
+        end_of_file_token
+      =
+        let syntax = EndOfFile {
+          end_of_file_token;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_script
+        script_declarations
+      =
+        let syntax = Script {
+          script_declarations;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_qualified_name
+        qualified_name_parts
+      =
+        let syntax = QualifiedName {
+          qualified_name_parts;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_simple_type_specifier
+        simple_type_specifier
+      =
+        let syntax = SimpleTypeSpecifier {
+          simple_type_specifier;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_literal_expression
+        literal_expression
+      =
+        let syntax = LiteralExpression {
+          literal_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_prefixed_string_expression
+        prefixed_string_name
+        prefixed_string_str
+      =
+        let syntax = PrefixedStringExpression {
+          prefixed_string_name;
+          prefixed_string_str;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_variable_expression
+        variable_expression
+      =
+        let syntax = VariableExpression {
+          variable_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pipe_variable_expression
+        pipe_variable_expression
+      =
+        let syntax = PipeVariableExpression {
+          pipe_variable_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_file_attribute_specification
+        file_attribute_specification_left_double_angle
+        file_attribute_specification_keyword
+        file_attribute_specification_colon
+        file_attribute_specification_attributes
+        file_attribute_specification_right_double_angle
+      =
+        let syntax = FileAttributeSpecification {
+          file_attribute_specification_left_double_angle;
+          file_attribute_specification_keyword;
+          file_attribute_specification_colon;
+          file_attribute_specification_attributes;
+          file_attribute_specification_right_double_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_enum_declaration
+        enum_attribute_spec
+        enum_keyword
+        enum_name
+        enum_colon
+        enum_base
+        enum_type
+        enum_left_brace
+        enum_enumerators
+        enum_right_brace
+      =
+        let syntax = EnumDeclaration {
+          enum_attribute_spec;
+          enum_keyword;
+          enum_name;
+          enum_colon;
+          enum_base;
+          enum_type;
+          enum_left_brace;
+          enum_enumerators;
+          enum_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_enumerator
+        enumerator_name
+        enumerator_equal
+        enumerator_value
+        enumerator_semicolon
+      =
+        let syntax = Enumerator {
+          enumerator_name;
+          enumerator_equal;
+          enumerator_value;
+          enumerator_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_record_declaration
+        record_attribute_spec
+        record_keyword
+        record_name
+        record_left_brace
+        record_fields
+        record_right_brace
+      =
+        let syntax = RecordDeclaration {
+          record_attribute_spec;
+          record_keyword;
+          record_name;
+          record_left_brace;
+          record_fields;
+          record_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_record_field
+        record_field_name
+        record_field_colon
+        record_field_type
+        record_field_init
+        record_field_comma
+      =
+        let syntax = RecordField {
+          record_field_name;
+          record_field_colon;
+          record_field_type;
+          record_field_init;
+          record_field_comma;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_alias_declaration
+        alias_attribute_spec
+        alias_keyword
+        alias_name
+        alias_generic_parameter
+        alias_constraint
+        alias_equal
+        alias_type
+        alias_semicolon
+      =
+        let syntax = AliasDeclaration {
+          alias_attribute_spec;
+          alias_keyword;
+          alias_name;
+          alias_generic_parameter;
+          alias_constraint;
+          alias_equal;
+          alias_type;
+          alias_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_property_declaration
+        property_attribute_spec
+        property_modifiers
+        property_type
+        property_declarators
+        property_semicolon
+      =
+        let syntax = PropertyDeclaration {
+          property_attribute_spec;
+          property_modifiers;
+          property_type;
+          property_declarators;
+          property_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_property_declarator
+        property_name
+        property_initializer
+      =
+        let syntax = PropertyDeclarator {
+          property_name;
+          property_initializer;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_namespace_declaration
+        namespace_keyword
+        namespace_name
+        namespace_body
+      =
+        let syntax = NamespaceDeclaration {
+          namespace_keyword;
+          namespace_name;
+          namespace_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_namespace_body
+        namespace_left_brace
+        namespace_declarations
+        namespace_right_brace
+      =
+        let syntax = NamespaceBody {
+          namespace_left_brace;
+          namespace_declarations;
+          namespace_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_namespace_empty_body
+        namespace_semicolon
+      =
+        let syntax = NamespaceEmptyBody {
+          namespace_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_namespace_use_declaration
+        namespace_use_keyword
+        namespace_use_kind
+        namespace_use_clauses
+        namespace_use_semicolon
+      =
+        let syntax = NamespaceUseDeclaration {
+          namespace_use_keyword;
+          namespace_use_kind;
+          namespace_use_clauses;
+          namespace_use_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_namespace_group_use_declaration
+        namespace_group_use_keyword
+        namespace_group_use_kind
+        namespace_group_use_prefix
+        namespace_group_use_left_brace
+        namespace_group_use_clauses
+        namespace_group_use_right_brace
+        namespace_group_use_semicolon
+      =
+        let syntax = NamespaceGroupUseDeclaration {
+          namespace_group_use_keyword;
+          namespace_group_use_kind;
+          namespace_group_use_prefix;
+          namespace_group_use_left_brace;
+          namespace_group_use_clauses;
+          namespace_group_use_right_brace;
+          namespace_group_use_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_namespace_use_clause
+        namespace_use_clause_kind
+        namespace_use_name
+        namespace_use_as
+        namespace_use_alias
+      =
+        let syntax = NamespaceUseClause {
+          namespace_use_clause_kind;
+          namespace_use_name;
+          namespace_use_as;
+          namespace_use_alias;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_function_declaration
+        function_attribute_spec
+        function_declaration_header
+        function_body
+      =
+        let syntax = FunctionDeclaration {
+          function_attribute_spec;
+          function_declaration_header;
+          function_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_function_declaration_header
+        function_modifiers
+        function_keyword
+        function_name
+        function_type_parameter_list
+        function_left_paren
+        function_parameter_list
+        function_right_paren
+        function_colon
+        function_type
+        function_where_clause
+      =
+        let syntax = FunctionDeclarationHeader {
+          function_modifiers;
+          function_keyword;
+          function_name;
+          function_type_parameter_list;
+          function_left_paren;
+          function_parameter_list;
+          function_right_paren;
+          function_colon;
+          function_type;
+          function_where_clause;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_where_clause
+        where_clause_keyword
+        where_clause_constraints
+      =
+        let syntax = WhereClause {
+          where_clause_keyword;
+          where_clause_constraints;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_where_constraint
+        where_constraint_left_type
+        where_constraint_operator
+        where_constraint_right_type
+      =
+        let syntax = WhereConstraint {
+          where_constraint_left_type;
+          where_constraint_operator;
+          where_constraint_right_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_methodish_declaration
+        methodish_attribute
+        methodish_function_decl_header
+        methodish_function_body
+        methodish_semicolon
+      =
+        let syntax = MethodishDeclaration {
+          methodish_attribute;
+          methodish_function_decl_header;
+          methodish_function_body;
+          methodish_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_methodish_trait_resolution
+        methodish_trait_attribute
+        methodish_trait_function_decl_header
+        methodish_trait_equal
+        methodish_trait_name
+        methodish_trait_semicolon
+      =
+        let syntax = MethodishTraitResolution {
+          methodish_trait_attribute;
+          methodish_trait_function_decl_header;
+          methodish_trait_equal;
+          methodish_trait_name;
+          methodish_trait_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_classish_declaration
+        classish_attribute
+        classish_modifiers
+        classish_keyword
+        classish_name
+        classish_type_parameters
+        classish_extends_keyword
+        classish_extends_list
+        classish_implements_keyword
+        classish_implements_list
+        classish_body
+      =
+        let syntax = ClassishDeclaration {
+          classish_attribute;
+          classish_modifiers;
+          classish_keyword;
+          classish_name;
+          classish_type_parameters;
+          classish_extends_keyword;
+          classish_extends_list;
+          classish_implements_keyword;
+          classish_implements_list;
+          classish_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_classish_body
+        classish_body_left_brace
+        classish_body_elements
+        classish_body_right_brace
+      =
+        let syntax = ClassishBody {
+          classish_body_left_brace;
+          classish_body_elements;
+          classish_body_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_trait_use_precedence_item
+        trait_use_precedence_item_name
+        trait_use_precedence_item_keyword
+        trait_use_precedence_item_removed_names
+      =
+        let syntax = TraitUsePrecedenceItem {
+          trait_use_precedence_item_name;
+          trait_use_precedence_item_keyword;
+          trait_use_precedence_item_removed_names;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_trait_use_alias_item
+        trait_use_alias_item_aliasing_name
+        trait_use_alias_item_keyword
+        trait_use_alias_item_modifiers
+        trait_use_alias_item_aliased_name
+      =
+        let syntax = TraitUseAliasItem {
+          trait_use_alias_item_aliasing_name;
+          trait_use_alias_item_keyword;
+          trait_use_alias_item_modifiers;
+          trait_use_alias_item_aliased_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_trait_use_conflict_resolution
+        trait_use_conflict_resolution_keyword
+        trait_use_conflict_resolution_names
+        trait_use_conflict_resolution_left_brace
+        trait_use_conflict_resolution_clauses
+        trait_use_conflict_resolution_right_brace
+      =
+        let syntax = TraitUseConflictResolution {
+          trait_use_conflict_resolution_keyword;
+          trait_use_conflict_resolution_names;
+          trait_use_conflict_resolution_left_brace;
+          trait_use_conflict_resolution_clauses;
+          trait_use_conflict_resolution_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_trait_use
+        trait_use_keyword
+        trait_use_names
+        trait_use_semicolon
+      =
+        let syntax = TraitUse {
+          trait_use_keyword;
+          trait_use_names;
+          trait_use_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_require_clause
+        require_keyword
+        require_kind
+        require_name
+        require_semicolon
+      =
+        let syntax = RequireClause {
+          require_keyword;
+          require_kind;
+          require_name;
+          require_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_const_declaration
+        const_visibility
+        const_abstract
+        const_keyword
+        const_type_specifier
+        const_declarators
+        const_semicolon
+      =
+        let syntax = ConstDeclaration {
+          const_visibility;
+          const_abstract;
+          const_keyword;
+          const_type_specifier;
+          const_declarators;
+          const_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_constant_declarator
+        constant_declarator_name
+        constant_declarator_initializer
+      =
+        let syntax = ConstantDeclarator {
+          constant_declarator_name;
+          constant_declarator_initializer;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_type_const_declaration
+        type_const_attribute_spec
+        type_const_abstract
+        type_const_keyword
+        type_const_type_keyword
+        type_const_name
+        type_const_type_parameters
+        type_const_type_constraint
+        type_const_equal
+        type_const_type_specifier
+        type_const_semicolon
+      =
+        let syntax = TypeConstDeclaration {
+          type_const_attribute_spec;
+          type_const_abstract;
+          type_const_keyword;
+          type_const_type_keyword;
+          type_const_name;
+          type_const_type_parameters;
+          type_const_type_constraint;
+          type_const_equal;
+          type_const_type_specifier;
+          type_const_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_decorated_expression
+        decorated_expression_decorator
+        decorated_expression_expression
+      =
+        let syntax = DecoratedExpression {
+          decorated_expression_decorator;
+          decorated_expression_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_parameter_declaration
+        parameter_attribute
+        parameter_visibility
+        parameter_call_convention
+        parameter_type
+        parameter_name
+        parameter_default_value
+      =
+        let syntax = ParameterDeclaration {
+          parameter_attribute;
+          parameter_visibility;
+          parameter_call_convention;
+          parameter_type;
+          parameter_name;
+          parameter_default_value;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_variadic_parameter
+        variadic_parameter_call_convention
+        variadic_parameter_type
+        variadic_parameter_ellipsis
+      =
+        let syntax = VariadicParameter {
+          variadic_parameter_call_convention;
+          variadic_parameter_type;
+          variadic_parameter_ellipsis;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_attribute_specification
+        attribute_specification_left_double_angle
+        attribute_specification_attributes
+        attribute_specification_right_double_angle
+      =
+        let syntax = AttributeSpecification {
+          attribute_specification_left_double_angle;
+          attribute_specification_attributes;
+          attribute_specification_right_double_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_inclusion_expression
+        inclusion_require
+        inclusion_filename
+      =
+        let syntax = InclusionExpression {
+          inclusion_require;
+          inclusion_filename;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_inclusion_directive
+        inclusion_expression
+        inclusion_semicolon
+      =
+        let syntax = InclusionDirective {
+          inclusion_expression;
+          inclusion_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_compound_statement
+        compound_left_brace
+        compound_statements
+        compound_right_brace
+      =
+        let syntax = CompoundStatement {
+          compound_left_brace;
+          compound_statements;
+          compound_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_alternate_loop_statement
+        alternate_loop_opening_colon
+        alternate_loop_statements
+        alternate_loop_closing_keyword
+        alternate_loop_closing_semicolon
+      =
+        let syntax = AlternateLoopStatement {
+          alternate_loop_opening_colon;
+          alternate_loop_statements;
+          alternate_loop_closing_keyword;
+          alternate_loop_closing_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_expression_statement
+        expression_statement_expression
+        expression_statement_semicolon
+      =
+        let syntax = ExpressionStatement {
+          expression_statement_expression;
+          expression_statement_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_markup_section
+        markup_prefix
+        markup_text
+        markup_suffix
+        markup_expression
+      =
+        let syntax = MarkupSection {
+          markup_prefix;
+          markup_text;
+          markup_suffix;
+          markup_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_markup_suffix
+        markup_suffix_less_than_question
+        markup_suffix_name
+      =
+        let syntax = MarkupSuffix {
+          markup_suffix_less_than_question;
+          markup_suffix_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_unset_statement
+        unset_keyword
+        unset_left_paren
+        unset_variables
+        unset_right_paren
+        unset_semicolon
+      =
+        let syntax = UnsetStatement {
+          unset_keyword;
+          unset_left_paren;
+          unset_variables;
+          unset_right_paren;
+          unset_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_let_statement
+        let_statement_keyword
+        let_statement_name
+        let_statement_colon
+        let_statement_type
+        let_statement_initializer
+        let_statement_semicolon
+      =
+        let syntax = LetStatement {
+          let_statement_keyword;
+          let_statement_name;
+          let_statement_colon;
+          let_statement_type;
+          let_statement_initializer;
+          let_statement_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_using_statement_block_scoped
+        using_block_await_keyword
+        using_block_using_keyword
+        using_block_left_paren
+        using_block_expressions
+        using_block_right_paren
+        using_block_body
+      =
+        let syntax = UsingStatementBlockScoped {
+          using_block_await_keyword;
+          using_block_using_keyword;
+          using_block_left_paren;
+          using_block_expressions;
+          using_block_right_paren;
+          using_block_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_using_statement_function_scoped
+        using_function_await_keyword
+        using_function_using_keyword
+        using_function_expression
+        using_function_semicolon
+      =
+        let syntax = UsingStatementFunctionScoped {
+          using_function_await_keyword;
+          using_function_using_keyword;
+          using_function_expression;
+          using_function_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_declare_directive_statement
+        declare_directive_keyword
+        declare_directive_left_paren
+        declare_directive_expression
+        declare_directive_right_paren
+        declare_directive_semicolon
+      =
+        let syntax = DeclareDirectiveStatement {
+          declare_directive_keyword;
+          declare_directive_left_paren;
+          declare_directive_expression;
+          declare_directive_right_paren;
+          declare_directive_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_declare_block_statement
+        declare_block_keyword
+        declare_block_left_paren
+        declare_block_expression
+        declare_block_right_paren
+        declare_block_body
+      =
+        let syntax = DeclareBlockStatement {
+          declare_block_keyword;
+          declare_block_left_paren;
+          declare_block_expression;
+          declare_block_right_paren;
+          declare_block_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_while_statement
+        while_keyword
+        while_left_paren
+        while_condition
+        while_right_paren
+        while_body
+      =
+        let syntax = WhileStatement {
+          while_keyword;
+          while_left_paren;
+          while_condition;
+          while_right_paren;
+          while_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_if_statement
+        if_keyword
+        if_left_paren
+        if_condition
+        if_right_paren
+        if_statement
+        if_elseif_clauses
+        if_else_clause
+      =
+        let syntax = IfStatement {
+          if_keyword;
+          if_left_paren;
+          if_condition;
+          if_right_paren;
+          if_statement;
+          if_elseif_clauses;
+          if_else_clause;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_elseif_clause
+        elseif_keyword
+        elseif_left_paren
+        elseif_condition
+        elseif_right_paren
+        elseif_statement
+      =
+        let syntax = ElseifClause {
+          elseif_keyword;
+          elseif_left_paren;
+          elseif_condition;
+          elseif_right_paren;
+          elseif_statement;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_else_clause
+        else_keyword
+        else_statement
+      =
+        let syntax = ElseClause {
+          else_keyword;
+          else_statement;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_alternate_if_statement
+        alternate_if_keyword
+        alternate_if_left_paren
+        alternate_if_condition
+        alternate_if_right_paren
+        alternate_if_colon
+        alternate_if_statement
+        alternate_if_elseif_clauses
+        alternate_if_else_clause
+        alternate_if_endif_keyword
+        alternate_if_semicolon
+      =
+        let syntax = AlternateIfStatement {
+          alternate_if_keyword;
+          alternate_if_left_paren;
+          alternate_if_condition;
+          alternate_if_right_paren;
+          alternate_if_colon;
+          alternate_if_statement;
+          alternate_if_elseif_clauses;
+          alternate_if_else_clause;
+          alternate_if_endif_keyword;
+          alternate_if_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_alternate_elseif_clause
+        alternate_elseif_keyword
+        alternate_elseif_left_paren
+        alternate_elseif_condition
+        alternate_elseif_right_paren
+        alternate_elseif_colon
+        alternate_elseif_statement
+      =
+        let syntax = AlternateElseifClause {
+          alternate_elseif_keyword;
+          alternate_elseif_left_paren;
+          alternate_elseif_condition;
+          alternate_elseif_right_paren;
+          alternate_elseif_colon;
+          alternate_elseif_statement;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_alternate_else_clause
+        alternate_else_keyword
+        alternate_else_colon
+        alternate_else_statement
+      =
+        let syntax = AlternateElseClause {
+          alternate_else_keyword;
+          alternate_else_colon;
+          alternate_else_statement;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_try_statement
+        try_keyword
+        try_compound_statement
+        try_catch_clauses
+        try_finally_clause
+      =
+        let syntax = TryStatement {
+          try_keyword;
+          try_compound_statement;
+          try_catch_clauses;
+          try_finally_clause;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_catch_clause
+        catch_keyword
+        catch_left_paren
+        catch_type
+        catch_variable
+        catch_right_paren
+        catch_body
+      =
+        let syntax = CatchClause {
+          catch_keyword;
+          catch_left_paren;
+          catch_type;
+          catch_variable;
+          catch_right_paren;
+          catch_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_finally_clause
+        finally_keyword
+        finally_body
+      =
+        let syntax = FinallyClause {
+          finally_keyword;
+          finally_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_do_statement
+        do_keyword
+        do_body
+        do_while_keyword
+        do_left_paren
+        do_condition
+        do_right_paren
+        do_semicolon
+      =
+        let syntax = DoStatement {
+          do_keyword;
+          do_body;
+          do_while_keyword;
+          do_left_paren;
+          do_condition;
+          do_right_paren;
+          do_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_for_statement
+        for_keyword
+        for_left_paren
+        for_initializer
+        for_first_semicolon
+        for_control
+        for_second_semicolon
+        for_end_of_loop
+        for_right_paren
+        for_body
+      =
+        let syntax = ForStatement {
+          for_keyword;
+          for_left_paren;
+          for_initializer;
+          for_first_semicolon;
+          for_control;
+          for_second_semicolon;
+          for_end_of_loop;
+          for_right_paren;
+          for_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_foreach_statement
+        foreach_keyword
+        foreach_left_paren
+        foreach_collection
+        foreach_await_keyword
+        foreach_as
+        foreach_key
+        foreach_arrow
+        foreach_value
+        foreach_right_paren
+        foreach_body
+      =
+        let syntax = ForeachStatement {
+          foreach_keyword;
+          foreach_left_paren;
+          foreach_collection;
+          foreach_await_keyword;
+          foreach_as;
+          foreach_key;
+          foreach_arrow;
+          foreach_value;
+          foreach_right_paren;
+          foreach_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_switch_statement
+        switch_keyword
+        switch_left_paren
+        switch_expression
+        switch_right_paren
+        switch_left_brace
+        switch_sections
+        switch_right_brace
+      =
+        let syntax = SwitchStatement {
+          switch_keyword;
+          switch_left_paren;
+          switch_expression;
+          switch_right_paren;
+          switch_left_brace;
+          switch_sections;
+          switch_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_alternate_switch_statement
+        alternate_switch_keyword
+        alternate_switch_left_paren
+        alternate_switch_expression
+        alternate_switch_right_paren
+        alternate_switch_opening_colon
+        alternate_switch_sections
+        alternate_switch_closing_endswitch
+        alternate_switch_closing_semicolon
+      =
+        let syntax = AlternateSwitchStatement {
+          alternate_switch_keyword;
+          alternate_switch_left_paren;
+          alternate_switch_expression;
+          alternate_switch_right_paren;
+          alternate_switch_opening_colon;
+          alternate_switch_sections;
+          alternate_switch_closing_endswitch;
+          alternate_switch_closing_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_switch_section
+        switch_section_labels
+        switch_section_statements
+        switch_section_fallthrough
+      =
+        let syntax = SwitchSection {
+          switch_section_labels;
+          switch_section_statements;
+          switch_section_fallthrough;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_switch_fallthrough
+        fallthrough_keyword
+        fallthrough_semicolon
+      =
+        let syntax = SwitchFallthrough {
+          fallthrough_keyword;
+          fallthrough_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_case_label
+        case_keyword
+        case_expression
+        case_colon
+      =
+        let syntax = CaseLabel {
+          case_keyword;
+          case_expression;
+          case_colon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_default_label
+        default_keyword
+        default_colon
+      =
+        let syntax = DefaultLabel {
+          default_keyword;
+          default_colon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_return_statement
+        return_keyword
+        return_expression
+        return_semicolon
+      =
+        let syntax = ReturnStatement {
+          return_keyword;
+          return_expression;
+          return_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_goto_label
+        goto_label_name
+        goto_label_colon
+      =
+        let syntax = GotoLabel {
+          goto_label_name;
+          goto_label_colon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_goto_statement
+        goto_statement_keyword
+        goto_statement_label_name
+        goto_statement_semicolon
+      =
+        let syntax = GotoStatement {
+          goto_statement_keyword;
+          goto_statement_label_name;
+          goto_statement_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_throw_statement
+        throw_keyword
+        throw_expression
+        throw_semicolon
+      =
+        let syntax = ThrowStatement {
+          throw_keyword;
+          throw_expression;
+          throw_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_break_statement
+        break_keyword
+        break_level
+        break_semicolon
+      =
+        let syntax = BreakStatement {
+          break_keyword;
+          break_level;
+          break_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_continue_statement
+        continue_keyword
+        continue_level
+        continue_semicolon
+      =
+        let syntax = ContinueStatement {
+          continue_keyword;
+          continue_level;
+          continue_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_echo_statement
+        echo_keyword
+        echo_expressions
+        echo_semicolon
+      =
+        let syntax = EchoStatement {
+          echo_keyword;
+          echo_expressions;
+          echo_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_concurrent_statement
+        concurrent_keyword
+        concurrent_statement
+      =
+        let syntax = ConcurrentStatement {
+          concurrent_keyword;
+          concurrent_statement;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_simple_initializer
+        simple_initializer_equal
+        simple_initializer_value
+      =
+        let syntax = SimpleInitializer {
+          simple_initializer_equal;
+          simple_initializer_value;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_anonymous_class
+        anonymous_class_class_keyword
+        anonymous_class_left_paren
+        anonymous_class_argument_list
+        anonymous_class_right_paren
+        anonymous_class_extends_keyword
+        anonymous_class_extends_list
+        anonymous_class_implements_keyword
+        anonymous_class_implements_list
+        anonymous_class_body
+      =
+        let syntax = AnonymousClass {
+          anonymous_class_class_keyword;
+          anonymous_class_left_paren;
+          anonymous_class_argument_list;
+          anonymous_class_right_paren;
+          anonymous_class_extends_keyword;
+          anonymous_class_extends_list;
+          anonymous_class_implements_keyword;
+          anonymous_class_implements_list;
+          anonymous_class_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_anonymous_function
+        anonymous_attribute_spec
+        anonymous_static_keyword
+        anonymous_async_keyword
+        anonymous_coroutine_keyword
+        anonymous_function_keyword
+        anonymous_left_paren
+        anonymous_parameters
+        anonymous_right_paren
+        anonymous_colon
+        anonymous_type
+        anonymous_use
+        anonymous_body
+      =
+        let syntax = AnonymousFunction {
+          anonymous_attribute_spec;
+          anonymous_static_keyword;
+          anonymous_async_keyword;
+          anonymous_coroutine_keyword;
+          anonymous_function_keyword;
+          anonymous_left_paren;
+          anonymous_parameters;
+          anonymous_right_paren;
+          anonymous_colon;
+          anonymous_type;
+          anonymous_use;
+          anonymous_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_php7_anonymous_function
+        php7_anonymous_attribute_spec
+        php7_anonymous_static_keyword
+        php7_anonymous_async_keyword
+        php7_anonymous_coroutine_keyword
+        php7_anonymous_function_keyword
+        php7_anonymous_left_paren
+        php7_anonymous_parameters
+        php7_anonymous_right_paren
+        php7_anonymous_use
+        php7_anonymous_colon
+        php7_anonymous_type
+        php7_anonymous_body
+      =
+        let syntax = Php7AnonymousFunction {
+          php7_anonymous_attribute_spec;
+          php7_anonymous_static_keyword;
+          php7_anonymous_async_keyword;
+          php7_anonymous_coroutine_keyword;
+          php7_anonymous_function_keyword;
+          php7_anonymous_left_paren;
+          php7_anonymous_parameters;
+          php7_anonymous_right_paren;
+          php7_anonymous_use;
+          php7_anonymous_colon;
+          php7_anonymous_type;
+          php7_anonymous_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_anonymous_function_use_clause
+        anonymous_use_keyword
+        anonymous_use_left_paren
+        anonymous_use_variables
+        anonymous_use_right_paren
+      =
+        let syntax = AnonymousFunctionUseClause {
+          anonymous_use_keyword;
+          anonymous_use_left_paren;
+          anonymous_use_variables;
+          anonymous_use_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_lambda_expression
+        lambda_attribute_spec
+        lambda_async
+        lambda_coroutine
+        lambda_signature
+        lambda_arrow
+        lambda_body
+      =
+        let syntax = LambdaExpression {
+          lambda_attribute_spec;
+          lambda_async;
+          lambda_coroutine;
+          lambda_signature;
+          lambda_arrow;
+          lambda_body;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_lambda_signature
+        lambda_left_paren
+        lambda_parameters
+        lambda_right_paren
+        lambda_colon
+        lambda_type
+      =
+        let syntax = LambdaSignature {
+          lambda_left_paren;
+          lambda_parameters;
+          lambda_right_paren;
+          lambda_colon;
+          lambda_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_cast_expression
+        cast_left_paren
+        cast_type
+        cast_right_paren
+        cast_operand
+      =
+        let syntax = CastExpression {
+          cast_left_paren;
+          cast_type;
+          cast_right_paren;
+          cast_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_scope_resolution_expression
+        scope_resolution_qualifier
+        scope_resolution_operator
+        scope_resolution_name
+      =
+        let syntax = ScopeResolutionExpression {
+          scope_resolution_qualifier;
+          scope_resolution_operator;
+          scope_resolution_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_member_selection_expression
+        member_object
+        member_operator
+        member_name
+      =
+        let syntax = MemberSelectionExpression {
+          member_object;
+          member_operator;
+          member_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_safe_member_selection_expression
+        safe_member_object
+        safe_member_operator
+        safe_member_name
+      =
+        let syntax = SafeMemberSelectionExpression {
+          safe_member_object;
+          safe_member_operator;
+          safe_member_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_embedded_member_selection_expression
+        embedded_member_object
+        embedded_member_operator
+        embedded_member_name
+      =
+        let syntax = EmbeddedMemberSelectionExpression {
+          embedded_member_object;
+          embedded_member_operator;
+          embedded_member_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_yield_expression
+        yield_keyword
+        yield_operand
+      =
+        let syntax = YieldExpression {
+          yield_keyword;
+          yield_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_yield_from_expression
+        yield_from_yield_keyword
+        yield_from_from_keyword
+        yield_from_operand
+      =
+        let syntax = YieldFromExpression {
+          yield_from_yield_keyword;
+          yield_from_from_keyword;
+          yield_from_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_prefix_unary_expression
+        prefix_unary_operator
+        prefix_unary_operand
+      =
+        let syntax = PrefixUnaryExpression {
+          prefix_unary_operator;
+          prefix_unary_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_postfix_unary_expression
+        postfix_unary_operand
+        postfix_unary_operator
+      =
+        let syntax = PostfixUnaryExpression {
+          postfix_unary_operand;
+          postfix_unary_operator;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_binary_expression
+        binary_left_operand
+        binary_operator
+        binary_right_operand
+      =
+        let syntax = BinaryExpression {
+          binary_left_operand;
+          binary_operator;
+          binary_right_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_instanceof_expression
+        instanceof_left_operand
+        instanceof_operator
+        instanceof_right_operand
+      =
+        let syntax = InstanceofExpression {
+          instanceof_left_operand;
+          instanceof_operator;
+          instanceof_right_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_is_expression
+        is_left_operand
+        is_operator
+        is_right_operand
+      =
+        let syntax = IsExpression {
+          is_left_operand;
+          is_operator;
+          is_right_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_as_expression
+        as_left_operand
+        as_operator
+        as_right_operand
+      =
+        let syntax = AsExpression {
+          as_left_operand;
+          as_operator;
+          as_right_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_nullable_as_expression
+        nullable_as_left_operand
+        nullable_as_operator
+        nullable_as_right_operand
+      =
+        let syntax = NullableAsExpression {
+          nullable_as_left_operand;
+          nullable_as_operator;
+          nullable_as_right_operand;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_conditional_expression
+        conditional_test
+        conditional_question
+        conditional_consequence
+        conditional_colon
+        conditional_alternative
+      =
+        let syntax = ConditionalExpression {
+          conditional_test;
+          conditional_question;
+          conditional_consequence;
+          conditional_colon;
+          conditional_alternative;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_eval_expression
+        eval_keyword
+        eval_left_paren
+        eval_argument
+        eval_right_paren
+      =
+        let syntax = EvalExpression {
+          eval_keyword;
+          eval_left_paren;
+          eval_argument;
+          eval_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_empty_expression
+        empty_keyword
+        empty_left_paren
+        empty_argument
+        empty_right_paren
+      =
+        let syntax = EmptyExpression {
+          empty_keyword;
+          empty_left_paren;
+          empty_argument;
+          empty_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_define_expression
+        define_keyword
+        define_left_paren
+        define_argument_list
+        define_right_paren
+      =
+        let syntax = DefineExpression {
+          define_keyword;
+          define_left_paren;
+          define_argument_list;
+          define_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_halt_compiler_expression
+        halt_compiler_keyword
+        halt_compiler_left_paren
+        halt_compiler_argument_list
+        halt_compiler_right_paren
+      =
+        let syntax = HaltCompilerExpression {
+          halt_compiler_keyword;
+          halt_compiler_left_paren;
+          halt_compiler_argument_list;
+          halt_compiler_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_isset_expression
+        isset_keyword
+        isset_left_paren
+        isset_argument_list
+        isset_right_paren
+      =
+        let syntax = IssetExpression {
+          isset_keyword;
+          isset_left_paren;
+          isset_argument_list;
+          isset_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_function_call_expression
+        function_call_receiver
+        function_call_type_args
+        function_call_left_paren
+        function_call_argument_list
+        function_call_right_paren
+      =
+        let syntax = FunctionCallExpression {
+          function_call_receiver;
+          function_call_type_args;
+          function_call_left_paren;
+          function_call_argument_list;
+          function_call_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_parenthesized_expression
+        parenthesized_expression_left_paren
+        parenthesized_expression_expression
+        parenthesized_expression_right_paren
+      =
+        let syntax = ParenthesizedExpression {
+          parenthesized_expression_left_paren;
+          parenthesized_expression_expression;
+          parenthesized_expression_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_braced_expression
+        braced_expression_left_brace
+        braced_expression_expression
+        braced_expression_right_brace
+      =
+        let syntax = BracedExpression {
+          braced_expression_left_brace;
+          braced_expression_expression;
+          braced_expression_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_embedded_braced_expression
+        embedded_braced_expression_left_brace
+        embedded_braced_expression_expression
+        embedded_braced_expression_right_brace
+      =
+        let syntax = EmbeddedBracedExpression {
+          embedded_braced_expression_left_brace;
+          embedded_braced_expression_expression;
+          embedded_braced_expression_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_list_expression
+        list_keyword
+        list_left_paren
+        list_members
+        list_right_paren
+      =
+        let syntax = ListExpression {
+          list_keyword;
+          list_left_paren;
+          list_members;
+          list_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_collection_literal_expression
+        collection_literal_name
+        collection_literal_left_brace
+        collection_literal_initializers
+        collection_literal_right_brace
+      =
+        let syntax = CollectionLiteralExpression {
+          collection_literal_name;
+          collection_literal_left_brace;
+          collection_literal_initializers;
+          collection_literal_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_object_creation_expression
+        object_creation_new_keyword
+        object_creation_object
+      =
+        let syntax = ObjectCreationExpression {
+          object_creation_new_keyword;
+          object_creation_object;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_constructor_call
+        constructor_call_type
+        constructor_call_left_paren
+        constructor_call_argument_list
+        constructor_call_right_paren
+      =
+        let syntax = ConstructorCall {
+          constructor_call_type;
+          constructor_call_left_paren;
+          constructor_call_argument_list;
+          constructor_call_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_record_creation_expression
+        record_creation_type
+        record_creation_left_bracket
+        record_creation_members
+        record_creation_right_bracket
+      =
+        let syntax = RecordCreationExpression {
+          record_creation_type;
+          record_creation_left_bracket;
+          record_creation_members;
+          record_creation_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_array_creation_expression
+        array_creation_left_bracket
+        array_creation_members
+        array_creation_right_bracket
+      =
+        let syntax = ArrayCreationExpression {
+          array_creation_left_bracket;
+          array_creation_members;
+          array_creation_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_array_intrinsic_expression
+        array_intrinsic_keyword
+        array_intrinsic_left_paren
+        array_intrinsic_members
+        array_intrinsic_right_paren
+      =
+        let syntax = ArrayIntrinsicExpression {
+          array_intrinsic_keyword;
+          array_intrinsic_left_paren;
+          array_intrinsic_members;
+          array_intrinsic_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_darray_intrinsic_expression
+        darray_intrinsic_keyword
+        darray_intrinsic_explicit_type
+        darray_intrinsic_left_bracket
+        darray_intrinsic_members
+        darray_intrinsic_right_bracket
+      =
+        let syntax = DarrayIntrinsicExpression {
+          darray_intrinsic_keyword;
+          darray_intrinsic_explicit_type;
+          darray_intrinsic_left_bracket;
+          darray_intrinsic_members;
+          darray_intrinsic_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_dictionary_intrinsic_expression
+        dictionary_intrinsic_keyword
+        dictionary_intrinsic_explicit_type
+        dictionary_intrinsic_left_bracket
+        dictionary_intrinsic_members
+        dictionary_intrinsic_right_bracket
+      =
+        let syntax = DictionaryIntrinsicExpression {
+          dictionary_intrinsic_keyword;
+          dictionary_intrinsic_explicit_type;
+          dictionary_intrinsic_left_bracket;
+          dictionary_intrinsic_members;
+          dictionary_intrinsic_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_keyset_intrinsic_expression
+        keyset_intrinsic_keyword
+        keyset_intrinsic_explicit_type
+        keyset_intrinsic_left_bracket
+        keyset_intrinsic_members
+        keyset_intrinsic_right_bracket
+      =
+        let syntax = KeysetIntrinsicExpression {
+          keyset_intrinsic_keyword;
+          keyset_intrinsic_explicit_type;
+          keyset_intrinsic_left_bracket;
+          keyset_intrinsic_members;
+          keyset_intrinsic_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_varray_intrinsic_expression
+        varray_intrinsic_keyword
+        varray_intrinsic_explicit_type
+        varray_intrinsic_left_bracket
+        varray_intrinsic_members
+        varray_intrinsic_right_bracket
+      =
+        let syntax = VarrayIntrinsicExpression {
+          varray_intrinsic_keyword;
+          varray_intrinsic_explicit_type;
+          varray_intrinsic_left_bracket;
+          varray_intrinsic_members;
+          varray_intrinsic_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_vector_intrinsic_expression
+        vector_intrinsic_keyword
+        vector_intrinsic_explicit_type
+        vector_intrinsic_left_bracket
+        vector_intrinsic_members
+        vector_intrinsic_right_bracket
+      =
+        let syntax = VectorIntrinsicExpression {
+          vector_intrinsic_keyword;
+          vector_intrinsic_explicit_type;
+          vector_intrinsic_left_bracket;
+          vector_intrinsic_members;
+          vector_intrinsic_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_element_initializer
+        element_key
+        element_arrow
+        element_value
+      =
+        let syntax = ElementInitializer {
+          element_key;
+          element_arrow;
+          element_value;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_subscript_expression
+        subscript_receiver
+        subscript_left_bracket
+        subscript_index
+        subscript_right_bracket
+      =
+        let syntax = SubscriptExpression {
+          subscript_receiver;
+          subscript_left_bracket;
+          subscript_index;
+          subscript_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_embedded_subscript_expression
+        embedded_subscript_receiver
+        embedded_subscript_left_bracket
+        embedded_subscript_index
+        embedded_subscript_right_bracket
+      =
+        let syntax = EmbeddedSubscriptExpression {
+          embedded_subscript_receiver;
+          embedded_subscript_left_bracket;
+          embedded_subscript_index;
+          embedded_subscript_right_bracket;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_awaitable_creation_expression
+        awaitable_attribute_spec
+        awaitable_async
+        awaitable_coroutine
+        awaitable_compound_statement
+      =
+        let syntax = AwaitableCreationExpression {
+          awaitable_attribute_spec;
+          awaitable_async;
+          awaitable_coroutine;
+          awaitable_compound_statement;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_children_declaration
+        xhp_children_keyword
+        xhp_children_expression
+        xhp_children_semicolon
+      =
+        let syntax = XHPChildrenDeclaration {
+          xhp_children_keyword;
+          xhp_children_expression;
+          xhp_children_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_children_parenthesized_list
+        xhp_children_list_left_paren
+        xhp_children_list_xhp_children
+        xhp_children_list_right_paren
+      =
+        let syntax = XHPChildrenParenthesizedList {
+          xhp_children_list_left_paren;
+          xhp_children_list_xhp_children;
+          xhp_children_list_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_category_declaration
+        xhp_category_keyword
+        xhp_category_categories
+        xhp_category_semicolon
+      =
+        let syntax = XHPCategoryDeclaration {
+          xhp_category_keyword;
+          xhp_category_categories;
+          xhp_category_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_enum_type
+        xhp_enum_optional
+        xhp_enum_keyword
+        xhp_enum_left_brace
+        xhp_enum_values
+        xhp_enum_right_brace
+      =
+        let syntax = XHPEnumType {
+          xhp_enum_optional;
+          xhp_enum_keyword;
+          xhp_enum_left_brace;
+          xhp_enum_values;
+          xhp_enum_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_required
+        xhp_required_at
+        xhp_required_keyword
+      =
+        let syntax = XHPRequired {
+          xhp_required_at;
+          xhp_required_keyword;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_class_attribute_declaration
+        xhp_attribute_keyword
+        xhp_attribute_attributes
+        xhp_attribute_semicolon
+      =
+        let syntax = XHPClassAttributeDeclaration {
+          xhp_attribute_keyword;
+          xhp_attribute_attributes;
+          xhp_attribute_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_class_attribute
+        xhp_attribute_decl_type
+        xhp_attribute_decl_name
+        xhp_attribute_decl_initializer
+        xhp_attribute_decl_required
+      =
+        let syntax = XHPClassAttribute {
+          xhp_attribute_decl_type;
+          xhp_attribute_decl_name;
+          xhp_attribute_decl_initializer;
+          xhp_attribute_decl_required;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_simple_class_attribute
+        xhp_simple_class_attribute_type
+      =
+        let syntax = XHPSimpleClassAttribute {
+          xhp_simple_class_attribute_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_simple_attribute
+        xhp_simple_attribute_name
+        xhp_simple_attribute_equal
+        xhp_simple_attribute_expression
+      =
+        let syntax = XHPSimpleAttribute {
+          xhp_simple_attribute_name;
+          xhp_simple_attribute_equal;
+          xhp_simple_attribute_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_spread_attribute
+        xhp_spread_attribute_left_brace
+        xhp_spread_attribute_spread_operator
+        xhp_spread_attribute_expression
+        xhp_spread_attribute_right_brace
+      =
+        let syntax = XHPSpreadAttribute {
+          xhp_spread_attribute_left_brace;
+          xhp_spread_attribute_spread_operator;
+          xhp_spread_attribute_expression;
+          xhp_spread_attribute_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_open
+        xhp_open_left_angle
+        xhp_open_name
+        xhp_open_attributes
+        xhp_open_right_angle
+      =
+        let syntax = XHPOpen {
+          xhp_open_left_angle;
+          xhp_open_name;
+          xhp_open_attributes;
+          xhp_open_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_expression
+        xhp_open
+        xhp_body
+        xhp_close
+      =
+        let syntax = XHPExpression {
+          xhp_open;
+          xhp_body;
+          xhp_close;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_xhp_close
+        xhp_close_left_angle
+        xhp_close_name
+        xhp_close_right_angle
+      =
+        let syntax = XHPClose {
+          xhp_close_left_angle;
+          xhp_close_name;
+          xhp_close_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_type_constant
+        type_constant_left_type
+        type_constant_separator
+        type_constant_right_type
+      =
+        let syntax = TypeConstant {
+          type_constant_left_type;
+          type_constant_separator;
+          type_constant_right_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_vector_type_specifier
+        vector_type_keyword
+        vector_type_left_angle
+        vector_type_type
+        vector_type_trailing_comma
+        vector_type_right_angle
+      =
+        let syntax = VectorTypeSpecifier {
+          vector_type_keyword;
+          vector_type_left_angle;
+          vector_type_type;
+          vector_type_trailing_comma;
+          vector_type_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_keyset_type_specifier
+        keyset_type_keyword
+        keyset_type_left_angle
+        keyset_type_type
+        keyset_type_trailing_comma
+        keyset_type_right_angle
+      =
+        let syntax = KeysetTypeSpecifier {
+          keyset_type_keyword;
+          keyset_type_left_angle;
+          keyset_type_type;
+          keyset_type_trailing_comma;
+          keyset_type_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_tuple_type_explicit_specifier
+        tuple_type_keyword
+        tuple_type_left_angle
+        tuple_type_types
+        tuple_type_right_angle
+      =
+        let syntax = TupleTypeExplicitSpecifier {
+          tuple_type_keyword;
+          tuple_type_left_angle;
+          tuple_type_types;
+          tuple_type_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_varray_type_specifier
+        varray_keyword
+        varray_left_angle
+        varray_type
+        varray_trailing_comma
+        varray_right_angle
+      =
+        let syntax = VarrayTypeSpecifier {
+          varray_keyword;
+          varray_left_angle;
+          varray_type;
+          varray_trailing_comma;
+          varray_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_vector_array_type_specifier
+        vector_array_keyword
+        vector_array_left_angle
+        vector_array_type
+        vector_array_right_angle
+      =
+        let syntax = VectorArrayTypeSpecifier {
+          vector_array_keyword;
+          vector_array_left_angle;
+          vector_array_type;
+          vector_array_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_type_parameter
+        type_attribute_spec
+        type_reified
+        type_variance
+        type_name
+        type_constraints
+      =
+        let syntax = TypeParameter {
+          type_attribute_spec;
+          type_reified;
+          type_variance;
+          type_name;
+          type_constraints;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_type_constraint
+        constraint_keyword
+        constraint_type
+      =
+        let syntax = TypeConstraint {
+          constraint_keyword;
+          constraint_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_darray_type_specifier
+        darray_keyword
+        darray_left_angle
+        darray_key
+        darray_comma
+        darray_value
+        darray_trailing_comma
+        darray_right_angle
+      =
+        let syntax = DarrayTypeSpecifier {
+          darray_keyword;
+          darray_left_angle;
+          darray_key;
+          darray_comma;
+          darray_value;
+          darray_trailing_comma;
+          darray_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_map_array_type_specifier
+        map_array_keyword
+        map_array_left_angle
+        map_array_key
+        map_array_comma
+        map_array_value
+        map_array_right_angle
+      =
+        let syntax = MapArrayTypeSpecifier {
+          map_array_keyword;
+          map_array_left_angle;
+          map_array_key;
+          map_array_comma;
+          map_array_value;
+          map_array_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_dictionary_type_specifier
+        dictionary_type_keyword
+        dictionary_type_left_angle
+        dictionary_type_members
+        dictionary_type_right_angle
+      =
+        let syntax = DictionaryTypeSpecifier {
+          dictionary_type_keyword;
+          dictionary_type_left_angle;
+          dictionary_type_members;
+          dictionary_type_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_closure_type_specifier
+        closure_outer_left_paren
+        closure_coroutine
+        closure_function_keyword
+        closure_inner_left_paren
+        closure_parameter_list
+        closure_inner_right_paren
+        closure_colon
+        closure_return_type
+        closure_outer_right_paren
+      =
+        let syntax = ClosureTypeSpecifier {
+          closure_outer_left_paren;
+          closure_coroutine;
+          closure_function_keyword;
+          closure_inner_left_paren;
+          closure_parameter_list;
+          closure_inner_right_paren;
+          closure_colon;
+          closure_return_type;
+          closure_outer_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_closure_parameter_type_specifier
+        closure_parameter_call_convention
+        closure_parameter_type
+      =
+        let syntax = ClosureParameterTypeSpecifier {
+          closure_parameter_call_convention;
+          closure_parameter_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_classname_type_specifier
+        classname_keyword
+        classname_left_angle
+        classname_type
+        classname_trailing_comma
+        classname_right_angle
+      =
+        let syntax = ClassnameTypeSpecifier {
+          classname_keyword;
+          classname_left_angle;
+          classname_type;
+          classname_trailing_comma;
+          classname_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_field_specifier
+        field_question
+        field_name
+        field_arrow
+        field_type
+      =
+        let syntax = FieldSpecifier {
+          field_question;
+          field_name;
+          field_arrow;
+          field_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_field_initializer
+        field_initializer_name
+        field_initializer_arrow
+        field_initializer_value
+      =
+        let syntax = FieldInitializer {
+          field_initializer_name;
+          field_initializer_arrow;
+          field_initializer_value;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_shape_type_specifier
+        shape_type_keyword
+        shape_type_left_paren
+        shape_type_fields
+        shape_type_ellipsis
+        shape_type_right_paren
+      =
+        let syntax = ShapeTypeSpecifier {
+          shape_type_keyword;
+          shape_type_left_paren;
+          shape_type_fields;
+          shape_type_ellipsis;
+          shape_type_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_shape_expression
+        shape_expression_keyword
+        shape_expression_left_paren
+        shape_expression_fields
+        shape_expression_right_paren
+      =
+        let syntax = ShapeExpression {
+          shape_expression_keyword;
+          shape_expression_left_paren;
+          shape_expression_fields;
+          shape_expression_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_tuple_expression
+        tuple_expression_keyword
+        tuple_expression_left_paren
+        tuple_expression_items
+        tuple_expression_right_paren
+      =
+        let syntax = TupleExpression {
+          tuple_expression_keyword;
+          tuple_expression_left_paren;
+          tuple_expression_items;
+          tuple_expression_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_generic_type_specifier
+        generic_class_type
+        generic_argument_list
+      =
+        let syntax = GenericTypeSpecifier {
+          generic_class_type;
+          generic_argument_list;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_nullable_type_specifier
+        nullable_question
+        nullable_type
+      =
+        let syntax = NullableTypeSpecifier {
+          nullable_question;
+          nullable_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_like_type_specifier
+        like_tilde
+        like_type
+      =
+        let syntax = LikeTypeSpecifier {
+          like_tilde;
+          like_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_soft_type_specifier
+        soft_at
+        soft_type
+      =
+        let syntax = SoftTypeSpecifier {
+          soft_at;
+          soft_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_reified_type_argument
+        reified_type_argument_reified
+        reified_type_argument_type
+      =
+        let syntax = ReifiedTypeArgument {
+          reified_type_argument_reified;
+          reified_type_argument_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_type_arguments
+        type_arguments_left_angle
+        type_arguments_types
+        type_arguments_right_angle
+      =
+        let syntax = TypeArguments {
+          type_arguments_left_angle;
+          type_arguments_types;
+          type_arguments_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_type_parameters
+        type_parameters_left_angle
+        type_parameters_parameters
+        type_parameters_right_angle
+      =
+        let syntax = TypeParameters {
+          type_parameters_left_angle;
+          type_parameters_parameters;
+          type_parameters_right_angle;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_tuple_type_specifier
+        tuple_left_paren
+        tuple_types
+        tuple_right_paren
+      =
+        let syntax = TupleTypeSpecifier {
+          tuple_left_paren;
+          tuple_types;
+          tuple_right_paren;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_error
+        error_error
+      =
+        let syntax = ErrorSyntax {
+          error_error;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_list_item
+        list_item
+        list_separator
+      =
+        let syntax = ListItem {
+          list_item;
+          list_separator;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_atom_expression
+        pocket_atom_glyph
+        pocket_atom_expression
+      =
+        let syntax = PocketAtomExpression {
+          pocket_atom_glyph;
+          pocket_atom_expression;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_identifier_expression
+        pocket_identifier_qualifier
+        pocket_identifier_pu_operator
+        pocket_identifier_field
+        pocket_identifier_operator
+        pocket_identifier_name
+      =
+        let syntax = PocketIdentifierExpression {
+          pocket_identifier_qualifier;
+          pocket_identifier_pu_operator;
+          pocket_identifier_field;
+          pocket_identifier_operator;
+          pocket_identifier_name;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_atom_mapping_declaration
+        pocket_atom_mapping_glyph
+        pocket_atom_mapping_name
+        pocket_atom_mapping_left_paren
+        pocket_atom_mapping_mappings
+        pocket_atom_mapping_right_paren
+        pocket_atom_mapping_semicolon
+      =
+        let syntax = PocketAtomMappingDeclaration {
+          pocket_atom_mapping_glyph;
+          pocket_atom_mapping_name;
+          pocket_atom_mapping_left_paren;
+          pocket_atom_mapping_mappings;
+          pocket_atom_mapping_right_paren;
+          pocket_atom_mapping_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_enum_declaration
+        pocket_enum_modifiers
+        pocket_enum_enum
+        pocket_enum_name
+        pocket_enum_left_brace
+        pocket_enum_fields
+        pocket_enum_right_brace
+      =
+        let syntax = PocketEnumDeclaration {
+          pocket_enum_modifiers;
+          pocket_enum_enum;
+          pocket_enum_name;
+          pocket_enum_left_brace;
+          pocket_enum_fields;
+          pocket_enum_right_brace;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_field_type_expr_declaration
+        pocket_field_type_expr_case
+        pocket_field_type_expr_type
+        pocket_field_type_expr_name
+        pocket_field_type_expr_semicolon
+      =
+        let syntax = PocketFieldTypeExprDeclaration {
+          pocket_field_type_expr_case;
+          pocket_field_type_expr_type;
+          pocket_field_type_expr_name;
+          pocket_field_type_expr_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_field_type_declaration
+        pocket_field_type_case
+        pocket_field_type_type
+        pocket_field_type_name
+        pocket_field_type_semicolon
+      =
+        let syntax = PocketFieldTypeDeclaration {
+          pocket_field_type_case;
+          pocket_field_type_type;
+          pocket_field_type_name;
+          pocket_field_type_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_mapping_id_declaration
+        pocket_mapping_id_name
+        pocket_mapping_id_initializer
+      =
+        let syntax = PocketMappingIdDeclaration {
+          pocket_mapping_id_name;
+          pocket_mapping_id_initializer;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_pocket_mapping_type_declaration
+        pocket_mapping_type_keyword
+        pocket_mapping_type_name
+        pocket_mapping_type_equal
+        pocket_mapping_type_type
+      =
+        let syntax = PocketMappingTypeDeclaration {
+          pocket_mapping_type_keyword;
+          pocket_mapping_type_name;
+          pocket_mapping_type_equal;
+          pocket_mapping_type_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+
+
+     let from_function_declaration {
+          function_attribute_spec;
+          function_declaration_header;
+          function_body;
+       } = FunctionDeclaration {
+          function_attribute_spec;
+          function_declaration_header;
+          function_body;
+       }
+     let from_function_declaration_header {
+          function_modifiers;
+          function_keyword;
+          function_name;
+          function_type_parameter_list;
+          function_left_paren;
+          function_parameter_list;
+          function_right_paren;
+          function_colon;
+          function_type;
+          function_where_clause;
+       } = FunctionDeclarationHeader {
+          function_modifiers;
+          function_keyword;
+          function_name;
+          function_type_parameter_list;
+          function_left_paren;
+          function_parameter_list;
+          function_right_paren;
+          function_colon;
+          function_type;
+          function_where_clause;
+       }
+     let from_methodish_declaration {
+          methodish_attribute;
+          methodish_function_decl_header;
+          methodish_function_body;
+          methodish_semicolon;
+       } = MethodishDeclaration {
+          methodish_attribute;
+          methodish_function_decl_header;
+          methodish_function_body;
+          methodish_semicolon;
+       }
+     let from_anonymous_function {
+          anonymous_attribute_spec;
+          anonymous_static_keyword;
+          anonymous_async_keyword;
+          anonymous_coroutine_keyword;
+          anonymous_function_keyword;
+          anonymous_left_paren;
+          anonymous_parameters;
+          anonymous_right_paren;
+          anonymous_colon;
+          anonymous_type;
+          anonymous_use;
+          anonymous_body;
+       } = AnonymousFunction {
+          anonymous_attribute_spec;
+          anonymous_static_keyword;
+          anonymous_async_keyword;
+          anonymous_coroutine_keyword;
+          anonymous_function_keyword;
+          anonymous_left_paren;
+          anonymous_parameters;
+          anonymous_right_paren;
+          anonymous_colon;
+          anonymous_type;
+          anonymous_use;
+          anonymous_body;
+       }
+     let from_lambda_expression {
+          lambda_attribute_spec;
+          lambda_async;
+          lambda_coroutine;
+          lambda_signature;
+          lambda_arrow;
+          lambda_body;
+       } = LambdaExpression {
+          lambda_attribute_spec;
+          lambda_async;
+          lambda_coroutine;
+          lambda_signature;
+          lambda_arrow;
+          lambda_body;
+       }
+     let from_lambda_signature {
+          lambda_left_paren;
+          lambda_parameters;
+          lambda_right_paren;
+          lambda_colon;
+          lambda_type;
+       } = LambdaSignature {
+          lambda_left_paren;
+          lambda_parameters;
+          lambda_right_paren;
+          lambda_colon;
+          lambda_type;
+       }
+     let from_closure_type_specifier {
+          closure_outer_left_paren;
+          closure_coroutine;
+          closure_function_keyword;
+          closure_inner_left_paren;
+          closure_parameter_list;
+          closure_inner_right_paren;
+          closure_colon;
+          closure_return_type;
+          closure_outer_right_paren;
+       } = ClosureTypeSpecifier {
+          closure_outer_left_paren;
+          closure_coroutine;
+          closure_function_keyword;
+          closure_inner_left_paren;
+          closure_parameter_list;
+          closure_inner_right_paren;
+          closure_colon;
+          closure_return_type;
+          closure_outer_right_paren;
+       }
+
+
+     let get_function_declaration x =
+        match x with
+        | FunctionDeclaration {
+          function_attribute_spec;
+          function_declaration_header;
+          function_body;
+            } -> {
+          function_attribute_spec;
+          function_declaration_header;
+          function_body;
+           }
+        | _ -> failwith "get_function_declaration: not a FunctionDeclaration"
+     let get_function_declaration_header x =
+        match x with
+        | FunctionDeclarationHeader {
+          function_modifiers;
+          function_keyword;
+          function_name;
+          function_type_parameter_list;
+          function_left_paren;
+          function_parameter_list;
+          function_right_paren;
+          function_colon;
+          function_type;
+          function_where_clause;
+            } -> {
+          function_modifiers;
+          function_keyword;
+          function_name;
+          function_type_parameter_list;
+          function_left_paren;
+          function_parameter_list;
+          function_right_paren;
+          function_colon;
+          function_type;
+          function_where_clause;
+           }
+        | _ -> failwith "get_function_declaration_header: not a FunctionDeclarationHeader"
+     let get_methodish_declaration x =
+        match x with
+        | MethodishDeclaration {
+          methodish_attribute;
+          methodish_function_decl_header;
+          methodish_function_body;
+          methodish_semicolon;
+            } -> {
+          methodish_attribute;
+          methodish_function_decl_header;
+          methodish_function_body;
+          methodish_semicolon;
+           }
+        | _ -> failwith "get_methodish_declaration: not a MethodishDeclaration"
+     let get_anonymous_function x =
+        match x with
+        | AnonymousFunction {
+          anonymous_attribute_spec;
+          anonymous_static_keyword;
+          anonymous_async_keyword;
+          anonymous_coroutine_keyword;
+          anonymous_function_keyword;
+          anonymous_left_paren;
+          anonymous_parameters;
+          anonymous_right_paren;
+          anonymous_colon;
+          anonymous_type;
+          anonymous_use;
+          anonymous_body;
+            } -> {
+          anonymous_attribute_spec;
+          anonymous_static_keyword;
+          anonymous_async_keyword;
+          anonymous_coroutine_keyword;
+          anonymous_function_keyword;
+          anonymous_left_paren;
+          anonymous_parameters;
+          anonymous_right_paren;
+          anonymous_colon;
+          anonymous_type;
+          anonymous_use;
+          anonymous_body;
+           }
+        | _ -> failwith "get_anonymous_function: not a AnonymousFunction"
+     let get_lambda_expression x =
+        match x with
+        | LambdaExpression {
+          lambda_attribute_spec;
+          lambda_async;
+          lambda_coroutine;
+          lambda_signature;
+          lambda_arrow;
+          lambda_body;
+            } -> {
+          lambda_attribute_spec;
+          lambda_async;
+          lambda_coroutine;
+          lambda_signature;
+          lambda_arrow;
+          lambda_body;
+           }
+        | _ -> failwith "get_lambda_expression: not a LambdaExpression"
+     let get_lambda_signature x =
+        match x with
+        | LambdaSignature {
+          lambda_left_paren;
+          lambda_parameters;
+          lambda_right_paren;
+          lambda_colon;
+          lambda_type;
+            } -> {
+          lambda_left_paren;
+          lambda_parameters;
+          lambda_right_paren;
+          lambda_colon;
+          lambda_type;
+           }
+        | _ -> failwith "get_lambda_signature: not a LambdaSignature"
+     let get_closure_type_specifier x =
+        match x with
+        | ClosureTypeSpecifier {
+          closure_outer_left_paren;
+          closure_coroutine;
+          closure_function_keyword;
+          closure_inner_left_paren;
+          closure_parameter_list;
+          closure_inner_right_paren;
+          closure_colon;
+          closure_return_type;
+          closure_outer_right_paren;
+            } -> {
+          closure_outer_left_paren;
+          closure_coroutine;
+          closure_function_keyword;
+          closure_inner_left_paren;
+          closure_parameter_list;
+          closure_inner_right_paren;
+          closure_colon;
+          closure_return_type;
+          closure_outer_right_paren;
+           }
+        | _ -> failwith "get_closure_type_specifier: not a ClosureTypeSpecifier"
+
 
     end (* WithValueBuilder *)
   end (* WithSyntaxValue *)

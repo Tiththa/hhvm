@@ -18,6 +18,7 @@
 #include "hphp/runtime/vm/jit/tc.h"
 
 #include "hphp/runtime/base/perf-warning.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/vm/debug/debug.h"
@@ -25,11 +26,14 @@
 
 #include "hphp/runtime/vm/jit/code-cache.h"
 #include "hphp/runtime/vm/jit/debugger.h"
+#include "hphp/runtime/vm/jit/guard-type-profile.h"
+#include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/perf-counters.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/srcdb.h"
 #include "hphp/runtime/vm/jit/stub-alloc.h"
+#include "hphp/runtime/vm/jit/tc-record.h"
 #include "hphp/runtime/vm/jit/timer.h"
 #include "hphp/runtime/vm/jit/trans-db.h"
 #include "hphp/runtime/vm/jit/unique-stubs.h"
@@ -58,7 +62,7 @@ namespace {
 std::atomic<uint64_t> s_numTrans;
 SimpleMutex s_codeLock{false, RankCodeCache};
 SimpleMutex s_metadataLock{false, RankCodeMetadata};
-__thread size_t s_initialTCSize;
+RDS_LOCAL_NO_CHECK(size_t, s_initialTCSize);
 
 bool shouldPGOFunc(const Func* func) {
   if (profData() == nullptr) return false;
@@ -69,7 +73,7 @@ bool shouldPGOFunc(const Func* func) {
   if (func->isPseudoMain()) return false;
 
   if (!RuntimeOption::EvalJitPGOHotOnly) return true;
-  return func->attrs() & AttrHot;
+  return func->isHot();
 }
 
 }
@@ -91,10 +95,6 @@ bool canTranslate() {
     RuntimeOption::EvalJitGlobalTranslationLimit;
 }
 
-const StaticString
-  s_php_errormsg("php_errormsg"),
-  s_http_response_header("http_response_header");
-
 bool shouldTranslateNoSizeLimit(const Func* func, TransKind kind) {
   // If we've hit Eval.JitGlobalTranslationLimit, then we stop translating.
   if (!canTranslate()) {
@@ -103,13 +103,6 @@ bool shouldTranslateNoSizeLimit(const Func* func, TransKind kind) {
 
   // Do not translate functions from units marked as interpret-only.
   if (func->unit()->isInterpretOnly()) {
-    return false;
-  }
-
-  // We don't support JIT compiling functions that use some super-dynamic php
-  // variables.
-  if (func->lookupVarId(s_php_errormsg.get()) != -1 ||
-      func->lookupVarId(s_http_response_header.get()) != -1) {
     return false;
   }
 
@@ -123,9 +116,13 @@ bool shouldTranslateNoSizeLimit(const Func* func, TransKind kind) {
 }
 
 static std::atomic_flag s_did_log = ATOMIC_FLAG_INIT;
+static std::atomic<bool> s_TCisFull{false};
 
 bool shouldTranslate(const Func* func, TransKind kind) {
-  if (!shouldTranslateNoSizeLimit(func, kind)) return false;
+  if (s_TCisFull.load(std::memory_order_relaxed) ||
+      !shouldTranslateNoSizeLimit(func, kind)) {
+    return false;
+  }
 
   const auto serverMode = RuntimeOption::ServerExecutionMode();
   const auto maxTransTime = RuntimeOption::EvalJitMaxRequestTranslationTime;
@@ -167,6 +164,10 @@ bool shouldTranslate(const Func* func, TransKind kind) {
     }
   }
 
+  // Set a flag so we quickly bail from trying to generate new translations next
+  // time.
+  s_TCisFull.store(true, std::memory_order_relaxed);
+
   if (main_under && !s_did_log.test_and_set() &&
       RuntimeOption::EvalProfBranchSampleFreq == 0) {
     // If we ran out of TC space in cold or frozen but not in main, something
@@ -207,11 +208,11 @@ void assertOwnsMetadataLock() { s_metadataLock.assertOwnedBySelf(); }
 void requestInit() {
   tl_regState = VMRegState::CLEAN;
   Timer::RequestInit();
-  memset(&tl_perf_counters, 0, sizeof(tl_perf_counters));
+  memset(rl_perf_counters.getCheck(), 0, sizeof(PerfCounters));
   Stats::init();
   requestInitProfData();
-  s_initialTCSize = g_code->totalUsed();
-  assert(!g_unwind_rds.isInit());
+  *s_initialTCSize.getCheck() = g_code->totalUsed();
+  assertx(!g_unwind_rds.isInit());
   memset(g_unwind_rds.get(), 0, sizeof(UnwindRDS));
   g_unwind_rds.markInit();
 }
@@ -219,16 +220,21 @@ void requestInit() {
 void requestExit() {
   Stats::dump();
   Stats::clear();
+  if (RuntimeOption::EvalJitProfileGuardTypes) {
+    logGuardProfileData();
+  }
   Timer::RequestExit();
   if (profData()) profData()->maybeResetCounters();
   requestExitProfData();
+
+  reportJitMaturity();
 
   if (Trace::moduleEnabledRelease(Trace::mcgstats, 1)) {
     Trace::traceRelease("MCGenerator perf counters for %s:\n",
                         g_context->getRequestUrl(50).c_str());
     for (int i = 0; i < tpc_num_counters; i++) {
       Trace::traceRelease("%-20s %10" PRId64 "\n",
-                          kPerfCounterNames[i], tl_perf_counters[i]);
+                          kPerfCounterNames[i], rl_perf_counters[i]);
     }
     Trace::traceRelease("\n");
   }
@@ -237,7 +243,7 @@ void requestExit() {
 }
 
 void codeEmittedThisRequest(size_t& requestEntry, size_t& now) {
-  requestEntry = s_initialTCSize;
+  requestEntry = *s_initialTCSize;
   now = g_code->totalUsed();
 }
 
@@ -245,7 +251,7 @@ void processInit() {
   auto codeLock = lockCode();
   auto metaLock = lockMetadata();
 
-  g_code = new(low_malloc_data(sizeof(CodeCache))) CodeCache();
+  g_code = new(low_malloc(sizeof(CodeCache))) CodeCache();
   g_ustubs.emitAll(*g_code, *Debug::DebugInfo::Get());
 
   // Write an .eh_frame section that covers the whole TC.
@@ -274,7 +280,6 @@ void freeTCStub(TCA stub) {
   auto metaLock = lockMetadata();
 
   assertx(code().frozen().contains(stub));
-  Debug::DebugInfo::Get()->recordRelocMap(stub, 0, "FreeStub");
 
   markStubFreed(stub);
 }
@@ -297,44 +302,49 @@ void checkFreeProfData() {
       (!code().hotEnabled() ||
        profData()->profilingFuncs() == profData()->optimizedFuncs()) &&
       !transdb::enabled() &&
-      !RuntimeOption::EvalJitRetranslateAllRequest) {
+      !mcgen::retranslateAllEnabled()) {
     discardProfData();
   }
 }
 
-bool shouldProfileNewFuncs() {
-  // Don't start profiling new functions if the size of either main or
-  // prof is already above Eval.JitAMaxUsage and we already filled hot.
-  auto tcUsage = std::max(code().main().used(), code().prof().used());
-  if (tcUsage >= CodeCache::AMaxUsage && !code().hotEnabled()) {
-    return false;
+static void dropSrcDBProfIncomingBranches() {
+  auto const base     = code().prof().base();
+  auto const frontier = code().prof().frontier();
+  for (auto& it : srcDB()) {
+    auto sr = it.second;
+    sr->removeIncomingBranchesInRange(base, frontier);
   }
+}
+
+void freeProfCode() {
+  Treadmill::enqueue([]{
+    dropSrcDBProfIncomingBranches();
+    code().freeProf();
+  });
+}
+
+bool shouldProfileNewFuncs() {
+  if (profData() == nullptr) return false;
 
   // We have two knobs to control the number of functions we're allowed to
   // profile: Eval.JitProfileRequests and Eval.JitProfileBCSize. We profile new
   // functions until either of these limits is exceeded. In practice, we expect
   // to hit the bytecode size limit first, but we keep the request limit around
   // as a safety net.
-  if (RuntimeOption::EvalJitProfileBCSize > 0 &&
-      profData() &&
-      profData()->profilingBCSize() >= RuntimeOption::EvalJitProfileBCSize) {
-    return false;
-  }
-
-  return requestCount() <= RuntimeOption::EvalJitProfileRequests;
+  return profData()->profilingBCSize() < RuntimeOption::EvalJitProfileBCSize &&
+    requestCount() < RuntimeOption::EvalJitProfileRequests;
 }
 
 bool profileFunc(const Func* func) {
-  if (!shouldPGOFunc(func)) return false;
+  // If retranslateAll has been scheduled (including cases when it is going on,
+  // or has finished), we can't emit more Profile translations.  This is to
+  // ensure that, when retranslateAll() runs, no more Profile translations are
+  // being added to ProfData.
+  if (mcgen::retranslateAllScheduled()) return false;
 
-  // If retranslateAll is enabled and we already passed the point that it should
-  // be scheduled to execute (via the treadmill), then we can't emit more
-  // Profile translations.  This is to ensure that, when retranslateAll() runs,
-  // no more Profile translations are being added to ProfData.
-  if (RuntimeOption::EvalJitRetranslateAllRequest != 0 &&
-      hasEnoughProfDataToRetranslateAll()) {
-    return false;
-  }
+  if (code().prof().used() >= CodeCache::AProfMaxUsage) return false;
+
+  if (!shouldPGOFunc(func)) return false;
 
   if (profData()->optimized(func->getFuncId())) return false;
 

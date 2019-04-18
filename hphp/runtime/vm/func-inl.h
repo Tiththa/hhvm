@@ -18,6 +18,9 @@
 #error "func-inl.h should only be included by func.h"
 #endif
 
+#include "hphp/runtime/vm/cls-ref.h"
+#include "hphp/runtime/vm/unit-util.h"
+
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 // EH and FPI tables.
@@ -30,6 +33,17 @@ void FPIEnt::serde(SerDe& sd) {
     // These fields are recomputed by sortFPITab:
     // (m_parentIndex)
     // (m_fpiDepth)
+    ;
+}
+
+template<class SerDe>
+void EHEnt::serde(SerDe& sd) {
+  sd(m_base)
+    (m_past)
+    (m_iterId)
+    (m_handler)
+    (m_end)
+    (m_parentIndex)
     ;
 }
 
@@ -50,6 +64,7 @@ inline void Func::ParamInfo::serde(SerDe& sd) {
     (variadic)
     (userAttributes)
     (userType)
+    (inout)
     ;
 }
 
@@ -74,19 +89,20 @@ inline const void* Func::mallocEnd() const {
          + numPrologues() * sizeof(m_prologueTable[0]);
 }
 
-inline void Func::validate() const {
-#ifdef DEBUG
-  assert(m_magic == kMagic);
+inline bool Func::validate() const {
+#ifndef NDEBUG
+  assertx(m_magic == kMagic);
 #endif
-  assert(m_name != nullptr);
+  assertx(m_name != nullptr);
+  return true;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // FuncId manipulation.
 
 inline FuncId Func::getFuncId() const {
-  assert(m_funcId != InvalidFuncId);
-  assert(fromFuncId(m_funcId) == this);
+  assertx(m_funcId != InvalidFuncId);
+  assertx(fromFuncId(m_funcId) == this);
   return m_funcId;
 }
 
@@ -118,12 +134,12 @@ inline Class* Func::implCls() const {
 }
 
 inline const StringData* Func::name() const {
-  assert(m_name != nullptr);
+  assertx(m_name != nullptr);
   return m_name;
 }
 
 inline StrNR Func::nameStr() const {
-  assert(m_name != nullptr);
+  assertx(m_name != nullptr);
   return StrNR(m_name);
 }
 
@@ -133,27 +149,33 @@ inline const StringData* Func::fullName() const {
 }
 
 inline StrNR Func::fullNameStr() const {
-  assert(m_fullName != nullptr);
+  assertx(m_fullName != nullptr);
   return StrNR(m_fullName);
 }
 
 inline const StringData* Func::displayName() const {
-  auto const target = dynCallTarget();
-  return LIKELY(!target) ? name() : target->name();
+  return LIKELY(!takesInOutParams()) ? name() : stripInOutSuffix(name());
 }
 
 inline const StringData* Func::fullDisplayName() const {
-  auto const target = dynCallTarget();
-  return LIKELY(!target) ? fullName() : target->fullName();
+  return
+    LIKELY(!takesInOutParams()) ? fullName() : stripInOutSuffix(fullName());
+}
+
+inline const StringData* funcToStringHelper(const Func* func) {
+  if (RuntimeOption::EvalRaiseFuncConversionWarning) {
+    raise_warning("Func to string conversion");
+  }
+  return func->name();
 }
 
 inline NamedEntity* Func::getNamedEntity() {
-  assert(!shared()->m_preClass);
+  assertx(!shared()->m_preClass);
   return *reinterpret_cast<LowPtr<NamedEntity>*>(&m_namedEntity);
 }
 
 inline const NamedEntity* Func::getNamedEntity() const {
-  assert(!shared()->m_preClass);
+  assertx(!shared()->m_preClass);
   return *reinterpret_cast<const LowPtr<const NamedEntity>*>(&m_namedEntity);
 }
 
@@ -178,9 +200,9 @@ inline const StringData* Func::filename() const {
   // the unit
   const StringData* name = originalFilename();
   if (!name) {
-    assert(m_unit);
+    assertx(m_unit);
     name = m_unit->filepath();
-    assert(name);
+    assertx(name);
   }
   return name;
 }
@@ -193,7 +215,7 @@ inline int Func::line2() const {
   auto const sd = shared();
   auto const delta = sd->m_line2Delta;
   if (UNLIKELY(delta == kSmallDeltaLimit)) {
-    assert(extShared());
+    assertx(extShared());
     return static_cast<const ExtendedSharedData*>(sd)->m_line2;
   }
   return line1() + delta;
@@ -218,7 +240,7 @@ inline Offset Func::past() const {
   auto const sd = shared();
   auto const delta = sd->m_pastDelta;
   if (UNLIKELY(delta == kSmallDeltaLimit)) {
-    assert(extShared());
+    assertx(extShared());
     return static_cast<const ExtendedSharedData*>(sd)->m_past;
   }
   return base() + delta;
@@ -252,10 +274,6 @@ inline bool Func::isReturnByValue() const {
   return shared()->m_returnByValue;
 }
 
-inline bool Func::isReturnRef() const {
-  return m_attrs & AttrReference;
-}
-
 inline const TypeConstraint& Func::returnTypeConstraint() const {
   return shared()->m_retTypeConstraint;
 }
@@ -272,20 +290,20 @@ inline const Func::ParamInfoVec& Func::params() const {
 }
 
 inline uint32_t Func::numParams() const {
-  assert(bool(m_attrs & AttrVariadicParam) != bool(m_paramCounts & 1));
-  assert((m_paramCounts >> 1) == params().size());
+  assertx(bool(m_attrs & AttrVariadicParam) != bool(m_paramCounts & 1));
+  assertx((m_paramCounts >> 1) == params().size());
   return (m_paramCounts) >> 1;
 }
 
 inline uint32_t Func::numNonVariadicParams() const {
-  assert(bool(m_attrs & AttrVariadicParam) != bool(m_paramCounts & 1));
-  assert((m_paramCounts >> 1) == params().size());
+  assertx(bool(m_attrs & AttrVariadicParam) != bool(m_paramCounts & 1));
+  assertx((m_paramCounts >> 1) == params().size());
   return (m_paramCounts - 1) >> 1;
 }
 
 inline bool Func::hasVariadicCaptureParam() const {
-#ifdef DEBUG
-  assert(bool(m_attrs & AttrVariadicParam) ==
+#ifndef NDEBUG
+  assertx(bool(m_attrs & AttrVariadicParam) ==
          (numParams() && params()[numParams() - 1].variadic));
 #endif
   return m_attrs & AttrVariadicParam;
@@ -293,6 +311,23 @@ inline bool Func::hasVariadicCaptureParam() const {
 
 inline bool Func::discardExtraArgs() const {
   return !(m_attrs & (AttrMayUseVV | AttrVariadicParam));
+}
+
+inline bool Func::takesInOutParams() const {
+  return m_attrs & AttrTakesInOutParams;
+}
+
+inline bool Func::isInOutWrapper() const {
+  return m_attrs & AttrIsInOutWrapper;
+}
+
+inline uint32_t Func::numInOutParams() const {
+  if (!takesInOutParams()) return 0;
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < numParams(); ++i) {
+    if (params()[i].inout) ++count;
+  }
+  return count;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -317,7 +352,7 @@ inline Id Func::numNamedLocals() const {
 }
 
 inline const StringData* Func::localVarName(Id id) const {
-  assert(id >= 0);
+  assertx(id >= 0);
   return id < numNamedLocals() ? shared()->m_localNames[id] : nullptr;
 }
 
@@ -332,26 +367,19 @@ inline int Func::maxStackCells() const {
 inline int Func::numSlotsInFrame() const {
   return shared()->m_numLocals +
     shared()->m_numIterators * (sizeof(Iter) / sizeof(Cell)) +
-    (numClsRefSlots() * sizeof(Class*) + sizeof(Cell) - 1) / sizeof(Cell);
+    (numClsRefSlots() * sizeof(cls_ref) + sizeof(Cell) - 1) / sizeof(Cell);
 }
 
 inline bool Func::hasForeignThis() const {
-  return attrs() & AttrHasForeignThis;
+  return m_hasForeignThis;
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// Static locals.
-
-inline const Func::SVInfoVec& Func::staticVars() const {
-  return shared()->m_staticVars;
+inline void Func::setHasForeignThis(bool hasForeignThis) {
+  m_hasForeignThis = hasForeignThis;
 }
 
-inline bool Func::hasStaticLocals() const {
-  return !shared()->m_staticVars.empty();
-}
-
-inline int Func::numStaticLocals() const {
-  return shared()->m_staticVars.size();
+inline void Func::setGenerated(bool isGenerated) {
+  shared()->m_isGenerated = isGenerated;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -405,6 +433,10 @@ inline bool Func::isMemoizeWrapper() const {
   return shared()->m_isMemoizeWrapper;
 }
 
+inline bool Func::isMemoizeWrapperLSB() const {
+  return shared()->m_isMemoizeWrapperLSB;
+}
+
 inline bool Func::isMemoizeImpl() const {
   return isMemoizeImplName(name());
 }
@@ -423,52 +455,20 @@ inline bool Func::isBuiltin() const {
 
 inline bool Func::isCPPBuiltin() const {
   auto const ex = extShared();
-  return UNLIKELY(!!ex) && ex->m_builtinFuncPtr;
+  return UNLIKELY(!!ex) && ex->m_arFuncPtr;
 }
 
-inline bool Func::readsCallerFrame() const {
-  return m_attrs & AttrReadsCallerFrame;
+inline bool Func::takesNumArgs() const {
+  return shared()->m_takesNumArgs;
 }
 
-inline bool Func::writesCallerFrame() const {
-  return m_attrs & AttrWritesCallerFrame;
-}
-
-inline bool Func::accessesCallerFrame() const {
-  return m_attrs & (AttrReadsCallerFrame | AttrWritesCallerFrame);
-}
-
-inline BuiltinFunction Func::builtinFuncPtr() const {
-  if (auto const ex = extShared()) {
-    if (UNLIKELY(ex->m_dynCallTarget != nullptr)) {
-      return ex->m_dynCallTarget->builtinFuncPtr();
-    }
-    return ex->m_builtinFuncPtr;
-  }
+inline ArFunction Func::arFuncPtr() const {
+  if (auto const ex = extShared()) return ex->m_arFuncPtr;
   return nullptr;
 }
 
-inline BuiltinFunction Func::nativeFuncPtr() const {
-  if (auto const ex = extShared()) {
-    if (UNLIKELY(ex->m_dynCallTarget != nullptr)) {
-      return ex->m_dynCallTarget->nativeFuncPtr();
-    }
-    return ex->m_nativeFuncPtr;
-  }
-  return nullptr;
-}
-
-inline Func* Func::dynCallWrapper() const {
-  if (auto const ex = extShared()) {
-    return ex->m_dynCallWrapper;
-  }
-  return nullptr;
-}
-
-inline Func* Func::dynCallTarget() const {
-  if (auto const ex = extShared()) {
-    return ex->m_dynCallTarget;
-  }
+inline NativeFunction Func::nativeFuncPtr() const {
+  if (auto const ex = extShared()) return ex->m_nativeFuncPtr;
   return nullptr;
 }
 
@@ -511,10 +511,25 @@ inline bool Func::isResumable() const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// Reactivity.
+
+inline RxLevel Func::rxLevel() const {
+  return rxLevelFromAttr(m_attrs);
+}
+
+inline bool Func::isRxDisabled() const {
+  return shared()->m_isRxDisabled;
+}
+
+inline bool Func::isRxConditional() const {
+  return rxConditionalFromAttr(m_attrs);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // Methods.
 
 inline Slot Func::methodSlot() const {
-  assert(isMethod());
+  assertx(isMethod());
   return m_methodSlot;
 }
 
@@ -527,10 +542,6 @@ inline bool Func::hasPrivateAncestor() const {
 
 inline bool Func::isGenerated() const {
   return shared()->m_isGenerated;
-}
-
-inline bool Func::isDestructor() const {
-  return !strcmp(m_name->data(), "__destruct");
 }
 
 inline bool Func::isMagic() const {
@@ -584,8 +595,28 @@ inline bool Func::isFoldable() const {
   return m_attrs & AttrIsFoldable;
 }
 
-inline bool Func::isParamCoerceMode() const {
-  return attrs() & (AttrParamCoerceModeFalse | AttrParamCoerceModeNull);
+inline bool Func::supportsAsyncEagerReturn() const {
+  return m_attrs & AttrSupportsAsyncEagerReturn;
+}
+
+inline bool Func::isDynamicallyCallable() const {
+  return m_attrs & AttrDynamicallyCallable;
+}
+
+inline bool Func::isHot() const {
+  return m_hot;
+}
+
+inline void Func::setHot() {
+  m_hot = true;
+}
+
+inline bool Func::isPhpLeafFn() const {
+  return shared()->m_isPhpLeafFn;
+}
+
+inline bool Func::hasReifiedGenerics() const {
+  return shared()->m_hasReifiedGenerics;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -600,13 +631,8 @@ inline const Func::FPIEntVec& Func::fpitab() const {
 }
 
 inline const EHEnt* Func::findEH(Offset o) const {
-  assert(o >= base() && o < past());
+  assertx(o >= base() && o < past());
   return findEH(shared()->m_ehtab, o);
-}
-
-inline const EHEnt* Func::findEHbyHandler(Offset o) const {
-  assert(o >= base() && o < past());
-  return findEHbyHandler(shared()->m_ehtab, o);
 }
 
 template<class Container>
@@ -621,28 +647,6 @@ Func::findEH(const Container& ehtab, Offset o) {
   }
   return eh;
 }
-
-template<class Container>
-const typename Container::value_type*
-Func::findEHbyHandler(const Container& ehtab, Offset o) {
-  const typename Container::value_type* eh = nullptr;
-  Offset closest = 0;
-
-  // We cannot rely on m_end to be a useful value (not kInvalidOffset), so
-  // instead we take the handler whose start is the closest without going
-  // over the offset we are looking for. We can rely on the fault handlers
-  // to be both contigous and dominated by an Unwind/Catch because we
-  // verify this in checkSection() in the verifier
-
-  for (uint32_t i = 0, sz = ehtab.size(); i < sz; ++i) {
-    if (ehtab[i].m_handler <= o && ehtab[i].m_handler > closest) {
-      eh = &ehtab[i];
-      closest = ehtab[i].m_handler;
-    }
-  }
-  return eh;
-}
-
 
 inline const FPIEnt* Func::findFPI(Offset o) const {
   assertx(o >= base() && o < past());
@@ -684,14 +688,14 @@ inline int8_t& Func::maybeIntercepted() const {
 
 inline void Func::setAttrs(Attr attrs) {
   m_attrs = attrs;
-  assertx(IMPLIES(accessesCallerFrame(), isBuiltin() && !isMethod()));
 }
 
 inline void Func::setBaseCls(Class* baseCls) {
   m_baseCls = baseCls;
 }
 
-inline void Func::setFuncHandle(rds::Link<LowPtr<Func>> l) {
+inline void Func::setFuncHandle(rds::Link<LowPtr<Func>,
+                                          rds::Mode::NonLocal> l) {
   // TODO(#2950356): This assertion fails for create_function with an existing
   // declared function named __lambda_func.
   //assert(!m_cachedFunc.valid());
@@ -703,30 +707,14 @@ inline void Func::setHasPrivateAncestor(bool b) {
 }
 
 inline void Func::setMethodSlot(Slot s) {
-  assert(isMethod());
+  assertx(isMethod());
   m_methodSlot = s;
 }
 
-inline void Func::setDynCallWrapper(Func* f) {
-  assert(accessesCallerFrame());
-  assert(f->accessesCallerFrame());
-  assert(!f->dynCallWrapper());
-  assert(extShared());
-  assert(!dynCallWrapper() || dynCallWrapper() == f);
-  assert(!dynCallTarget());
-  assert(!f->dynCallTarget() || f->dynCallTarget() == this);
-  extShared()->m_dynCallWrapper = f;
-}
-
-inline void Func::setDynCallTarget(Func* f) {
-  assert(accessesCallerFrame());
-  assert(f->accessesCallerFrame());
-  assert(!f->dynCallTarget());
-  assert(extShared());
-  assert(!dynCallTarget() || dynCallTarget() == f);
-  assert(!dynCallWrapper());
-  assert(!f->dynCallWrapper() || f->dynCallWrapper() == this);
-  extShared()->m_dynCallTarget = f;
+inline bool Func::serialize() const {
+  if (m_serialized) return false;
+  const_cast<Func*>(this)->m_serialized = true;
+  return true;
 }
 
 //////////////////////////////////////////////////////////////////////

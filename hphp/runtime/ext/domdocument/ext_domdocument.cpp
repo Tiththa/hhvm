@@ -34,7 +34,7 @@
 #include "hphp/runtime/vm/native.h"
 #include "hphp/system/systemlib.h"
 #include "hphp/util/functional.h"
-#include "hphp/util/hash-map-typedefs.h"
+#include "hphp/util/hash-set.h"
 #include "hphp/util/string-vsnprintf.h"
 
 #define DOM_XMLNS_NAMESPACE                             \
@@ -68,7 +68,7 @@ extern xmlNodePtr SimpleXMLElement_exportNode(const Object& sxe);
 #define IMPLEMENT_GET_CLASS_FUNCTION(CLASS)                                    \
 Class* get ## CLASS ## Class() {                                               \
   static Class* cls = Unit::lookupClass(s_ ## CLASS.get());                    \
-  assert(cls);                                                                 \
+  assertx(cls);                                                                \
   return cls;                                                                  \
 }                                                                              \
 /**/
@@ -147,7 +147,7 @@ static void php_libxml_internal_error_handler(int error_type, void *ctx,
                      parser->input->filename, parser->input->line);
         break;
       default:
-        assert(false);
+        assertx(false);
         break;
       }
     } else {
@@ -161,7 +161,7 @@ static void php_libxml_internal_error_handler(int error_type, void *ctx,
                      parser->input->line);
         break;
       default:
-        assert(false);
+        assertx(false);
         break;
       }
     }
@@ -174,7 +174,7 @@ static void php_libxml_internal_error_handler(int error_type, void *ctx,
       raise_notice("%s", msg.c_str());
       break;
     default:
-      assert(false);
+      assertx(false);
       break;
     }
   }
@@ -210,6 +210,7 @@ static void php_libxml_ctx_warning(void *ctx,
   } catch (...) {}
   va_end(args);
 }
+
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -423,18 +424,19 @@ static Variant dom_canonicalization(xmlNodePtr nodep, const String& file,
       raise_warning("'query' missing from xpath array");
       return false;
     }
-    auto const& tmp = arr.rvalAt(s_query);
-    if (!tmp.isString()) {
+    auto const tmp = arr.rvalAt(s_query).unboxed();
+    if (!isStringType(tmp.type())) {
       raise_warning("'query' is not a string");
       return false;
     }
-    xquery = tmp.toString();
+    xquery = tvCastToString(tmp.tv());
     ctxp = xmlXPathNewContext(docp);
     ctxp->node = nodep;
     if (arr.exists(s_namespaces)) {
-      Variant temp = arr.rvalAt(s_namespaces);
-      if (temp.isArray()) {
-        for (ArrayIter it = temp.toArray().begin(); it; ++it) {
+      auto const temp = arr.rvalAt(s_namespaces).unboxed();
+      if (isArrayLikeType(temp.type())) {
+        auto ad = temp.val().parr;
+        for (ArrayIter it = ArrayIter(ad); it; ++it) {
           Variant prefix = it.first();
           Variant tmpns = it.second();
           if (prefix.isString() || tmpns.isString()) {
@@ -1171,7 +1173,7 @@ Variant php_dom_create_object(xmlNodePtr obj,
   if (doc) {
     if (doc->m_classmap.exists(clsname)) {
       // or const char * is not safe
-      assert(doc->m_classmap[clsname].isString());
+      assertx(doc->m_classmap[clsname].isString());
       clsname = doc->m_classmap[clsname].toString();
     }
   }
@@ -1187,7 +1189,7 @@ Variant php_dom_create_object(xmlNodePtr obj,
   if (!nodeobj->node()) {
     nodeobj->setNode(node);
   }
-  assert(nodeobj->node() == node);
+  assertx(nodeobj->node() == node);
 
   if (doc) {
     nodeobj->setDoc(std::move(doc));
@@ -1337,6 +1339,14 @@ static Variant php_xpath_eval(DOMXPath* domxpath, const String& expr,
 }
 
 static void node_list_unlink(xmlNodePtr node) {
+  // This recursive walk is designed to protect actively referenced LibXML
+  // elements from having their subtrees freed. When running with the option
+  // Eval.LibXMLUseSafeSubtrees set this can't happen as nodes collectively
+  // share ownership of their subtree. Short-circuit this logic to prevent the
+  // early destruction of XMLNodes from being observed via the linkage of their
+  // respective subtrees.
+  if (RuntimeOption::EvalLibXMLUseSafeSubtrees) return;
+
   while (node != nullptr) {
     if (node->_private) {
       libxml_register_node(node)->unlink(); // release node if unused
@@ -1450,7 +1460,13 @@ struct notationIterator {
   xmlNotation *notation;
 };
 
-static void itemHashScanner(void* payload, void* data, xmlChar* /*name*/) {
+#if LIBXML_VERSION >= 20908
+#define XMLCHAR_CONST const
+#else
+#define XMLCHAR_CONST
+#endif
+static void itemHashScanner(void* payload, void* data, XMLCHAR_CONST xmlChar* /*name*/) {
+#undef XMLCHAR_CONST
   nodeIterator *priv = (nodeIterator *)data;
   if (priv->cur < priv->index) {
     priv->cur++;
@@ -1778,6 +1794,8 @@ static void domnode_nodevalue_write(const Object& obj, const Variant& value) {
   case XML_ATTRIBUTE_NODE:
     if (nodep->children) {
       node_list_unlink(nodep->children);
+      php_libxml_node_free_resource((xmlNodePtr) nodep->children);
+      nodep->children = nullptr;
     }
   case XML_TEXT_NODE:
   case XML_COMMENT_NODE:
@@ -2008,9 +2026,19 @@ static Variant domnode_textcontent_read(const Object& obj) {
   return empty_string_variant();
 }
 
-static void
-domnode_textcontent_write(const Object& /*obj*/, const Variant& /*value*/) {
-  // do nothing
+static void domnode_textcontent_write(const Object& obj, const Variant& value) {
+  CHECK_WRITE_NODE(nodep);
+
+  if (nodep->type == XML_ELEMENT_NODE || nodep->type == XML_ATTRIBUTE_NODE) {
+    if (nodep->children) {
+      node_list_unlink(nodep->children);
+      php_libxml_node_free_resource((xmlNodePtr) nodep->children);
+      nodep->children = nullptr;
+    }
+  }
+
+  xmlNodeSetContent(nodep, (xmlChar *) "");
+  xmlNodeAddContent(nodep, (xmlChar *) value.toString().data());
 }
 
 static DOMPropertyAccessor domnode_properties[] = {
@@ -2143,7 +2171,7 @@ DOMNode& DOMNode::operator=(const DOMNode& copy) {
   }
 
   if (m_node) {
-    assert(m_node->getCache() &&
+    assertx(m_node->getCache() &&
            Native::data<DOMNode>(m_node->getCache()) == this);
     m_node->clearCache();
     m_node = nullptr;
@@ -2402,7 +2430,7 @@ Variant HHVM_METHOD(DOMNode, lookupNamespaceUri,
                     const Variant& namespaceuri) {
   if (!namespaceuri.isString() && !namespaceuri.isNull()) {
     raise_param_type_warning("DOMNode::lookupNamespaceUri", 1,
-                             DataType::KindOfString, namespaceuri.getType());
+                             KindOfString, namespaceuri.getType());
     return init_null();
   }
 
@@ -5685,7 +5713,7 @@ Variant HHVM_METHOD(DOMXPath, registerPHPFunctions,
 ///////////////////////////////////////////////////////////////////////////////
 
 void DOMNodeIterator::reset_iterator() {
-  assert(m_objmap);
+  assertx(m_objmap);
   xmlNodePtr curnode = nullptr;
   if (m_objmap->m_nodetype != XML_ENTITY_NODE &&
       m_objmap->m_nodetype != XML_NOTATION_NODE) {

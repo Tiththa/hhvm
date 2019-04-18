@@ -1,8 +1,11 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_1933() {
 $my_array = array(7, 1, 5, 6);
 $some_value = 6;
-usort($my_array,
+usort(&$my_array,
   function($a, $b) use ($some_value) {
     if ($a === $some_value) {
       if ($b === $some_value) {
@@ -20,3 +23,4 @@ usort($my_array,
     return 1;
   }
 );
+}

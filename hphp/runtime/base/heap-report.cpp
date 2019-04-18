@@ -13,6 +13,9 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+
+#include <sstream>
+
 #include "hphp/runtime/base/heap-graph.h"
 #include "hphp/runtime/base/heap-algorithms.h"
 #include "hphp/runtime/base/header-kind.h"
@@ -45,12 +48,12 @@ DEBUG_ONLY std::string describe(const HeapGraph& g, int n) {
     case HeaderKind::Packed:
     case HeaderKind::Mixed:
     case HeaderKind::Dict:
+    case HeaderKind::Shape:
     case HeaderKind::Empty:
     case HeaderKind::VecArray:
     case HeaderKind::Keyset:
     case HeaderKind::Apc:
     case HeaderKind::Globals:
-    case HeaderKind::Proxy:
       out << "[" << static_cast<const ArrayData*>(h)->size() << "]";
       break;
     case HeaderKind::String:
@@ -58,14 +61,19 @@ DEBUG_ONLY std::string describe(const HeapGraph& g, int n) {
       break;
     case HeaderKind::Resource:
     case HeaderKind::Ref:
+    case HeaderKind::ClsMeth:
       break;
     case HeaderKind::Object:
+    case HeaderKind::NativeObject:
     case HeaderKind::Closure:
     case HeaderKind::WaitHandle:
     case HeaderKind::AsyncFuncWH:
     case HeaderKind::AwaitAllWH:
       out << ":" << static_cast<const ObjectData*>(h)->classname_cstr();
       break;
+    case HeaderKind::Record:
+      out << ":" <<
+        static_cast<const RecordData*>(h)->getRecord()->name()->data();
     case HeaderKind::Vector:
     case HeaderKind::Map:
     case HeaderKind::Set:
@@ -79,6 +87,7 @@ DEBUG_ONLY std::string describe(const HeapGraph& g, int n) {
       out << "[" << getContainerSize(make_tv<KindOfObject>(obj)) << "]";
       break;
     }
+    case HeaderKind::Cpp:
     case HeaderKind::BigMalloc:
     case HeaderKind::SmallMalloc:
       out << "[" << static_cast<const MallocNode*>(h)->nbytes << "]";
@@ -86,11 +95,11 @@ DEBUG_ONLY std::string describe(const HeapGraph& g, int n) {
     case HeaderKind::AsyncFuncFrame:
     case HeaderKind::NativeData:
     case HeaderKind::ClosureHdr:
+    case HeaderKind::MemoData:
       break;
     case HeaderKind::Free:
       out << "[" << static_cast<const FreeNode*>(h)->size() << "]";
       break;
-    case HeaderKind::BigObj:
     case HeaderKind::Slab:
     case HeaderKind::Hole:
       not_reached();
@@ -101,7 +110,6 @@ DEBUG_ONLY std::string describe(const HeapGraph& g, int n) {
 
 const char* ptrSym[] = {
     "<--", // Counted
-    "<..", // Implicit
     "<~~", // Ambiguous
 };
 
@@ -225,16 +233,16 @@ bool checkPointers(const HeapGraph& g, const char* phase) {
     auto& node = g.nodes[n];
     if (!haveCount(node.h->kind())) continue;
     auto count = static_cast<const MaybeCountable*>(node.h)->count();
-    assert(count >= 0); // static things shouldn't be in the heap.
-    unsigned num_counted{0}, num_implicit{0}, num_ambig{0};
+    assertx(count >= 0); // static things shouldn't be in the heap.
+    unsigned num_counted{0}, num_ambig{0};
     g.eachPred(n, [&](const HeapGraph::Ptr& ptr) {
       switch (ptr.ptr_kind) {
         case HeapGraph::Counted: num_counted++; break;
-        case HeapGraph::Implicit: num_implicit++; break;
         case HeapGraph::Ambiguous: num_ambig++; break;
+        case HeapGraph::Weak: break;
       }
     });
-    auto num_ptrs = num_counted + num_implicit + num_ambig;
+    auto num_ptrs = num_counted + num_ambig;
     if (num_ptrs < count) {
       // missed at least one counted pointer, or refcount too high
       // no assert, because without gc the only effect is a leak.
@@ -251,7 +259,7 @@ bool checkPointers(const HeapGraph& g, const char* phase) {
       traceToRoot(g, n, "");
     }
   }
-  assert(!found_dangling && "found dangling pointers");
+  assertx(!found_dangling && "found dangling pointers");
   return true;
 }
 

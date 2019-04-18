@@ -3,18 +3,28 @@
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
-function bcscale($scale) { }
-function bcadd($left, $right, $scale = -1) { }
-function bcsub($left, $right, $scale = -1) { }
-function bccomp($left, $right, $scale = -1) { }
-function bcmul($left, $right, $scale = -1) { }
-function bcdiv($left, $right, $scale = -1) { }
-function bcmod($left, $right) { }
-function bcpow($left, $right, $scale = -1) { }
-function bcpowmod($left, $right, $modulus, $scale = -1) { }
-function bcsqrt($operand, $scale = -1) { }
+
+<<__PHPStdLib>>
+function bcscale(int $scale);
+<<__PHPStdLib>>
+function bcadd(string $left, string $right, int $scale = -1);
+<<__PHPStdLib>>
+function bcsub(string $left, string $right, int $scale = -1);
+<<__PHPStdLib>>
+function bccomp(string $left, string $right, int $scale = -1);
+<<__PHPStdLib>>
+function bcmul(string $left, string $right, int $scale = -1);
+<<__PHPStdLib>>
+function bcdiv(string $left, string $right, int $scale = -1);
+<<__PHPStdLib>>
+function bcmod(string $left, string $right);
+<<__PHPStdLib>>
+function bcpow(string $left, string $right, int $scale = -1);
+<<__PHPStdLib>>
+function bcpowmod(string $left, string $right, string $modulus, int $scale = -1);
+<<__PHPStdLib>>
+function bcsqrt(string $operand, int $scale = -1);

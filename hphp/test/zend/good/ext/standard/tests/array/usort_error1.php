@@ -1,5 +1,5 @@
 <?php
-/* Prototype  : bool usort(array $array_arg, string $cmp_function)
+/* Prototype  : bool usort(&array $array_arg, string $cmp_function)
  * Description: Sort an array by values using a user-defined comparison function 
  * Source code: ext/standard/array.c
  */
@@ -15,11 +15,10 @@ echo "\n-- Testing usort() function with more than expected no. of arguments --\
 $array_arg = array(1, 2);
 $cmp_function = 'string_val';
 $extra_arg = 10;
-var_dump( usort($array_arg, $cmp_function, $extra_arg) );
+try { var_dump( usort(&$array_arg, $cmp_function, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 // Testing usort with one less than the expected number of arguments
 echo "\n-- Testing usort() function with less than expected no. of arguments --\n";
 $array_arg = array(1, 2);
-var_dump( usort($array_arg) );
-?>
-===DONE===
+try { var_dump( usort(&$array_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+echo "===DONE===\n";

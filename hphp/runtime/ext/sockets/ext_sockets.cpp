@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <vector>
 
 #if HAVE_IF_NAMETOINDEX
 #include <net/if.h>
@@ -35,12 +36,14 @@
 
 #include "hphp/util/network.h"
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/socket.h"
 #include "hphp/runtime/base/ssl-socket.h"
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/runtime/base/mem-file.h"
 #include "hphp/runtime/base/zend-functions.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/util/logger.h"
 
 #define PHP_NORMAL_READ 0x0001
@@ -279,38 +282,46 @@ static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
   return true;
 }
 
-static void sock_array_to_fd_set(const Array& sockets, pollfd *fds, int &nfds,
-                                 short flag) {
-  assert(fds);
-  for (ArrayIter iter(sockets); iter; ++iter) {
-    auto sock = cast<File>(iter.second());
-    int intfd = sock->fd();
-    if (intfd < 0) {
-      raise_warning(
-        "cannot represent a stream of type user-space as a file descriptor"
-      );
-      continue;
+static void sock_array_to_fd_set(const Array& sockets, std::vector<pollfd>& fds,
+                                 const short flag) {
+  IterateVNoInc(
+    sockets.get(),
+    [&](TypedValue v) {
+      assertx(v.m_type == KindOfResource);
+      auto const intfd = static_cast<File*>(v.m_data.pres->data())->fd();
+      if (intfd < 0) {
+        raise_warning(
+          "cannot represent a stream of type user-space as a file descriptor"
+        );
+        return;
+      }
+      fds.emplace_back();
+      auto& fd = fds.back();
+      fd.fd = intfd;
+      fd.events = flag;
+      fd.revents = 0;
     }
-    pollfd &fd = fds[nfds++];
-    fd.fd = intfd;
-    fd.events = flag;
-    fd.revents = 0;
-  }
+  );
 }
 
-static void sock_array_from_fd_set(Variant &sockets, pollfd *fds, int &nfds,
-                                   int &count, short flag) {
-  assert(sockets.isArray());
-  Array sock_array = sockets.toArray();
-  Array ret = Array::Create();
-  for (ArrayIter iter(sock_array); iter; ++iter) {
-    const pollfd &fd = fds[nfds++];
-    assert(fd.fd == cast<File>(iter.second())->fd());
-    if (fd.revents & flag) {
-      ret.set(iter.first(), iter.second());
-      count++;
+static void sock_array_from_fd_set(Variant &sockets,
+                                   const std::vector<pollfd>& fds,
+                                   int &nfds, int &count, const short flag) {
+  Array ret = Array::CreateDArray();
+  assertx(sockets.isArray());
+  const auto& sock_array = sockets.asCArrRef();
+  IterateKVNoInc(
+    sock_array.get(),
+    [&](Cell k, TypedValue v) {
+      const pollfd &fd = fds.at(nfds++);
+      assertx(v.m_type == KindOfResource);
+      assertx(fd.fd == static_cast<File*>(v.m_data.pres->data())->fd());
+      if (fd.revents & flag) {
+        ret.set(k, v);
+        count++;
+      }
     }
-  }
+  );
   sockets = ret;
 }
 
@@ -387,7 +398,7 @@ static req::ptr<Socket> create_new_socket(
 
   req::ptr<Socket> sock;
   int fd = socket(domain, type, 0);
-  double timeout = ThreadInfo::s_threadInfo.getNoCheck()->
+  double timeout = RequestInfo::s_requestInfo.getNoCheck()->
       m_reqInjectionData.getSocketDefaultTimeout();
   req::ptr<StreamContext> streamctx;
   if (context.isResource()) {
@@ -490,7 +501,8 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
 
     fd = socket(domain, type, 0);
     sock = req::make<StreamSocket>(
-      fd, domain, hosturl.getHost().c_str(), hosturl.getPort());
+      fd, domain, hosturl.getHost().c_str(), hosturl.getPort(),
+      0, empty_string_ref, false);
 
     if (!set_sockaddr(sa_storage, sock, hosturl.getHost().c_str(),
                       hosturl.getPort(), sa_ptr, sa_size)) {
@@ -536,14 +548,17 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
       fd = -1;
     }
 
-    sslsock = SSLSocket::Create(fd, domain, hosturl, timeout, streamctx);
+    sslsock = SSLSocket::Create(fd, domain, hosturl, timeout, streamctx, false);
     if (sslsock) {
       sock = sslsock;
     } else {
       sock = req::make<StreamSocket>(fd,
                                      domain,
                                      hosturl.getHost().c_str(),
-                                     hosturl.getPort());
+                                     hosturl.getPort(),
+                                     0,
+                                     empty_string_ref,
+                                     false);
     }
   }
 
@@ -631,14 +646,14 @@ bool socket_create_pair_impl(int domain, int type, int protocol, VRefParam fd,
   }
 
   if (asStream) {
-    fd.assignIfRef(make_packed_array(
+    fd.assignIfRef(make_varray(
       Variant(req::make<StreamSocket>(fds_array[0], domain, nullptr, 0, 0.0,
                                       s_socktype_generic)),
       Variant(req::make<StreamSocket>(fds_array[1], domain, nullptr, 0, 0.0,
                                       s_socktype_generic))
     ));
   } else {
-    fd.assignIfRef(make_packed_array(
+    fd.assignIfRef(make_varray(
       Variant(req::make<ConcreteSocket>(fds_array[0], domain, nullptr, 0, 0.0,
                                         s_socktype_generic)),
       Variant(req::make<ConcreteSocket>(fds_array[1], domain, nullptr, 0, 0.0,
@@ -820,7 +835,7 @@ bool HHVM_FUNCTION(socket_set_option,
         tv.tv_usec %= 1000000;
       }
       if (tv.tv_sec < 0) {
-        tv.tv_sec = ThreadInfo::s_threadInfo.getNoCheck()->
+        tv.tv_sec = RequestInfo::s_requestInfo.getNoCheck()->
         m_reqInjectionData.getSocketDefaultTimeout();
       }
       optlen = sizeof(tv);
@@ -953,20 +968,19 @@ Variant HHVM_FUNCTION(socket_select,
     return false;
   }
 
-  struct pollfd *fds = (struct pollfd *)calloc(count, sizeof(struct pollfd));
-  count = 0;
+  std::vector<pollfd> fds;
+  fds.reserve(count);
   if (!read.isNull()) {
-    sock_array_to_fd_set(read->toCArrRef(), fds, count, POLLIN);
+    sock_array_to_fd_set(read->toCArrRef(), fds, POLLIN);
   }
   if (!write.isNull()) {
-    sock_array_to_fd_set(write->toCArrRef(), fds, count, POLLOUT);
+    sock_array_to_fd_set(write->toCArrRef(), fds, POLLOUT);
   }
   if (!except.isNull()) {
-    sock_array_to_fd_set(except->toCArrRef(), fds, count, POLLPRI);
+    sock_array_to_fd_set(except->toCArrRef(), fds, POLLPRI);
   }
-  if (!count) {
+  if (fds.empty()) {
     raise_warning("no resource arrays were passed to select");
-    free(fds);
     return false;
   }
 
@@ -980,31 +994,35 @@ Variant HHVM_FUNCTION(socket_select,
    * read buffer of any of the streams in the read array, let's pretend
    * that we selected, but return only the readable sockets */
   if (!read.isNull()) {
-    auto hasData = Array::Create();
-    for (ArrayIter iter(read.toArray()); iter; ++iter) {
-      auto file = cast<File>(iter.second());
-      if (file->bufferedLen() > 0) {
-        hasData.append(iter.second());
+    // sock_array_from_fd_set can set a sparsely indexed array, so
+    // we use darray everywhere.
+    auto hasData = Array::CreateDArray();
+    IterateVNoInc(
+      read->toCArrRef().get(),
+      [&](TypedValue v) {
+        assertx(v.m_type == KindOfResource);
+        auto file = static_cast<File*>(v.m_data.pres->data());
+        if (file->bufferedLen() > 0) {
+          hasData.append(v);
+        }
       }
-    }
+    );
     if (hasData.size() > 0) {
       if (!write.isNull()) {
-        write.assignIfRef(empty_array());
+        write.assignIfRef(empty_darray());
       }
       if (!except.isNull()) {
-        except.assignIfRef(empty_array());
+        except.assignIfRef(empty_darray());
       }
       read.assignIfRef(hasData);
-      free(fds);
       return hasData.size();
     }
   }
 
-  int retval = poll(fds, count, timeout_ms);
+  int retval = poll(fds.data(), fds.size(), timeout_ms);
   if (retval == -1) {
     raise_warning("unable to select [%d]: %s", errno,
                   folly::errnoStr(errno).c_str());
-    free(fds);
     return false;
   }
 
@@ -1026,7 +1044,6 @@ Variant HHVM_FUNCTION(socket_select,
     }
   }
 
-  free(fds);
   return count;
 }
 
@@ -1391,7 +1408,7 @@ bool HHVM_FUNCTION(socket_shutdown,
    * a memfile. As the fact that it's not really a socket is an implementation
    * detail, user code needs to be able to call shutdown on it.
    */
-  if (socket.is<MemFile>()) {
+  if (socket->instanceof<MemFile>()) {
     return true;
   }
   auto sock = cast<Socket>(socket);
@@ -1443,12 +1460,8 @@ void HHVM_FUNCTION(socket_clear_error,
 // fsock: treating sockets as "file"
 
 namespace {
-
-thread_local std::unordered_map<
-  std::string,
-  std::shared_ptr<SocketData>
-> s_sockets;
-
+using SocketMap = std::unordered_map<std::string, std::shared_ptr<SocketData>>;
+RDS_LOCAL(SocketMap, s_sockets);
 }
 
 Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
@@ -1463,8 +1476,8 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
 
     // Check our persistent storage and determine if it's an SSLSocket
     // or just a regular socket.
-    auto sockItr = s_sockets.find(key);
-    if (sockItr != s_sockets.end()) {
+    auto sockItr = s_sockets->find(key);
+    if (sockItr != s_sockets->end()) {
       req::ptr<Socket> sock;
       if (auto sslSocketData =
           std::dynamic_pointer_cast<SSLSocketData>(sockItr->second)) {
@@ -1480,12 +1493,12 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
       // socket had an error earlier, we need to close it, remove it from
       // persistent storage, and create a new one (in that order)
       sock->close();
-      s_sockets.erase(sockItr);
+      s_sockets->erase(sockItr);
     }
   }
 
   if (timeout < 0) {
-    timeout = ThreadInfo::s_threadInfo.getNoCheck()->
+    timeout = RequestInfo::s_requestInfo.getNoCheck()->
       m_reqInjectionData.getSocketDefaultTimeout();
   }
 
@@ -1500,9 +1513,9 @@ Variant sockopen_impl(const HostURL &hosturl, VRefParam errnum,
   }
 
   if (persistent) {
-    assert(!key.empty());
-    s_sockets[key] = cast<Socket>(socket)->getData();
-    assert(s_sockets[key]);
+    assertx(!key.empty());
+    (*s_sockets)[key] = cast<Socket>(socket)->getData();
+    assertx((*s_sockets)[key]);
   }
 
   return socket;
@@ -1584,10 +1597,10 @@ Variant HHVM_FUNCTION(getaddrinfo,
     return false;
   }
 
-  Array ret = Array::Create();
+  Array ret = Array::CreateVArray();
 
   for (res = res0; res; res = res->ai_next) {
-    Array data = make_map_array(
+    Array data = make_darray(
       s_family, res->ai_family,
       s_socktype, res->ai_socktype,
       s_protocol, res->ai_protocol
@@ -1602,7 +1615,7 @@ Variant HHVM_FUNCTION(getaddrinfo,
           a = (struct sockaddr_in *)res->ai_addr;
           data.set(
             s_sockaddr,
-            make_map_array(
+            make_darray(
               s_address, buffer,
               s_port, ntohs(a->sin_port)
             )
@@ -1618,7 +1631,7 @@ Variant HHVM_FUNCTION(getaddrinfo,
           a = (struct sockaddr_in6 *)res->ai_addr;
           data.set(
             s_sockaddr,
-            make_map_array(
+            make_darray(
               s_address, buffer,
               s_port, ntohs(a->sin6_port),
               s_flow_info, (int32_t)a->sin6_flowinfo,

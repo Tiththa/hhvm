@@ -1,4 +1,6 @@
-<?hh
+<?hh // partial
+
+namespace {
 
 /* Set the various assert() control options or just query their current
  * settings.
@@ -8,15 +10,7 @@ function assert_options(int $what,
                         mixed $value = null): mixed;
 
 /* assert() will check the given assertion and take appropriate action if its
- * result is FALSE.  If the assertion is given as a string it will be
- * evaluated as PHP code by assert(). The advantages of a string assertion are
- * less overhead when assertion checking is off and messages containing the
- * assertion expression when an assertion fails. This means that if you pass a
- * boolean condition as assertion this condition will not show up as parameter
- * to the assertion function which you may have defined with the
- * assert_options() function, the condition is converted to a string before
- * calling that handler function, and the boolean FALSE is converted as the
- * empty string.  Assertions should be used as a debugging feature only. You
+ * result is FALSE.  Assertions should be used as a debugging feature only. You
  * may use them for sanity-checks that test for conditions that should always
  * be TRUE and that indicate some programming errors if not or to check for
  * the presence of certain features like extension functions or certain system
@@ -24,20 +18,9 @@ function assert_options(int $what,
  * operations like input parameter checks. As a rule of thumb your code should
  * always be able to work correctly if assertion checking is not activated.
  * The behavior of assert() may be configured by assert_options() or by
- * .ini-settings described in that functions manual page.  The
- * assert_options() function and/or ASSERT_CALLBACK configuration directive
- * allow a callback function to be set to handle failed assertions.  assert()
- * callbacks are particularly useful for building automated test suites
- * because they allow you to easily capture the code passed to the assertion,
- * along with information on where the assertion was made. While this
- * information can be captured via other methods, using assertions makes it
- * much faster and easier!  The callback function should accept three
- * arguments. The first argument will contain the file the assertion failed
- * in. The second argument will contain the line the assertion failed on and
- * the third argument will contain the expression that failed (if any -
- * literal values such as 1 or "two" will not be passed via this argument)
+ * .ini-settings described in that functions manual page.
  */
-<<__Native("ReadsCallerFrame", "WritesCallerFrame")>>
+<<__Native>>
 function assert(mixed $assertion, mixed $message = null): mixed;
 
 /* Loads the PHP extension given by the parameter library.  Use
@@ -80,8 +63,7 @@ function get_cfg_var(string $option): mixed;
 function get_current_user(): string;
 
 /* Returns the names and values of all the constants currently defined. This
- * includes those created by extensions as well as those created with the
- * define() function.
+ * includes those created by extensions.
  */
 <<__Native>>
 function get_defined_constants(bool $categorize = false): array;
@@ -105,28 +87,6 @@ function get_included_files(): array;
 
 function get_required_files(): array {
   return get_included_files();
-}
-
-/* Returns the current configuration setting of magic_quotes_gpc  Keep in mind
- * that attempting to set magic_quotes_gpc at runtime will not work.  For more
- * information about magic_quotes, see this security section.
- */
-function get_magic_quotes_gpc(): ?bool {
-  if (($argc = func_num_args()) != 0) {
-    trigger_error(__FUNCTION__ . "() expects exactly 0 parameters," .
-                  " $argc given", E_USER_WARNING);
-    return null;
-  }
-  return false;
-}
-
-function get_magic_quotes_runtime(): ?bool {
-  if (($argc = func_num_args()) != 0) {
-    trigger_error(__FUNCTION__ . "() expects exactly 0 parameters," .
-                  " $argc given", E_USER_WARNING);
-    return null;
-  }
-  return false;
 }
 
 <<__Native>>
@@ -188,6 +148,12 @@ function clock_getres(int $clk_id,
 function clock_gettime(int $clk_id,
                        mixed &$sec,
                        mixed &$nsec): bool;
+
+/* Same as clock_gettime(), but returns a single integer in nanoseconds.
+ * Returns -1 if invalid or non-supported clock is specified.
+ */
+<<__Native>>
+function clock_gettime_ns(int $clk_id): int;
 
 /* Gets number of processors.
  */
@@ -351,28 +317,6 @@ function phpversion(string $extension = ""): mixed;
 <<__Native>>
 function putenv(string $setting): bool;
 
-/* Set the current active configuration setting of magic_quotes_runtime.
- * Warning: This function has been DEPRECATED as of PHP 5.3.0. Relying on this
- * feature is highly discouraged.
- */
-function set_magic_quotes_runtime(mixed $new_setting): bool {
-  trigger_error("Function set_magic_quotes_runtime() is deprecated",
-                E_USER_DEPRECATED);
-
-  if ($new_setting) {
-    trigger_error(__FUNCTION__ . "() is not supported anymore", E_USER_ERROR);
-  }
-
-  return false;
-}
-
-/*
- * Alias of set_magic_quotes_runtime()
- */
-function magic_quotes_runtime(mixed $new_setting): bool {
-  return set_magic_quotes_runtime($new_setting);
-}
-
 /* Set the number of seconds a script is allowed to run. If this is reached,
  * the script returns a fatal error. The default limit is 30 seconds or, if it
  * exists, the max_execution_time value defined in the php.ini.  When called,
@@ -401,7 +345,7 @@ function sys_get_temp_dir(): string;
  * only versions with different levels like '4.1' and '4.1.2' can be compared
  * but also any PHP specific version containing development state.
  */
-<<__IsFoldable, __Native>>
+<<__IsFoldable, __Rx, __Native>>
 function version_compare(string $version1,
                          string $version2,
                          string $sop = ""): mixed;
@@ -411,6 +355,8 @@ function version_compare(string $version1,
  */
 <<__Native>>
 function zend_version(): string;
+
+} // root namespace
 
 namespace __SystemLib {
 
@@ -424,15 +370,15 @@ namespace __SystemLib {
       $this->body = $this->element('body');
     }
 
-    private function is_cli() { return php_sapi_name() == 'cli'; }
+    private function is_cli() { return \php_sapi_name() == 'cli'; }
 
     private function appendChildren(\DOMElement $el, ?array $children) {
       if ($children) {
         foreach ($children as $v) {
           if ($v === null) {
-          } else if ($v instanceof \DOMElement) {
+          } else if ($v is \DOMElement) {
             $el->appendChild($v);
-          } else if (is_array($v)) {
+          } else if (\is_array($v)) {
             $this->appendChildren($el, $v);
           } else {
             $el->appendChild($this->xml->createTextNode($v));
@@ -465,13 +411,13 @@ namespace __SystemLib {
         echo $title . "\n";
         echo "\n";
         foreach ($data as $k => $v) {
-          echo $k . " => " . print_r($v, true) . "\n";
+          echo $k . " => " . \print_r($v, true) . "\n";
         }
         echo "\n";
       } else {
         $children = [];
         foreach ($data as $k => $v) {
-          array_push($children, $this->tr($k, print_r($v, true)));
+          \array_push(&$children, $this->tr($k, \print_r($v, true)));
         }
         return [
           $this->element('hr'),
@@ -499,10 +445,10 @@ namespace __SystemLib {
 
     private function reportVersionTitle() {
       if ($this->is_cli()) {
-        echo 'HHVM Version => ' . HHVM_VERSION . "\n";
+        echo 'HHVM Version => ' . \HHVM_VERSION . "\n";
       } else {
         $this->body->appendChild(
-          $this->element('h1', [], 'HHVM Version ' . HHVM_VERSION));
+          $this->element('h1', [], 'HHVM Version ' . \HHVM_VERSION));
       }
     }
 
@@ -512,33 +458,33 @@ namespace __SystemLib {
       }
 
       $data = array(
-        'Version' => HHVM_VERSION,
-        'Version ID' => HHVM_VERSION_ID,
-        'Debug' => HHVM_DEBUG,
-        'Compiler ID' => HHVM_COMPILER_ID,
-        'Repo Schema' => HHVM_REPO_SCHEMA,
-        'PHP Version' => phpversion(),
-        'Zend Version' => zend_version(),
-        'uname' => php_uname());
+        'Version' => \HHVM_VERSION,
+        'Version ID' => \HHVM_VERSION_ID,
+        'Debug' => \HHVM_DEBUG,
+        'Compiler ID' => \HHVM_COMPILER_ID,
+        'Repo Schema' => \HHVM_REPO_SCHEMA,
+        'PHP Version' => \phpversion(),
+        'Zend Version' => \zend_version(),
+        'uname' => \php_uname());
 
       $this->appendChildren($this->body, $this->table('Version', $data));
     }
 
     private function reportIni() {
       $this->appendChildren($this->body,
-                            $this->table('INI', ini_get_all('', false)));
+                            $this->table('INI', \ini_get_all('', false)));
     }
 
     private function reportHeaders() {
-      if (!function_exists('getallheaders')) return;
+      if (!\function_exists('getallheaders')) return;
       $this->appendChildren($this->body,
-                            $this->table('Headers', getallheaders()));
+                            $this->table('Headers', \getallheaders()));
     }
 
     private function reportMap(string $name, array $map) {
       $data = [];
       foreach ($map as $k => $v) {
-        $data[sprintf("%s['%s']", $name, $k)] = $v;
+        $data[\sprintf("%s['%s']", $name, $k)] = $v;
       }
       $this->appendChildren($this->body, $this->table($name, $data));
     }
@@ -568,7 +514,7 @@ namespace __SystemLib {
       if (!$this->is_cli()) {
         $this->body->appendChild($this->element('br'));
         $this->xml->appendChild($html);
-        header('content-type: text/html; charset=UTF-8');
+        \header('content-type: text/html; charset=UTF-8');
         echo $this->xml->saveHTML();
       }
     }

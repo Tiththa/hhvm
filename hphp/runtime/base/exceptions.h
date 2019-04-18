@@ -27,15 +27,13 @@
 #include "hphp/util/exception.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/req-root.h"
+#include "hphp/runtime/base/rds-local.h"
 
 namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
-struct String;
-struct IMarker;
-
-//////////////////////////////////////////////////////////////////////
+struct c_WaitableWaitHandle;
 
 /*
  * ExtendedException is the exception type for C++ exceptions that carry PHP
@@ -71,6 +69,7 @@ struct ExtendedException : Exception {
   // a silent exception does not have its exception message logged
   bool isSilent() const { return m_silent; }
   void setSilent(bool s = true) { m_silent = s; }
+  void recomputeBacktraceFromWH(c_WaitableWaitHandle* wh);
 
 protected:
   ExtendedException(const std::string& msg, ArrayData* backTrace);
@@ -134,13 +133,23 @@ struct RequestMemoryExceededException : ResourceExceededException {
   EXCEPTION_COMMON_IMPL(RequestMemoryExceededException);
 };
 
+struct RequestOOMKilledException : ResourceExceededException {
+  RequestOOMKilledException(size_t usedBytes)
+    : ResourceExceededException(
+        folly::sformat("request aborted due to memeory presure, "
+                       "used {} bytes", usedBytes),
+        empty_array())
+  {}
+  EXCEPTION_COMMON_IMPL(RequestOOMKilledException);
+};
+
 //////////////////////////////////////////////////////////////////////
 
-struct ExitException : ExtendedException {
-  static std::atomic<int> ExitCode; // XXX should not be static
+extern RDS_LOCAL(int, rl_exit_code);
 
+struct ExitException : ExtendedException {
   explicit ExitException(int exitCode) {
-    ExitCode = exitCode;
+    *rl_exit_code = exitCode;
   }
   EXCEPTION_COMMON_IMPL(ExitException);
 };
@@ -151,9 +160,15 @@ struct PhpFileDoesNotExistException : ExtendedException {
   explicit PhpFileDoesNotExistException(const char* msg,
                                         DEBUG_ONLY bool empty_file)
       : ExtendedException("%s", msg) {
-    assert(empty_file);
+    assertx(empty_file);
   }
   EXCEPTION_COMMON_IMPL(PhpFileDoesNotExistException);
+};
+
+struct PhpNotSupportedException : ExtendedException {
+  explicit PhpNotSupportedException(const char* file)
+    : ExtendedException("HHVM 4+ does not support PHP: %s", file) {}
+  EXCEPTION_COMMON_IMPL(PhpNotSupportedException);
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -180,6 +195,15 @@ void throwable_init_file_and_line_from_builtin(ObjectData* throwable);
  * Initialize Throwable's stack trace, file name and line number.
  */
 void throwable_init(ObjectData* throwable);
+
+/*
+ * Reinitialize Throwable's stack trace, file name and line number based on wait
+ * handle.
+ */
+void throwable_recompute_backtrace_from_wh(ObjectData* throwable,
+                                           c_WaitableWaitHandle* wh);
+
+String throwable_to_string(ObjectData* throwable);
 
 //////////////////////////////////////////////////////////////////////
 

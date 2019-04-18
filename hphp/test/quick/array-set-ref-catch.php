@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 // generate a string from bits in i where 0=>a, 1=>A. This causes
 // hash collisions if the string hash is case-insensitive.
@@ -14,5 +14,5 @@ function test(&$a, $b) {
   var_dump($a);
 }
 
-$y = null;
-test($y, 5);
+$y = array();
+test(&$y, 5);

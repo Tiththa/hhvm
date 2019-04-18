@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_draw_accessor() {
 $draw = new ImagickDraw;
 
 // clip
@@ -33,7 +36,7 @@ var_dump($draw->getStrokeColor()->getColor());
 $draw->setStrokeDashArray(array(1, 2, 3));
 var_dump($draw->getStrokeDashArray());
 
-$draw->setStrokeDashOffset(-1);
+$draw->setStrokeDashOffset(-1.0);
 var_dump($draw->getStrokeDashOffset());
 
 $draw->setStrokeLineCap(Imagick::LINECAP_SQUARE);
@@ -66,3 +69,4 @@ var_dump($draw->getTextEncoding());
 
 $draw->setTextUnderColor('cyan');
 var_dump($draw->getTextUnderColor()->getColor());
+}

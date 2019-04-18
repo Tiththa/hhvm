@@ -1,32 +1,32 @@
-<?php
+<?hh
+
+abstract final class quickIsset {
+  public static $y;
+}
 
 function f() {
-  $n = "x";
-  $g = "y";
-  global $$g;
+
 
   print ":".isset($x).":\n";
-  print ":".isset($$n).":\n";
-  print ":".isset($$g).":\n";
+  print ":".isset($GLOBALS['y']).":\n";
+  print ":".isset(quickIsset::$y).":\n";
 
   $x = 0;
-  $$g = 0;
+  $GLOBALS['y'] = 0;
+  quickIsset::$y = 0;
   print ":".isset($x).":\n";
-  print ":".isset($$n).":\n";
-  print ":".isset($$g).":\n";
+  print ":".isset($GLOBALS['y']).":\n";
+  print ":".isset(quickIsset::$y).":\n";
 
   unset($x);
-  unset($$g);
+  unset($GLOBALS['y']);
+  quickIsset::$y = null;
   print ":".isset($x).":\n";
-  print ":".isset($$n).":\n";
-  print ":".isset($$g).":\n";
+  print ":".isset($GLOBALS['y']).":\n";
+  print ":".isset(quickIsset::$y).":\n";
 
   $a = array();
   $a["foo"] = null;
-  var_dump(isset($a["foo"]));
-  $q =& $a["foo"];
-  var_dump(isset($a["foo"]));
-  unset($q);
   var_dump(isset($a["foo"]));
 }
 
@@ -58,6 +58,5 @@ function g($dontTake, &$toFillIn, $id, $key, $value) {
 }
 
 $a = null;
-g(null, $a, "127.0.0.1", null, null );
+g(null, &$a, "127.0.0.1", null, null );
 var_dump($a);
-

@@ -2,9 +2,11 @@
 # implementation.
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  UnboxR
+  FCall <> 0 1 "" - "" ""
   RetC
 }
 
@@ -42,16 +44,20 @@ fail:
 }
 
 .function case_three() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "get_three"
-  FCall 0
-  UnboxR
+  FCall <> 0 1 "" - "" ""
   SetL $foo
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $foo
   FPushFuncD 1 "sswitch_on"
-  FPassL 0 $foo
-  FCall 1
-  UnboxR
+  FCall <> 1 1 "" - "" ""
   RetC
 }
 
@@ -64,40 +70,56 @@ fail:
 }
 
 .function with_obj() {
-  FPushCtorD 0 "Obj"
-  FCall 0
-  PopR
+  NewObjD "Obj"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $obj
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $obj
   FPushFuncD 1 "sswitch_on"
-  FPassL 0 $obj
-  FCall 1
-  UnboxR
+  FCall <> 1 1 "" - "" ""
   RetC
 }
 
 .function case_default() {
-  FPushFuncD 1 "sswitch_on"
+  NullUninit
+  NullUninit
+  NullUninit
   String "kujhasekguheku"
-  FPassC 0
-  FCall 1
-  UnboxR
+  FPushFuncD 1 "sswitch_on"
+  FCall <> 1 1 "" - "" ""
   RetC
 }
 
 .function main() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "case_three"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "with_obj"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "case_default"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   String "Done\n"
   Print

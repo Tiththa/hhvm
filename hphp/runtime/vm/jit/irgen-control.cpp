@@ -15,6 +15,9 @@
 */
 #include "hphp/runtime/vm/jit/irgen-control.h"
 
+#include "hphp/runtime/vm/resumable.h"
+#include "hphp/runtime/vm/unwind.h"
+
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/switch-profile.h"
 #include "hphp/runtime/vm/jit/target-profile.h"
@@ -24,12 +27,22 @@
 
 namespace HPHP { namespace jit { namespace irgen {
 
+void surpriseCheck(IRGS& env) {
+  auto const ptr = resumeMode(env) != ResumeMode::None ? sp(env) : fp(env);
+  auto const exit = makeExitSlow(env);
+  gen(env, CheckSurpriseFlags, exit, ptr);
+}
+
 void surpriseCheck(IRGS& env, Offset relOffset) {
   if (relOffset <= 0) {
-    auto const ptr = resumed(env) ? sp(env) : fp(env);
-    auto const exit = makeExitSlow(env);
-    gen(env, CheckSurpriseFlags, exit, ptr);
+    surpriseCheck(env);
   }
+}
+
+void surpriseCheckWithTarget(IRGS& env, Offset targetBcOff) {
+  auto const ptr = resumeMode(env) != ResumeMode::None ? sp(env) : fp(env);
+  auto const exit = makeExitSurprise(env, targetBcOff);
+  gen(env, CheckSurpriseFlags, exit, ptr);
 }
 
 /*
@@ -67,7 +80,6 @@ void implCondJmp(IRGS& env, Offset taken, bool negate, SSATmp* src) {
 //////////////////////////////////////////////////////////////////////
 
 void emitJmp(IRGS& env, Offset relOffset) {
-  surpriseCheck(env, relOffset);
   auto const offset = bcOff(env) + relOffset;
   jmpImpl(env, offset);
 }
@@ -77,13 +89,11 @@ void emitJmpNS(IRGS& env, Offset relOffset) {
 }
 
 void emitJmpZ(IRGS& env, Offset relOffset) {
-  surpriseCheck(env, relOffset);
   auto const takenOff = bcOff(env) + relOffset;
   implCondJmp(env, takenOff, true, popC(env));
 }
 
 void emitJmpNZ(IRGS& env, Offset relOffset) {
-  surpriseCheck(env, relOffset);
   auto const takenOff = bcOff(env) + relOffset;
   implCondJmp(env, takenOff, false, popC(env));
 }
@@ -150,7 +160,7 @@ void emitSwitch(IRGS& env, SwitchKind kind, int64_t base,
     PUNT(Switch-UnknownType);
   }
 
-  auto const dataSize = iv.size() * sizeof(SwitchProfile::cases[0]);
+  auto const dataSize = SwitchProfile::extraSize(iv.size());
   TargetProfile<SwitchProfile> profile(
     env.unit.context(), env.irb->curMarker(), s_switchProfile.get(),
     dataSize
@@ -275,6 +285,59 @@ void emitSSwitch(IRGS& env, const ImmVector& iv) {
     dest,
     sp(env),
     fp(env)
+  );
+}
+
+//////////////////////////////////////////////////////////////////////
+
+void emitSelect(IRGS& env) {
+  auto const condSrc = popC(env);
+  auto const boolSrc = gen(env, ConvCellToBool, condSrc);
+  decRef(env, condSrc);
+
+  ifThenElse(
+    env,
+    [&] (Block* taken) { gen(env, JmpZero, taken, boolSrc); },
+    [&] { // True case
+      auto const val = popC(env, DataTypeCountness);
+      popDecRef(env, DataTypeCountness);
+      push(env, val);
+    },
+    [&] { popDecRef(env, DataTypeCountness); } // False case
+  );
+}
+
+//////////////////////////////////////////////////////////////////////
+
+void emitThrow(IRGS& env) {
+  auto const stackEmpty = spOffBCFromFP(env) == spOffEmpty(env) + 1;
+  auto const offset = findCatchHandler(curFunc(env), bcOff(env));
+  auto const srcTy = topC(env)->type();
+  auto const maybeThrowable =
+    srcTy.maybe(Type::SubObj(SystemLib::s_ExceptionClass)) ||
+    srcTy.maybe(Type::SubObj(SystemLib::s_ErrorClass));
+  if (!stackEmpty || offset == InvalidAbsoluteOffset || !maybeThrowable ||
+      !(srcTy <= TObj)) {
+    return interpOne(env, *env.currentNormalizedInstruction);
+  }
+
+  if (srcTy <= Type::SubObj(SystemLib::s_ThrowableClass)) {
+    return jmpImpl(env, offset);
+  }
+
+  ifThenElse(env,
+    [&] (Block* taken) {
+      assertx(srcTy <= TObj);
+      auto const srcClass = gen(env, LdObjClass, topC(env));
+      auto const ecdExc = ExtendsClassData { SystemLib::s_ExceptionClass };
+      auto const isException = gen(env, ExtendsClass, ecdExc, srcClass);
+      gen(env, JmpNZero, taken, isException);
+      auto const ecdErr = ExtendsClassData { SystemLib::s_ErrorClass };
+      auto const isError = gen(env, ExtendsClass, ecdErr, srcClass);
+      gen(env, JmpNZero, taken, isError);
+    },
+    [&] { gen(env, Jmp, makeExitSlow(env)); },
+    [&] { jmpImpl(env, offset); }
   );
 }
 

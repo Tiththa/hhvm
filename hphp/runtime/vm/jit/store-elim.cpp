@@ -23,9 +23,10 @@
 #include <folly/ScopeGuard.h>
 
 #include "hphp/util/bisector.h"
+#include "hphp/util/bitset-utils.h"
+#include "hphp/util/dataflow-worklist.h"
 #include "hphp/util/match.h"
 #include "hphp/util/trace.h"
-#include "hphp/util/dataflow-worklist.h"
 
 #include "hphp/runtime/vm/jit/alias-analysis.h"
 #include "hphp/runtime/vm/jit/cfg.h"
@@ -168,7 +169,7 @@ using PostOrderId = uint32_t;
   for the hash() and same() methods for the spillFrameMap.
 */
 struct TrackedStore {
-  enum Kind {
+  enum Kind : int16_t {
     Unseen,
     Instruction,
     Phi,
@@ -360,11 +361,22 @@ struct Local {
 //////////////////////////////////////////////////////////////////////
 
 using jit::show;
+
+const char* show(StoreKey::Where w) {
+  switch (w) {
+    case StoreKey::In:  return "In";
+    case StoreKey::Out: return "Out";
+  }
+  not_reached();
+}
+
 std::string show(TrackedStore ts) {
   if (ts.isUnseen()) return "U";
   if (ts.isBad()) return "B";
   if (auto i = ts.instruction()) return folly::sformat("I{}", i->id());
+  if (auto i = ts.processed()) return folly::sformat("I*{}", i->id());
   if (auto b = ts.block()) return folly::sformat("P{}", b->id());
+  if (auto b = ts.pending()) return folly::sformat("P*{}", b->id());
   not_reached();
 }
 
@@ -545,7 +557,7 @@ void visit(Local& env, IRInstruction& inst) {
         if (env.reStores[*bit]) {
           auto const st = memory_effects(*env.global.reStores[*bit]);
           auto const pst = boost::get<PureStore>(&st);
-          if (pst && pst->value == inst.dst()) {
+          if (pst && pst->value && pst->value == inst.dst()) {
             FTRACE(4, "Killing self-store: {}\n",
                    env.global.reStores[*bit]->toString());
             removeDead(env, *env.global.reStores[*bit], false);
@@ -568,7 +580,8 @@ void visit(Local& env, IRInstruction& inst) {
       // things.
       addAllLoad(env);
       killSet(env, env.global.ainfo.all_frame);
-      killSet(env, env.global.ainfo.all_clsRefSlot);
+      killSet(env, env.global.ainfo.all_clsRefClsSlot);
+      killSet(env, env.global.ainfo.all_clsRefTSSlot);
       kill(env, l.kills);
     },
 
@@ -585,10 +598,7 @@ void visit(Local& env, IRInstruction& inst) {
       env.containsCall = true;
 
       load(env, AHeapAny);
-
       load(env, l.locals);
-      if (l.writes_locals) mayStore(env, AFrameAny);
-
       load(env, l.stack);
       kill(env, l.kills);
     },
@@ -612,7 +622,7 @@ void visit(Local& env, IRInstruction& inst) {
         }
         mayStore(env, l.dst);
         mustStore(env, *bit);
-        if (l.value->inst()->block() != inst.block()) return;
+        if (!l.value || l.value->inst()->block() != inst.block()) return;
         auto const le = memory_effects(*l.value->inst());
         auto pl = boost::get<PureLoad>(&le);
         if (!pl) return;
@@ -709,47 +719,84 @@ BlockAnalysis analyze_block(Global& genv, Block* block) {
 
 void find_all_stores(Global& genv, Block* blk, uint32_t id,
                      jit::vector<IRInstruction*>& stores,
-                     jit::hash_set<Block*>& seen) {
-  if (!seen.insert(blk).second) return;
-  blk->forEachPred([&](Block* pred) {
-      auto& pst = genv.trackedStoreMap[StoreKey { pred, StoreKey::Out, id }];
+                     jit::hash_set<void*>& seen) {
+  ITRACE(7, "find_all_stores: {} B{}\n", id, blk->id());
+  Trace::Indent _i;
+  blk->forEachPred(
+    [&](Block* pred) {
+      if (!seen.insert(pred).second) {
+        ITRACE(7, "find_all_stores: {} B{} skipping pred B{}\n",
+               id, blk->id(), pred->id());
+        return;
+      }
+      ITRACE(7, "find_all_stores: {} B{} processing pred B{}\n",
+             id, blk->id(), pred->id());
+      auto& pst =
+        genv.trackedStoreMap[StoreKey { pred, StoreKey::Out, id }];
       IRInstruction* inst;
       if ((inst = pst.instruction()) != nullptr ||
           (inst = pst.processed()) != nullptr) {
-        stores.push_back(inst);
+        if (seen.insert(inst).second) {
+          ITRACE(7, "find_all_stores: {} B{} pred B{}: adding {}\n",
+                 id, blk->id(), pred->id(), inst->toString());
+          stores.push_back(inst);
+        } else {
+          ITRACE(7, "find_all_stores: {} B{} pred B{}: dropping {}\n",
+                 id, blk->id(), pred->id(), inst->toString());
+        }
         return;
       }
       Block* b;
       if ((b = pst.block()) != nullptr ||
           (b = pst.pending()) != nullptr) {
-        find_all_stores(genv, b, id, stores, seen);
-        return;
+        if (b != pred && seen.count(b)) {
+          ITRACE(7,
+                 "find_all_stores: {} B{} pred B{} previously processed B{}\n",
+                 id, blk->id(), pred->id(), b->id());
+          return;
+        }
+        ITRACE(7, "find_all_stores: {} B{} pred B{} recur to B{}\n",
+               id, blk->id(), pred->id(), b->id());
+        return find_all_stores(genv, b, id, stores, seen);
       }
       always_assert(false);
-    });
+    }
+  );
 }
 
 IRInstruction* resolve_ts(Global& genv, Block* blk,
                           StoreKey::Where w, uint32_t id,
                           const ALocBits** sfp = nullptr);
 
-IRInstruction* resolve_cycle(Global& genv, Block* blk, uint32_t id) {
+void resolve_cycle(Global& genv, TrackedStore& ts, Block* blk, uint32_t id) {
   genv.needsReflow = true;
   jit::vector<IRInstruction*> stores;
-  jit::hash_set<Block*> seen;
+  jit::hash_set<void*> seen;
   // find all the stores, so we can determine
   // whether a phi is actually required for each
   // src (also, we need a candidate store to clone)
+
+  seen.insert(blk);
+
+  ITRACE(7, "resolve_cycle - store id {}:\n", id);
+  Trace::Indent _i;
+
   find_all_stores(genv, blk, id, stores, seen);
   always_assert(stores.size() > 0);
-  auto cand = stores[0];
+  if (Trace::moduleEnabled(TRACEMOD, 7)) {
+    for (auto const DEBUG_ONLY st : stores) {
+      ITRACE(7, "  - {}\n", st->toString());
+    }
+  }
+  auto const cand = stores[0];
   if (stores.size() == 1) {
-    return cand;
+    ts.set(cand);
+    return;
   }
   jit::vector<uint32_t> srcsToPhi;
   for (uint32_t i = 0; i < cand->numSrcs(); i++) {
     SSATmp* prev = nullptr;
-    for (auto& st : stores) {
+    for (auto const st : stores) {
       auto const si = st->src(i);
       if (prev && prev != si) {
         srcsToPhi.push_back(i);
@@ -761,20 +808,39 @@ IRInstruction* resolve_cycle(Global& genv, Block* blk, uint32_t id) {
   if (!srcsToPhi.size()) {
     // the various stores all had the same inputs
     // so nothing to do.
-    return cand;
+    ts.set(cand);
+    return;
   }
-  auto inst = genv.unit.clone(cand);
+  bool needsProcessed = false;
+  auto const inst = genv.unit.clone(cand);
   for (auto i : srcsToPhi) {
-    // create a Mov; we'll use its dst as the src of the store,
-    // and when we eventually create the phi, we'll set its
-    // dst as the src of the Mov (this allows us to avoid
-    // creating a new phi if there's already a suitable one
-    // there).
+    auto t = TBottom;
+    for (auto const st : stores) {
+      t |= st->src(i)->type();
+    }
+    if (t.admitsSingleVal()) {
+      inst->setSrc(i, genv.unit.cns(t));
+      continue;
+    }
+    needsProcessed = true;
+    // create a Mov; we'll use its dst as the src of the store, and
+    // when we eventually create the phi, we'll set its dst as the src
+    // of the Mov (this allows us to avoid creating a new phi if
+    // there's already a suitable one there). We also set the Mov's
+    // src to be its dst, so that we can identify it as needing to be
+    // fixed up in resolve_flat.
     auto mv = genv.unit.gen(Mov, blk->front().bcctx(), cand->src(i));
     blk->prepend(mv);
     inst->setSrc(i, mv->dst());
+    mv->setSrc(0, mv->dst());
+    mv->dst()->setType(t);
+    ITRACE(7, "  + created {} for {}\n", mv->toString(), inst->toString());
   }
-  return inst;
+  if (needsProcessed) {
+    ts.setProcessed(inst);
+  } else {
+    ts.set(inst);
+  }
 }
 
 IRInstruction* resolve_flat(Global& genv, Block* blk, uint32_t id,
@@ -786,34 +852,60 @@ IRInstruction* resolve_flat(Global& genv, Block* blk, uint32_t id,
       stores.push_back(resolve_ts(genv, pred, StoreKey::Out, id));
     });
   always_assert(stores.size() > 0);
-  if (auto rep = ts.instruction()) return rep;
+  if (auto const rep = ts.instruction()) {
+    ITRACE(7, "resolve_flat: returning {}\n", rep->toString());
+    return rep;
+  }
 
-  auto cand = stores[0];
+  auto const cand = stores[0];
   if (stores.size() == 1) return cand;
+  assertx(blk->numPreds() == stores.size());
+  auto& preds = blk->preds();
   jit::vector<SSATmp*> newSrcs;
   jit::vector<uint32_t> srcsToPhi;
   for (uint32_t i = 0; i < cand->numSrcs(); i++) {
     bool same = true;
-    std::vector<SSATmp*> phiInputs;
-    for (auto& st : stores) {
-      auto const si = st->src(i);
-      phiInputs.push_back(si);
-      if (si != phiInputs[0]) same = false;
+    SSATmp* temp = nullptr;
+    jit::hash_map<Block*, SSATmp*> phiInputs;
+    uint32_t j = 0;
+    for (auto const& edge : preds) {
+      auto const st = stores[j++];
+      auto si = st->src(i);
+      if (!si->inst()->is(DefConst) && si->type().admitsSingleVal()) {
+        si = genv.unit.cns(si->type());
+      }
+      phiInputs[edge.from()] = si;
+      if (temp == nullptr) temp = si;
+      if (si != temp) same = false;
     }
     if (!same) {
       srcsToPhi.push_back(i);
       newSrcs.push_back(insertPhi(genv.unit, blk, phiInputs));
+    } else if (ts.processed()) {
+      // even if we don't need a phi, resolve_cycle might have thought
+      // we did; if so, we still need to fix up the input.
+      auto const mv = ts.processed()->src(i)->inst();
+      if (mv->is(Mov) && mv->src(0) == mv->dst()) {
+        srcsToPhi.push_back(i);
+        newSrcs.push_back(temp);
+      }
     }
   }
 
   if (auto rep = ts.processed()) {
+    if (Trace::moduleEnabled(TRACEMOD, 7)) {
+      ITRACE(7, "resolve_flat: fixing {}\n", rep->toString());
+      for (auto const DEBUG_ONLY st : stores) {
+        ITRACE(7, "    - {}\n", st->toString());
+      }
+    }
     // the replacement was constructed during the recursive
     // walk. Just need to hook up the new phis.
     for (uint32_t ix = 0; ix < srcsToPhi.size(); ix++) {
       auto i = srcsToPhi[ix];
       auto src = rep->src(i);
       auto mv = src->inst();
-      always_assert(mv->is(Mov));
+      always_assert(mv->is(Mov) && mv->src(0) == mv->dst());
       mv->setSrc(0, newSrcs[ix]);
       retypeDests(mv, &genv.unit);
     }
@@ -835,26 +927,39 @@ IRInstruction* resolve_ts(Global& genv, Block* blk,
   auto& ts = genv.trackedStoreMap[StoreKey { blk, w, id }];
   auto sf = findSpillFrame(genv, ts);
   if (sfp) *sfp = sf;
-  if (auto inst = ts.instruction()) return inst;
-  if (auto inst = ts.processed()) return inst;
 
-  auto rep = [&]() {
-    if (ts.pending()) {
-      always_assert(ts.pending() == blk);
-      ts.setProcessed(resolve_cycle(genv, blk, id));
-      return ts.processed();
-    }
+  ITRACE(7, "resolve_ts: B{}:{} store:{} ts:{}\n",
+         blk->id(), show(w), id, show(ts));
+  Trace::Indent _i;
 
-    always_assert(ts.block());
-    if (w != StoreKey::In || blk != ts.block()) {
-      ts.set(resolve_ts(genv, ts.block(), StoreKey::In, id));
-    } else {
-      ts.set(resolve_flat(genv, blk, id, ts));
-    }
-    return ts.instruction();
-  }();
+  if (ts.pending()) {
+    always_assert(ts.pending() == blk);
+    resolve_cycle(genv, ts, blk, id);
+    assertx(ts.instruction() || ts.processed());
+  }
+
+  if (auto inst = ts.instruction()) {
+    ITRACE(7, "-> inst: {}\n", inst->toString());
+    return inst;
+  }
+  if (auto inst = ts.processed()) {
+    ITRACE(7, "-> proc: {}\n", inst->toString());
+    return inst;
+  }
+
+  always_assert(ts.block());
+  if (w != StoreKey::In || blk != ts.block()) {
+    ITRACE(7, "direct recur: B{}:{} -> B{}:In\n",
+           blk->id(), show(w), ts.block()->id());
+    ts.set(resolve_ts(genv, ts.block(), StoreKey::In, id));
+  } else {
+    ts.set(resolve_flat(genv, blk, id, ts));
+  }
+  auto const rep = ts.instruction();
 
   if (sf) genv.spillFrameMap[ts] = *sf;
+  ITRACE(7, "-> {} (resolve_ts B{}, store {})\n",
+         rep->toString(), blk->id(), id);
   return rep;
 }
 
@@ -1076,7 +1181,7 @@ TrackedStore combine_ts(Global& genv, uint32_t id,
   auto compat = [](TrackedStore store1, TrackedStore store2) {
     auto i1 = store1.instruction();
     auto i2 = store2.instruction();
-    assert(i1 && i2);
+    assertx(i1 && i2);
     if (i1->op() != i2->op()) return Compat::Bad;
     if (i1->numSrcs() != i2->numSrcs()) return Compat::Bad;
     for (auto i = i1->numSrcs(); i--; ) {
@@ -1127,8 +1232,7 @@ TrackedStore combine_ts(Global& genv, uint32_t id,
 }
 
 /*
- * Given a TrackedStore s1 in blk, and s2 in succ,
- * figure out the new TrackedStore to replace s2.
+ * Compute a TrackedStore for succ by merging its preds.
  */
 TrackedStore recompute_ts(Global& genv, uint32_t id, Block* succ) {
   TrackedStore ret;
@@ -1241,7 +1345,7 @@ void compute_available_stores(
           auto tsNew = succ->numPreds() == 1 ? ts : recompute_ts(genv, i, succ);
           if (!tsNew.same(tsSucc)) {
             changed = true;
-            assert(tsNew >= tsSucc);
+            assertx(tsNew >= tsSucc);
             tsSucc = tsNew;
             if (tsSucc.isBad()) {
               if (sf) {

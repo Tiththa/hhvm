@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 print "Test begin\n";
 
@@ -7,7 +7,7 @@ class C {
     print "In C::__construct()\n";
   }
   static function sMeth() {
-    print "In C::sMeth(): \$this:" . (isset($this) ? $this : null) . ":\n";
+    print "In C::sMeth()\n";
   }
 }
 class D {

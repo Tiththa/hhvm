@@ -33,6 +33,7 @@
   static_assert(ElmType::keyOff() == ElmType ## _KEY, ""); \
   static_assert(ElmType::hashOff() == ElmType ## _HASH, ""); \
   static_assert(ElmType::dataOff() == ElmType ## _DATA, ""); \
+  static_assert(ElmType::typeOff() == ElmType ## _TYPE, ""); \
   static_assert(sizeof(ElmType) == ElmType ## _QUADWORDS * 8, "");
 
 #else
@@ -73,7 +74,7 @@ struct HashTableCommon {
   static constexpr uint32_t MaxMask = MaxHashSize - 1;
   static constexpr uint32_t MaxSize = MaxMask - MaxMask / LoadScale;
   static constexpr uint32_t MaxMakeSize = 4 * SmallSize;
-  static constexpr uint32_t MaxStructMakeSize = 64;
+  static constexpr uint32_t MaxScale = MaxHashSize / LoadScale;
 
   constexpr static uint32_t HashSize(uint32_t scale) { return 4 * scale; }
   constexpr static uint32_t Capacity(uint32_t scale) { return 3 * scale; }
@@ -90,7 +91,7 @@ struct HashTableCommon {
   static uint32_t computeScaleFromSize(uint32_t n);
   size_t hashSize() const;
 
-  enum FindType { Lookup, Insert, InsertUpdate, Remove };
+  enum FindType { Lookup, Exists, Insert, InsertUpdate, Remove };
 
   struct Inserter {
     explicit Inserter(int32_t *p) : ei(p) {}
@@ -118,7 +119,7 @@ struct HashTableCommon {
 
   static ALWAYS_INLINE
   bool isValidPos(Inserter e) {
-    assert(isValidIns(e));
+    assertx(isValidIns(e));
     return (int32_t)(*e) >= 0;
   }
 protected:
@@ -196,15 +197,15 @@ struct HashTable : HashTableCommon {
   static ALWAYS_INLINE
   ArrayType* reqAlloc(uint32_t scale) {
     auto const allocBytes = computeAllocBytes(scale);
-    return static_cast<ArrayType*>(MM().objMalloc(allocBytes));
+    return static_cast<ArrayType*>(tl_heap->objMalloc(allocBytes));
   }
 
   static ALWAYS_INLINE
   ArrayType* staticAlloc(uint32_t scale) {
-    auto const allocBytes = computeAllocBytes(scale);
-    return static_cast<ArrayType*>(RuntimeOption::EvalLowStaticArrays ?
-                                   low_malloc_data(allocBytes) :
-                                   malloc(allocBytes));
+    auto const size = computeAllocBytes(scale);
+    auto mem = RuntimeOption::EvalLowStaticArrays ? low_malloc(size)
+                                                  : uncounted_malloc(size);
+    return static_cast<ArrayType*>(mem);
   }
 
   static ALWAYS_INLINE
@@ -229,14 +230,14 @@ struct HashTable : HashTableCommon {
   // Non variant interface
   /////////////////////////////////////////////////////////////////////////////
 
-  static member_rval::ptr_u NvGetInt(const ArrayData* ad, int64_t k);
-  static member_rval::ptr_u NvGetStr(const ArrayData* ad, const StringData* k);
+  static tv_rval NvGetInt(const ArrayData* ad, int64_t k);
+  static tv_rval NvGetStr(const ArrayData* ad, const StringData* k);
 
-  static member_rval RvalInt(const ArrayData* ad, int64_t k) {
-    return member_rval { ad, NvGetInt(ad, k) };
+  static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
+    return NvGetInt(ad, k);
   }
-  static member_rval RvalStr(const ArrayData* ad, const StringData* k) {
-    return member_rval { ad, NvGetStr(ad, k) };
+  static tv_rval RvalStr(const ArrayData* ad, const StringData* k) {
+    return NvGetStr(ad, k);
   }
 
   static Cell NvGetKey(const ArrayData* ad, ssize_t pos);
@@ -283,8 +284,8 @@ struct HashTable : HashTableCommon {
   /////////////////////////////////////////////////////////////////////////////
 protected:
   ALWAYS_INLINE Elm* allocElm(Inserter ei) {
-    assert(!isValidPos(ei) && !isFull());
-    assert(array()->m_size <= m_used);
+    assertx(!isValidPos(ei) && !isFull());
+    assertx(array()->m_size <= m_used);
     ++(array()->m_size);
     size_t i = m_used;
     (*ei) = i;
@@ -302,14 +303,14 @@ protected:
   static void InitSmallHash(ArrayType* a);
 
   static ALWAYS_INLINE bool hitIntKey(const Elm& e, int64_t ki) {
-    assert(!e.isInvalid());
+    assertx(!e.isInvalid());
     return e.intKey() == ki && e.hasIntKey();
   }
 
   static ALWAYS_INLINE bool hitStrKey(const Elm& e,
                                       const StringData* ks,
                                       hash_t h) {
-    assert(!e.isInvalid());
+    assertx(!e.isInvalid());
     /*
      * We do not have to check e.hasStrKey() because it is
      * implicitely done by the check on the hash.
@@ -335,6 +336,28 @@ public:
   ALWAYS_INLINE
   int32_t find(const StringData* ks, hash_t h0) const {
     return findImpl<FindType::Lookup>(
+        h0,
+        [ks, h0](const Elm& e) {
+          return hitStrKey(e, ks, h0);
+        },
+        [](Elm&){}
+      );
+  }
+
+  ALWAYS_INLINE
+  bool findForExists(int64_t ki, hash_t h0) const {
+    return findImpl<FindType::Exists>(
+        h0,
+        [ki](const Elm& e) {
+          return hitIntKey(e, ki);
+        },
+        [](Elm&){}
+      );
+  }
+
+  ALWAYS_INLINE
+  bool findForExists(const StringData* ks, hash_t h0) const {
+    return findImpl<FindType::Exists>(
         h0,
         [ks, h0](const Elm& e) {
           return hitStrKey(e, ks, h0);
@@ -445,10 +468,14 @@ public:
 protected:
   template <FindType type, typename Hit, typename Remove>
   typename std::conditional<
-    type != FindType::Insert &&
-    type != FindType::InsertUpdate,
+    type == HashTableCommon::FindType::Lookup ||
+    type == HashTableCommon::FindType::Remove,
     int32_t,
-    Inserter
+    typename std::conditional<
+      type == HashTableCommon::FindType::Exists,
+      bool,
+      typename HashTableCommon::Inserter
+    >::type
   >::type findImpl(hash_t h0, Hit hit, Remove remove) const;
 
   /////////////////////////////////////////////////////////////////////////////
@@ -470,16 +497,16 @@ protected:
 private:
   static ALWAYS_INLINE
   ArrayType* asArrayType(ArrayData* ad) {
-    assert(ad->hasMixedLayout() || ad->isKeyset());
+    assertx(ad->hasMixedLayout() || ad->isKeyset());
     auto a = static_cast<ArrayType*>(ad);
-    assert(a->checkInvariants());
+    assertx(a->checkInvariants());
     return a;
   }
   static ALWAYS_INLINE
   const ArrayType* asArrayType(const ArrayData* ad) {
-    assert(ad->hasMixedLayout() || ad->isKeyset());
+    assertx(ad->hasMixedLayout() || ad->isKeyset());
     auto a = static_cast<const ArrayType*>(ad);
-    assert(a->checkInvariants());
+    assertx(a->checkInvariants());
     return a;
   }
 

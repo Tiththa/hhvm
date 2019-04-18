@@ -26,6 +26,8 @@
 #include "hphp/runtime/vm/jit/vm-protect.h"
 #include "hphp/runtime/vm/jit/write-lease.h"
 
+#include "hphp/runtime/vm/resumable.h"
+
 #include "hphp/util/trace.h"
 
 TRACE_SET_MOD(mcg);
@@ -112,7 +114,7 @@ bool regeneratePrologue(TransID prologueTransId, tc::FuncMetaInfo& info) {
   if (checkCachedPrologue(func, nArgs)) return false;
 
   if (retranslateAllEnabled()) {
-    info.prologues.emplace_back(rec);
+    info.add(rec);
   } else {
     tc::emitFuncPrologueOpt(rec);
   }
@@ -124,7 +126,7 @@ bool regeneratePrologue(TransID prologueTransId, tc::FuncMetaInfo& info) {
     if (paramInfo.hasDefaultValue()) {
       bool ret = false;
       auto genPrologue = [&] (bool hasThis) {
-        SrcKey funcletSK(func, paramInfo.funcletOff, false, hasThis);
+        SrcKey funcletSK(func, paramInfo.funcletOff, ResumeMode::None, hasThis);
         if (profData()->optimized(funcletSK)) return;
         auto funcletTransId = profData()->dvFuncletTransId(funcletSK);
         if (funcletTransId == kInvalidTransID) return;
@@ -133,12 +135,13 @@ bool regeneratePrologue(TransID prologueTransId, tc::FuncMetaInfo& info) {
         args.kind = TransKind::Optimize;
         args.region = selectHotRegion(funcletTransId);
         auto const spOff = args.region->entry()->initialSpOffset();
+        tc::createSrcRec(funcletSK, spOff);
         if (auto res = translate(args, spOff, info.tcBuf.view())) {
           // Flag that this translation has been retranslated, so that
           // it's not retranslated again along with the function body.
           profData()->setOptimized(funcletSK);
           ret = true;
-          info.translations.emplace_back(std::move(res.value()));
+          info.add(std::move(res.value()));
         }
       };
       withThis(func, genPrologue);
@@ -188,7 +191,7 @@ bool regeneratePrologues(Func* func, tc::FuncMetaInfo& info) {
     func->past() - func->base() <= RuntimeOption::EvalJitPGOMaxFuncSizeDupBody;
 
   auto funcBodySk = [&] (bool hasThis) {
-    return SrcKey{func, func->base(), false, hasThis};
+    return SrcKey{func, func->base(), ResumeMode::None, hasThis};
   };
   if (!includedBody) {
     withThis(func,
@@ -225,9 +228,9 @@ TCA getFuncPrologue(Func* func, int nPassed) {
   // Do a quick test before grabbing the write lease
   if (auto const p = checkCachedPrologue(func, paramIndex)) return p;
 
-  auto computeKind = [&] {
-    return tc::profileFunc(func) ? TransKind::ProfPrologue :
-                                   TransKind::LivePrologue;
+  auto const computeKind = [&] {
+    return tc::profileFunc(func) ? TransKind::ProfPrologue
+                                 : TransKind::LivePrologue;
   };
 
   const auto funcId = func->getFuncId();
@@ -248,6 +251,11 @@ TCA getFuncPrologue(Func* func, int nPassed) {
   if (!writer.checkKind(kind)) return nullptr;
 
   if (!tc::shouldTranslate(func, kind)) return nullptr;
+
+  if (UNLIKELY(RID().isJittingDisabled())) {
+    TRACE(2, "punting because jitting code was disabled\n");
+    return nullptr;
+  }
 
   // Double check the prologue array now that we have the write lease
   // in case another thread snuck in and set the prologue already.

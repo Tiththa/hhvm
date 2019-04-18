@@ -19,6 +19,8 @@
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/vm/class.h"
+#include "hphp/runtime/vm/class-meth-data.h"
+#include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/preclass.h"
 
@@ -127,7 +129,7 @@ void cgLdClsInitData(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const cls = srcLoc(env, inst, 0).reg();
   auto const offset = Class::propDataCacheOff() +
-                      rds::Link<Class::PropInitVec*>::handleOff();
+    rds::Link<Class::PropInitVec*, rds::Mode::Normal>::handleOff();
   auto& v = vmain(env);
 
   auto const handle = v.makeReg();
@@ -137,31 +139,38 @@ void cgLdClsInitData(IRLS& env, const IRInstruction* inst) {
   v << load{vec[Class::PropInitVec::dataOff()], dst};
 }
 
-void cgCheckInitProps(IRLS& env, const IRInstruction* inst) {
-  auto const cls = inst->extra<CheckInitProps>()->cls;
-  auto& v = vmain(env);
-
-  auto const sf = checkRDSHandleInitialized(v, cls->propHandle());
-  v << jcc{CC_NE, sf, {label(env, inst->next()), label(env, inst->taken())}};
-}
-
-void cgCheckInitSProps(IRLS& env, const IRInstruction* inst) {
-  auto const cls = inst->extra<CheckInitSProps>()->cls;
-  auto& v = vmain(env);
-
-  auto const handle = cls->sPropInitHandle();
-  if (rds::isNormalHandle(handle)) {
-    auto const sf = checkRDSHandleInitialized(v, handle);
-    v << jcc{CC_NE, sf, {label(env, inst->next()), label(env, inst->taken())}};
-  } else {
-    // Always initialized; just fall through to inst->next().
-    assert(rds::isPersistentHandle(handle));
-    assert(rds::handleToRef<bool>(handle));
-  }
+void cgPropTypeRedefineCheck(IRLS& env, const IRInstruction* inst) {
+  auto const cls = inst->src(0)->clsVal();
+  auto const slot = inst->src(1)->intVal();
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+  assertx(cls->maybeRedefinesPropTypes());
+  assertx(slot != kInvalidSlot);
+  assertx(slot < cls->numDeclProperties());
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::method(&Class::checkPropTypeRedefinition),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst).immPtr(cls).imm(slot)
+  );
 }
 
 IMPL_OPCODE_CALL(InitProps)
 IMPL_OPCODE_CALL(InitSProps)
+
+///////////////////////////////////////////////////////////////////////////////
+
+void cgLookupSPropSlot(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::method(&Class::lookupSProp),
+    callDest(env, inst),
+    SyncOptions::None,
+    argGroup(env, inst).ssa(0).ssa(1)
+  );
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -174,6 +183,97 @@ void cgLdFuncNumParams(IRLS& env, const IRInstruction* inst) {
   // See Func::finishedEmittingParams and Func::numParams.
   v << loadzlq{func[Func::paramCountsOff()], tmp};
   v << shrqi{1, tmp, dst, v.makeReg()};
+}
+
+void cgLdFuncName(IRLS& env, const IRInstruction* inst) {
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto const func = srcLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  v << loadzlq{func[Func::nameOff()], dst};
+}
+
+void cgFuncSupportsAsyncEagerReturn(IRLS& env, const IRInstruction* inst) {
+  auto const func = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  auto const sf = v.makeReg();
+  v << testlim{
+    static_cast<int32_t>(AttrSupportsAsyncEagerReturn),
+    func[Func::attrsOff()],
+    sf
+  };
+  v << setcc{CC_NZ, sf, dst};
+}
+
+void cgIsFuncDynCallable(IRLS& env, const IRInstruction* inst) {
+  auto const func = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  auto const sf = v.makeReg();
+  v << testlim{
+    static_cast<int32_t>(AttrDynamicallyCallable),
+    func[Func::attrsOff()],
+    sf
+  };
+  v << setcc{CC_NZ, sf, dst};
+}
+
+void cgIsClsDynConstructible(IRLS& env, const IRInstruction* inst) {
+  auto const cls = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  auto const sf = v.makeReg();
+  v << testlim{
+    static_cast<int32_t>(AttrDynamicallyConstructible),
+    cls[Class::attrCopyOff()],
+    sf
+  };
+  v << setcc{CC_NZ, sf, dst};
+}
+
+void cgLdFuncRxLevel(IRLS& env, const IRInstruction* inst) {
+  auto const func = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  static_assert(AttrRxLevel0 == (1u << 14), "");
+  static_assert(AttrRxLevel1 == (1u << 15), "");
+  auto const attrs = v.makeReg();
+  auto const shifted = v.makeReg();
+  v << loadzlq{func[Func::attrsOff()], attrs};
+  v << shrqi{14, attrs, shifted, v.makeReg()};
+  v << andqi{3, shifted, dst, v.makeReg()};
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+void cgLdClsFromClsMeth(IRLS& env, const IRInstruction* inst) {
+  auto const clsMeth = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  emitLdLowPtr(
+    vmain(env), clsMeth[ClsMethData::clsOffset()], dst, sizeof(LowPtr<Class>));
+}
+
+void cgLdFuncFromClsMeth(IRLS& env, const IRInstruction* inst) {
+  auto const clsMeth = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  emitLdLowPtr(
+    vmain(env), clsMeth[ClsMethData::funcOffset()], dst, sizeof(LowPtr<Func>));
+}
+
+void cgNewClsMeth(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(ClsMethDataRef::create),
+    callDest(env, inst),
+    SyncOptions::None,
+    argGroup(env, inst).ssa(0).ssa(1)
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////

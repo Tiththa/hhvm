@@ -18,6 +18,7 @@
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/enum-cache.h"
+#include "hphp/runtime/base/enum-util.h"
 
 namespace HPHP {
 
@@ -25,6 +26,7 @@ namespace HPHP {
 // class BuiltinEnum
 static Array HHVM_STATIC_METHOD(BuiltinEnum, getValues) {
   const EnumValues* values = EnumCache::getValuesBuiltin(self_);
+  assertx(values->values.isDictOrDArray());
   return values->values;
 }
 
@@ -34,17 +36,15 @@ static Array HHVM_STATIC_METHOD(BuiltinEnum, getNames) {
   const EnumValues* values = EnumCache::getValuesBuiltin(self_);
   if (values->names.size() != values->values.size()) {
     invoke("\\HH\\invariant_violation",
-           make_packed_array(s_overlappingErrorMessage));
+           make_vec_array(s_overlappingErrorMessage));
   }
 
+  assertx(values->names.isDictOrDArray());
   return values->names;
 }
 
 static bool HHVM_STATIC_METHOD(BuiltinEnum, isValid, const Variant &value) {
-  if (UNLIKELY(!value.isInteger() && !value.isString())) return false;
-
-  const EnumValues* values = EnumCache::getValuesBuiltin(self_);
-  return values->names.exists(value);
+  return enumHasValue(self_, value.toCell());
 }
 
 static Variant HHVM_STATIC_METHOD(BuiltinEnum, coerce, const Variant &value) {
@@ -52,26 +52,28 @@ static Variant HHVM_STATIC_METHOD(BuiltinEnum, coerce, const Variant &value) {
     return Variant(Variant::NullInit{});
   }
 
-  auto base = self_->enumBaseTy();
-  Variant res = value;
+  auto res = value;
 
-  // First, if the base type is an int and we have a string containing
-  // an int, do the coercion first. This saves having to also do it in
-  // the array lookup (since it will be stored as an int there).
+  // Manually do int-like string conversion. This is to ensure the lookup
+  // succeeds below (since the values array does int-like string key conversion
+  // when created, even if its a dict).
   int64_t num;
-  if (base == KindOfInt64 && value.isString() &&
+  if (value.isString() &&
       value.getStringData()->isStrictlyInteger(num)) {
     res = Variant(num);
   }
 
-  // Make sure that the value is in the map. Then, if we have an int
-  // and the underlying type is a string, convert it to a string so
-  // the output type is right.
-  const EnumValues* values = EnumCache::getValuesBuiltin(self_);
-  if (!values->names.exists(value)) {
+  auto values = EnumCache::getValuesBuiltin(self_);
+  if (!values->names.exists(res)) {
     res = Variant(Variant::NullInit{});
-  } else if (base && isStringType(*base) && value.isInteger()) {
-    res = Variant(value.toString());
+  } else if (auto base = self_->enumBaseTy()) {
+    if (isStringType(*base) && res.isInteger()) {
+      res = Variant(res.toString());
+    }
+  } else {
+    // If the value is present, but the enum has no base type, return the value
+    // as specified, undoing any int-like string conversion we did on it.
+    return value;
   }
 
   return res;

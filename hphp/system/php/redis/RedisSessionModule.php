@@ -1,4 +1,4 @@
-<?php
+<?hh // partial
 
 class RedisSessionModule implements SessionHandlerInterface {
   /**
@@ -49,13 +49,13 @@ class RedisSessionModule implements SessionHandlerInterface {
         'database' => 0
       ];
       if (isset($url['query'])) {
-        parse_str($url['query'], $query);
-        foreach ($args as $key => &$val) {
+        parse_str($url['query'], &$query);
+        foreach ($args as $key => $val) {
           if (!isset($query[$key])) continue;
           if (is_string($val)) {
-            $val = $query[$key];
+            $args[$key] = $query[$key];
           } else {
-            $val = (int)$query[$key];
+            $args[$key] = (int)$query[$key];
           }
         }
       }
@@ -88,7 +88,7 @@ class RedisSessionModule implements SessionHandlerInterface {
     return true;
   }
 
-  protected function &selectWeight($key) {
+  protected function selectWeight($key) {
     if (count($this->paths) === 1) {
       return $this->paths[0];
     }
@@ -106,12 +106,12 @@ class RedisSessionModule implements SessionHandlerInterface {
   }
 
   protected function connect($key) {
-    $r =& $this->selectWeight($key);
+    $r = $this->selectWeight($key);
     if (!empty($r['connection'])) {
       return $r['connection'];
     }
 
-    $redis = new Redis;
+    $redis = new Redis();
     $func = ($r['persistent']) ? 'pconnect' : 'connect';
     if (!$redis->{$func}($r['host'], $r['port'], (float)$r['timeout'])) {
       return false;
@@ -127,14 +127,14 @@ class RedisSessionModule implements SessionHandlerInterface {
     if (!$redis->setOption(Redis::OPT_PREFIX, $r['prefix'])) {
       return false;
     }
-
-    $r['connection'] = $redis;
+    if (count($this->paths) === 1)
+      $r['connection'] = $redis;
     return $redis;
   }
 
   public function close() {
-    foreach ($this->paths as &$path) {
-      $path['connection'] = null;
+    foreach ($this->paths as $idx => $_) {
+      $this->paths[$idx]['connection'] = null;
     }
 
     return true;

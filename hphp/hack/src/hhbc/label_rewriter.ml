@@ -2,13 +2,12 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
-open Core
+open Core_kernel
 open Hhbc_ast
 open Instruction_sequence
 
@@ -31,35 +30,26 @@ let get_regular_labels instr =
   match instr with
   | IIterator (IterInit (_, l, _))
   | IIterator (IterInitK (_, l, _, _))
-  | IIterator (WIterInit (_, l, _))
-  | IIterator (WIterInitK (_, l, _, _))
-  | IIterator (MIterInit (_, l, _))
-  | IIterator (MIterInitK (_, l, _, _))
+  | IIterator (LIterInit (_, _, l, _))
+  | IIterator (LIterInitK (_, _, l, _, _))
   | IIterator (IterNext (_, l, _))
   | IIterator (IterNextK (_, l, _, _))
-  | IIterator (WIterNext (_, l, _))
-  | IIterator (WIterNextK (_, l, _, _))
-  | IIterator (MIterNext (_, l, _))
-  | IIterator (MIterNextK (_, l, _, _))
+  | IIterator (LIterNext (_, _, l, _))
+  | IIterator (LIterNextK (_, _, l, _, _))
   | IIterator (IterBreak (l, _))
-  | ICall (DecodeCufIter (_, l))
+  | ICall (FCall ((_, _, _, _, Some l)))
   | IGenDelegation (YieldFromDelegate (_, l))
+  | IMisc (MemoGet (l, _))
   | IContFlow (Jmp l | JmpNS l | JmpZ l | JmpNZ l) -> [l]
   | IContFlow (Switch (_, _, ls)) -> ls
   | IContFlow (SSwitch pairs) -> List.map pairs snd
-  | _ -> []
-
-(* Get any labels referred to in catch or fault handlers *)
-let get_catch_or_fault_labels instr =
-  match instr with
-  | ITry (TryCatchLegacyBegin l | TryFaultBegin l) -> [l]
+  | IMisc (MemoGetEager (l1, l2, _)) -> [l1; l2]
   | _ -> []
 
 (* Generate new labels for all labels referenced in instructions and default
  * parameter values, in the same order as used by DumpHhas:
  *   1. First, labels referenced by normal control-flow (jumps, switches, etc)
- *   2. Next, labels referenced by catch or fault handlers
- *   3. Last, labels referenced by default parameter values
+ *   2. Last, labels referenced by default parameter values
  *)
 let create_label_ref_map defs params body =
   let process_ref (n, (used, refs) as acc) l =
@@ -77,7 +67,6 @@ let create_label_ref_map defs params body =
     List.fold_left (get_labels instr) ~init:acc ~f:process_ref) in
   let acc = (0, (ISet.empty, IMap.empty)) in
   let acc = gather_using get_regular_labels acc body in
-  let acc = gather_using get_catch_or_fault_labels acc body in
   let acc =
     List.fold_left params ~init:acc
     ~f:(fun acc param ->
@@ -110,32 +99,24 @@ let rewrite_params_and_body defs used refs params body =
       Some (IIterator (IterInit (id, relabel l, v)))
     | IIterator (IterInitK (id, l, k, v)) ->
       Some (IIterator (IterInitK (id, relabel l, k, v)))
-    | IIterator (WIterInit (id, l, v)) ->
-      Some (IIterator (WIterInit (id, relabel l, v)))
-    | IIterator (WIterInitK (id, l, k, v)) ->
-      Some (IIterator (WIterInitK (id, relabel l, k, v)))
-    | IIterator (MIterInit (id, l, v)) ->
-      Some (IIterator (MIterInit (id, relabel l, v)))
-    | IIterator (MIterInitK (id, l, k, v)) ->
-      Some (IIterator (MIterInitK (id, relabel l, k, v)))
+    | IIterator (LIterInit (id, b, l, v)) ->
+      Some (IIterator (LIterInit (id, b, relabel l, v)))
+    | IIterator (LIterInitK (id, b, l, k, v)) ->
+      Some (IIterator (LIterInitK (id, b, relabel l, k, v)))
     | IIterator (IterNext (id, l, v)) ->
       Some (IIterator (IterNext (id, relabel l, v)))
     | IIterator (IterNextK (id, l, k, v)) ->
       Some (IIterator (IterNextK (id, relabel l, k, v)))
-    | IIterator (WIterNext (id, l, v)) ->
-      Some (IIterator (WIterNext (id, relabel l, v)))
-    | IIterator (WIterNextK (id, l, k, v)) ->
-      Some (IIterator (WIterNextK (id, relabel l, k, v)))
-    | IIterator (MIterNext (id, l, v)) ->
-      Some (IIterator (MIterNext (id, relabel l, v)))
-    | IIterator (MIterNextK (id, l, k, v)) ->
-      Some (IIterator (MIterNextK (id, relabel l, k, v)))
+    | IIterator (LIterNext (id, b, l, v)) ->
+      Some (IIterator (LIterNext (id, b, relabel l, v)))
+    | IIterator (LIterNextK (id, b, l, k, v)) ->
+      Some (IIterator (LIterNextK (id, b, relabel l, k, v)))
     | IIterator (IterBreak (l, x)) ->
       Some (IIterator (IterBreak (relabel l, x)))
     | IGenDelegation (YieldFromDelegate (i, l)) ->
       Some (IGenDelegation (YieldFromDelegate (i, relabel l)))
-    | ICall (DecodeCufIter (x, l)) ->
-      Some (ICall (DecodeCufIter (x, relabel l)))
+    | ICall (FCall ((fl, na, nr, br, Some l))) ->
+      Some (ICall (FCall ((fl, na, nr, br, Some (relabel l)))))
     | IContFlow (Jmp l)   -> Some (IContFlow (Jmp (relabel l)))
     | IContFlow (JmpNS l) -> Some (IContFlow (JmpNS (relabel l)))
     | IContFlow (JmpZ l)  -> Some (IContFlow (JmpZ (relabel l)))
@@ -145,9 +126,10 @@ let rewrite_params_and_body defs used refs params body =
     | IContFlow (SSwitch pairs) ->
       Some (IContFlow (SSwitch
         (List.map pairs (fun (id,l) -> (id, relabel l)))))
-    | ITry (TryCatchLegacyBegin l) ->
-      Some (ITry (TryCatchLegacyBegin (relabel l)))
-    | ITry (TryFaultBegin l) -> Some (ITry (TryFaultBegin (relabel l)))
+    | IMisc (MemoGet (l, r)) ->
+      Some (IMisc (MemoGet (relabel l, r)))
+    | IMisc (MemoGetEager (l1, l2, r)) ->
+      Some (IMisc (MemoGetEager (relabel l1, relabel l2, r)))
     | ILabel l ->
       begin match Label.option_map relabel_define_label_id l with
       | None -> None
@@ -163,6 +145,8 @@ let rewrite_params_and_body defs used refs params body =
         Hhas_param.make (Hhas_param.name param)
           (Hhas_param.is_reference param)
           (Hhas_param.is_variadic param)
+          (Hhas_param.is_inout param)
+          (Hhas_param.user_attributes param)
           (Hhas_param.type_info param)
           (Some (relabel l, e)) in
     let params = List.map params rewrite_param in
@@ -202,30 +186,22 @@ let clone_with_fresh_regular_labels block =
       IIterator (IterInit (id, relabel l, v))
     | IIterator (IterInitK (id, l, k, v)) ->
       IIterator (IterInitK (id, relabel l, k, v))
-    | IIterator (WIterInit (id, l, v)) ->
-      IIterator (WIterInit (id, relabel l, v))
-    | IIterator (WIterInitK (id, l, k, v)) ->
-      IIterator (WIterInitK (id, relabel l, k, v))
-    | IIterator (MIterInit (id, l, v)) ->
-      IIterator (MIterInit (id, relabel l, v))
-    | IIterator (MIterInitK (id, l, k, v)) ->
-      IIterator (MIterInitK (id, relabel l, k, v))
+    | IIterator (LIterInit (id, b, l, v)) ->
+      IIterator (LIterInit (id, b, relabel l, v))
+    | IIterator (LIterInitK (id, b, l, k, v)) ->
+      IIterator (LIterInitK (id, b, relabel l, k, v))
     | IIterator (IterNext (id, l, v)) ->
       IIterator (IterNext (id, relabel l, v))
     | IIterator (IterNextK (id, l, k, v)) ->
       IIterator (IterNextK (id, relabel l, k, v))
-    | IIterator (WIterNext (id, l, v)) ->
-      IIterator (WIterNext (id, relabel l, v))
-    | IIterator (WIterNextK (id, l, k, v)) ->
-      IIterator (WIterNextK (id, relabel l, k, v))
-    | IIterator (MIterNext (id, l, v)) ->
-      IIterator (MIterNext (id, relabel l, v))
-    | IIterator (MIterNextK (id, l, k, v)) ->
-      IIterator (MIterNextK (id, relabel l, k, v))
+    | IIterator (LIterNext (id, b, l, v)) ->
+      IIterator (LIterNext (id, b, relabel l, v))
+    | IIterator (LIterNextK (id, b, l, k, v)) ->
+      IIterator (LIterNextK (id, b, relabel l, k, v))
     | IIterator (IterBreak (l, x)) ->
       IIterator (IterBreak (relabel l, x))
-    | ICall (DecodeCufIter (x, l)) ->
-      ICall (DecodeCufIter (x, relabel l))
+    | ICall (FCall ((fl, na, nr, br, Some l))) ->
+      ICall (FCall ((fl, na, nr, br, Some (relabel l))))
     | IContFlow (Jmp l)   -> IContFlow (Jmp (relabel l))
     | IContFlow (JmpNS l) -> IContFlow (JmpNS (relabel l))
     | IContFlow (JmpZ l)  -> IContFlow (JmpZ (relabel l))
@@ -234,7 +210,11 @@ let clone_with_fresh_regular_labels block =
       IContFlow (Switch (k, n, List.map ll relabel))
     | IContFlow (SSwitch pairs) ->
       IContFlow (SSwitch
-        (List.map pairs (fun (id,l) -> (id, relabel l))))
+       (List.map pairs (fun (id,l) -> (id, relabel l))))
+    | IMisc (MemoGet (l, r)) ->
+      IMisc (MemoGet (relabel l, r))
+    | IMisc (MemoGetEager (l1, l2, r)) ->
+      IMisc (MemoGetEager (relabel l1, relabel l2, r))
     | ILabel l -> ILabel (relabel l)
     | _ -> instr
   in

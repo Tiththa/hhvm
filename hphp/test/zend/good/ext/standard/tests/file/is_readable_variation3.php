@@ -25,9 +25,8 @@ $misc_files = array(
 /* loop through to test each element in the above array 
    is a readable file */
 foreach( $misc_files as $misc_file ) {
-  var_dump( is_readable($misc_file) );
+  try { var_dump( is_readable($misc_file) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   clearstatcache();
 }
 
 echo "Done\n";
-?>

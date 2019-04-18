@@ -1,2 +1,2 @@
 
-Fatal error: parameter modifiers not allowed on abstract __construct in %s on line 4
+Fatal error: Class A contains an abstract method and must therefore be declared abstract in %s/ctor_param_promotion_abstract.php on line 5

@@ -2,9 +2,9 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
+ *
  *
  *)
 
@@ -50,7 +50,7 @@ let () =
     "bar.php", bar_contents;
   ] in
 
-  Test.assert_errors env init_errors;
+  Test.assert_env_errors env init_errors;
 
   let env = Test.connect_persistent_client env in
   let env = Test.subscribe_diagnostic env in
@@ -66,11 +66,13 @@ let () =
 
   (* Files with parsing errors are not redeclared during lazy recheck, so
    * failed_naming should remain unchanged *)
+
+  let failed_naming = Errors.get_failed_files env.ServerEnv.errorl Errors.Naming in
   let found =
     Relative_path.Set.mem
-      env.ServerEnv.failed_naming (Relative_path.from_root foo1_name) ||
+      failed_naming (Relative_path.from_root foo1_name) ||
     Relative_path.Set.mem
-      env.ServerEnv.failed_naming (Relative_path.from_root foo2_name)
+      failed_naming (Relative_path.from_root foo2_name)
   in
   if not found then Test.fail "File missing from failed_naming";
 

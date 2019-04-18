@@ -26,7 +26,7 @@ class thinger {
     if ($this->things) {
       foreach ($this->things as $id => $history) {
         $updated = $init;
-        $this->otherThings[$id] = $this->process($history, $updated);
+        $this->otherThings[$id] = $this->process($history, &$updated);
         if ($updated) {
           $this->updatedIDs[$id] = 1;
         }
@@ -42,4 +42,8 @@ function main() {
     $t->done(false);
   }
 }
+
+<<__EntryPoint>>
+function main_property_phi() {
 main();
+}

@@ -27,9 +27,11 @@
 namespace HPHP { namespace jit {
 ///////////////////////////////////////////////////////////////////////////////
 
+enum class Width : uint8_t;
 struct Vptr;
 struct Vscaled;
 struct VscaledDisp;
+template <Width w> struct Vp;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -122,6 +124,299 @@ using VregList = jit::vector<Vreg>;
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
+ * A set of Vregs using a sorted vector.
+ */
+struct VregSet {
+  /*
+   * Constructors
+   */
+
+  VregSet() = default;
+  template <typename InputIt>
+  explicit VregSet(InputIt i1, InputIt i2) {
+    while (i1 != i2) regs.emplace_back(*i1++);
+    canonicalize();
+  }
+  explicit VregSet(std::initializer_list<Vreg> i) {
+    regs.reserve(i.size());
+    for (auto const r : i) regs.emplace_back(r);
+    canonicalize();
+  }
+  explicit VregSet(const VregList& l) {
+    regs.reserve(l.size());
+    for (auto const r : l) regs.emplace_back(r);
+    canonicalize();
+  }
+  explicit VregSet(const RegSet& s) {
+    regs.reserve(s.size());
+    s.forEach([&] (PhysReg r) { regs.emplace_back(r); });
+    canonicalize();
+  }
+  explicit VregSet(Vreg r) { regs.emplace_back(r); }
+
+  /*
+   * Getters
+   */
+
+  bool operator[](Vreg r) const {
+    return std::binary_search(regs.begin(), regs.end(), r);
+  }
+
+  bool any() const { return !regs.empty(); }
+  bool none() const { return regs.empty(); }
+
+  bool empty() const { return regs.empty(); }
+  size_t size() const { return regs.size(); }
+
+  /*
+   * Call the provided callable on each vreg in the set. If the callable has a
+   * bool return value, a false return will stop iteration early.
+   */
+  template<typename F>
+  typename std::enable_if<
+    std::is_same<
+      typename std::result_of<F(Vreg)>::type,
+      bool
+    >::value,
+    void
+  >::type
+  forEach(F&& f) const {
+    for (auto const r : regs) { if (!f(r)) return; }
+  }
+
+  template<typename F>
+  typename std::enable_if<
+    !std::is_same<
+      typename std::result_of<F(Vreg)>::type,
+      bool
+    >::value,
+    void
+  >::type
+  forEach(F&& f) const {
+    for (auto const r : regs) f(r);
+  }
+
+  bool operator==(const VregSet& o) const { return regs == o.regs; }
+  bool operator!=(const VregSet& o) const { return regs != o.regs; }
+
+  /*
+   * Mutators
+   */
+
+  void add(Vreg r) {
+    auto const it = std::lower_bound(regs.begin(), regs.end(), r);
+    if (it != regs.end() && *it == r) return;
+    regs.emplace(it, r);
+  }
+  void remove(Vreg r) {
+    auto const it = std::lower_bound(regs.begin(), regs.end(), r);
+    if (it == regs.end() || *it != r) return;
+    regs.erase(it);
+  }
+  void reset() { regs.clear(); }
+
+  /*
+   * Combiners
+   */
+
+  VregSet& operator|=(const VregSet& o) {
+    if (UNLIKELY(&o == this)) return *this;
+    if (o.regs.empty()) return *this;
+    if (regs.empty()) {
+      *this = o;
+      return *this;
+    }
+
+    // Union together the sets by doing a merge backwards (this lets us use the
+    // regs storage in place) and then removing any duplicates. The merge
+    // ensures that the result is still sorted.
+    regs.resize(regs.size() + o.regs.size());
+
+    auto it1 = regs.rbegin() + o.regs.size();
+    auto it2 = o.regs.rbegin();
+    auto const end1 = regs.rend();
+    auto const end2 = o.regs.rend();
+    auto insertIt = regs.rbegin();
+
+    while (true) {
+      if (it1 == end1) {
+        std::copy(it2, end2, insertIt);
+        break;
+      }
+      if (it2 == end2) {
+        std::copy(it1, end1, insertIt);
+        break;
+      }
+      if (*it2 > *it1) {
+        *insertIt = *it2;
+        ++it2;
+      } else {
+        *insertIt = *it1;
+        ++it1;
+      }
+      ++insertIt;
+    }
+
+    regs.erase(std::unique(regs.begin(), regs.end()), regs.end());
+    return *this;
+  }
+
+  VregSet& operator&=(const VregSet& o) {
+    if (UNLIKELY(&o == this)) return *this;
+    if (regs.empty()) return *this;
+    if (o.regs.empty()) {
+      regs.clear();
+      return *this;
+    }
+
+    auto it1 = regs.begin();
+    auto it2 = o.regs.begin();
+    auto const end1 = regs.end();
+    auto const end2 = o.regs.end();
+    auto insertIt = it1;
+
+    while (it1 < end1 && it2 < end2) {
+      if (*it1 == *it2) {
+        if (insertIt != it1) *insertIt = *it1;
+        ++insertIt;
+        ++it1;
+        ++it2;
+      } else if (*it1 < *it2) {
+        ++it1;
+      } else {
+        ++it2;
+      }
+    }
+
+    regs.erase(insertIt, regs.end());
+    return *this;
+  }
+
+  VregSet& operator-=(const VregSet& o) {
+    if (UNLIKELY(&o == this)) {
+      regs.clear();
+      return *this;
+    }
+    if (regs.empty() || o.regs.empty()) return *this;
+
+    auto it1 = regs.begin();
+    auto it2 = o.regs.begin();
+    auto const end1 = regs.end();
+    auto const end2 = o.regs.end();
+    auto insertIt = it1;
+
+    while (it1 != end1) {
+      if (it2 == end2) {
+        insertIt = (it1 == insertIt)
+          ? end1
+          : std::copy(it1, end1, insertIt);
+        break;
+      }
+
+      if (*it1 < *it2) {
+        if (insertIt != it1) *insertIt = *it1;
+        ++insertIt;
+        ++it1;
+      } else {
+        if (*it1 == *it2) ++it1;
+        ++it2;
+      }
+    }
+
+    regs.erase(insertIt, regs.end());
+    return *this;
+  }
+
+private:
+  // The canonical form of the vector is for the Vregs to be sorted with no
+  // duplicates. This restores that property after a bulk insert.
+  void canonicalize() {
+    std::sort(regs.begin(), regs.end());
+    regs.erase(std::unique(regs.begin(), regs.end()), regs.end());
+  }
+
+  jit::vector<Vreg> regs;
+
+  friend VregSet operator|(const VregSet&, const VregSet&);
+  friend VregSet operator-(const VregSet&, const VregSet&);
+  friend VregSet operator&(const VregSet&, const VregSet&);
+};
+
+/* VregSet friend operators */
+inline VregSet operator|(const VregSet& s1, const VregSet& s2) {
+  if (s1.regs.empty()) return s2;
+  if (s2.regs.empty()) return s1;
+  VregSet o;
+  o.regs.reserve(s1.size() + s2.size());
+  std::set_union(
+    s1.regs.begin(), s1.regs.end(),
+    s2.regs.begin(), s2.regs.end(),
+    std::back_inserter(o.regs)
+  );
+  return o;
+}
+inline VregSet operator&(const VregSet& s1, const VregSet& s2) {
+  if (s1.regs.empty()) return s1;
+  if (s2.regs.empty()) return s2;
+  VregSet o;
+  o.regs.reserve(std::min(s1.size(), s2.size()));
+  std::set_intersection(
+    s1.regs.begin(), s1.regs.end(),
+    s2.regs.begin(), s2.regs.end(),
+    std::back_inserter(o.regs)
+  );
+  return o;
+}
+inline VregSet operator-(const VregSet& s1, const VregSet& s2) {
+  if (s1.regs.empty() || s2.regs.empty()) return s1;
+  VregSet o;
+  o.regs.reserve(s1.size());
+  std::set_difference(
+    s1.regs.begin(), s1.regs.end(),
+    s2.regs.begin(), s2.regs.end(),
+    std::back_inserter(o.regs)
+  );
+  return o;
+}
+
+inline VregSet operator|(VregSet&& s1, const VregSet& s2) {
+  s1 |= s2;
+  return std::move(s1);
+}
+inline VregSet operator&(VregSet&& s1, const VregSet& s2) {
+  s1 &= s2;
+  return std::move(s1);
+}
+inline VregSet operator-(VregSet&& s1, const VregSet& s2) {
+  s1 -= s2;
+  return std::move(s1);
+}
+
+inline VregSet operator|(VregSet&& s1, VregSet&& s2) {
+  s1 |= s2;
+  return std::move(s1);
+}
+inline VregSet operator&(VregSet&& s1, VregSet&& s2) {
+  s1 &= s2;
+  return std::move(s1);
+}
+inline VregSet operator-(VregSet&& s1, VregSet&& s2) {
+  s1 -= s2;
+  return std::move(s1);
+}
+
+inline VregSet operator|(const VregSet& s1, VregSet&& s2) {
+  s2 |= s1;
+  return std::move(s2);
+}
+inline VregSet operator&(const VregSet& s1, VregSet&& s2) {
+  s2 &= s1;
+  return std::move(s2);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
  * Instantiations or distinct subclasses of Vr wrap virtual register numbers
  * in in a strongly typed wrapper that conveys physical-register constraints,
  * similar to Reg64, Reg32, RegXMM, etc.
@@ -173,9 +468,7 @@ struct Vr {
   Vptr operator[](ScaledIndexDisp) const;
   Vptr operator[](Vptr) const;
   Vptr operator[](DispReg) const;
-
   Vptr operator*() const;
-
   Vptr operator+(size_t) const;
   Vptr operator+(intptr_t) const;
 
@@ -220,16 +513,14 @@ enum class Width : uint8_t {
   Long  = 1 << 2,
   Quad  = 1 << 3,
   Octa  = 1 << 4,
-  Dbl   = 1 << 5,
-  Flags = 1 << 6,
-  Wide  = Octa | Dbl,
+  Flags = 1 << 5,
   // X-or-narrower widths.
   WordN = Byte | Word,
   LongN = Byte | Word | Long,
   QuadN = Byte | Word | Long | Quad,
   // Any non-flags register.
-  AnyNF = Byte | Word | Long | Quad | Octa | Dbl,
-  Any   = Byte | Word | Long | Quad | Octa | Dbl | Flags,
+  AnyNF = Byte | Word | Long | Quad | Octa,
+  Any   = Byte | Word | Long | Quad | Octa | Flags,
 };
 
 inline Width operator&(Width w1, Width w2) {
@@ -247,7 +538,7 @@ inline Width width(Vreg16)  { return Width::Word; }
 inline Width width(Vreg32)  { return Width::Long; }
 inline Width width(Vreg64)  { return Width::Quad; }
 inline Width width(Vreg128) { return Width::Octa; }
-inline Width width(VregDbl) { return Width::Dbl; }
+inline Width width(VregDbl) { return Width::Quad; }
 inline Width width(VregSF)  { return Width::Flags; }
 
 std::string show(Width w);
@@ -257,6 +548,7 @@ std::string show(Width w);
 struct Vscaled {
   Vreg64 index;
   int scale;
+  Width width;
 };
 
 struct VscaledDisp {
@@ -272,28 +564,27 @@ VscaledDisp operator+(Vscaled, int32_t);
  *    - index is optional
  */
 struct Vptr {
-  enum Segment : uint8_t { DS, FS, GS };
-
-  Vptr()
+  Vptr(Width w = Width::None)
     : base(Vreg{})
     , index(Vreg{})
     , disp(0)
+    , width(w)
   {}
 
-  template<class Base>
-  Vptr(Base b, int d)
+  Vptr(Vreg b, uint32_t d, Width w = Width::None)
     : base(b)
     , index(Vreg{})
-    , scale(1)
     , disp(d)
+    , scale(1)
+    , width(w)
   {}
 
-  template<class Base, class Index>
-  Vptr(Base b, Index i, int s, int d)
+  Vptr(Vreg b, Vreg i, uint8_t s, uint32_t d, Width w = Width::None)
     : base(b)
     , index(i)
-    , scale(s)
     , disp(d)
+    , scale(s)
+    , width(w)
   {
     validate();
   }
@@ -301,9 +592,20 @@ struct Vptr {
   /* implicit */ Vptr(MemoryRef m, Segment s = DS)
     : base(m.r.base)
     , index(m.r.index)
+    , disp(m.r.disp)
     , scale(m.r.scale)
     , seg(s)
+  {
+    validate();
+  }
+
+  Vptr(MemoryRef m, Width w, Segment s = DS)
+    : base(m.r.base)
+    , index(m.r.index)
     , disp(m.r.disp)
+    , scale(m.r.scale)
+    , seg(s)
+    , width(w)
   {
     validate();
   }
@@ -318,21 +620,44 @@ struct Vptr {
   bool operator!=(const Vptr&) const;
 
   void validate() {
-    assert((scale == 0x1 || scale == 0x2 || scale == 0x4 || scale == 0x8) &&
+    assertx((scale == 0x1 || scale == 0x2 || scale == 0x4 || scale == 0x8) &&
            "Invalid index register scaling (must be 1,2,4 or 8).");
   }
 
   Vreg64 base;      // optional, for baseless mode
   Vreg64 index;     // optional
+  int32_t disp;
   uint8_t scale;    // 1,2,4,8
   Segment seg{DS};  // DS, FS or GS
-  int32_t disp;
+  Width width{Width::None};
 };
+
+template <Width w>
+struct Vp : Vptr {
+  Vp(Vreg b, uint32_t d) : Vptr(b, d, w) {}
+  /* implicit */ Vp(MemoryRef m, Segment s = DS) : Vptr(m, w, s) {}
+  Vp(Vreg b, Vreg i, uint8_t s, int32_t d) : Vptr(b, i, d, s, w) {}
+  /* implicit */ Vp(const Vptr& m) : Vptr(m) { width = w; }
+};
+
+using Vptr8 = Vp<Width::Byte>;
+using Vptr16 = Vp<Width::Word>;
+using Vptr32 = Vp<Width::Long>;
+using Vptr64 = Vp<Width::Quad>;
+using Vptr128 = Vp<Width::Octa>;
 
 Vptr operator+(Vptr lhs, int32_t d);
 Vptr operator+(Vptr lhs, intptr_t d);
+Vptr operator+(Vptr lhr, size_t d);
 
 Vptr baseless(VscaledDisp);
+
+inline Width width(Vptr8)   { return Width::Byte; }
+inline Width width(Vptr16)  { return Width::Word; }
+inline Width width(Vptr32)  { return Width::Long; }
+inline Width width(Vptr64)  { return Width::Quad; }
+inline Width width(Vptr128) { return Width::Octa; }
+inline Width width(Vptr m)  { return m.width; }
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -374,6 +699,14 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 }}
+
+namespace std {
+  template<> struct hash<HPHP::jit::Vreg> {
+    size_t operator()(HPHP::jit::Vreg r) const { return (size_t)r; }
+  };
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 #include "hphp/runtime/vm/jit/vasm-reg-inl.h"
 

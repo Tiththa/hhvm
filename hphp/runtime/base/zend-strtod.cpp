@@ -91,7 +91,7 @@
 
 #include "hphp/runtime/base/zend-strtod.h"
 #include "hphp/runtime/base/exceptions.h"
-#include "hphp/util/thread-local.h"
+#include "hphp/runtime/base/rds-local.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -145,8 +145,12 @@ extern void *MALLOC(size_t);
 #define MALLOC malloc
 #endif
 
+} // namespace HPHP
+
 #include <ctype.h>
 #include <errno.h>
+
+namespace HPHP {
 
 #ifdef Bad_float_h
 #ifdef IEEE_BIG_ENDIAN
@@ -188,10 +192,18 @@ extern void *MALLOC(size_t);
 #define LONG_MAX 2147483647
 #endif
 #else
+} // namespace HPHP
+
 #include <float.h>
+
+namespace HPHP {
 #endif
 #ifndef __MATH_H__
+} // namespace HPHP
+
 #include <math.h>
+
+namespace HPHP {
 #endif
 
 #ifndef CONST
@@ -381,7 +393,7 @@ struct BigintData {
   Bigint **freelist;
   Bigint *p5s;
 };
-static IMPLEMENT_THREAD_LOCAL_NO_CHECK(BigintData, s_bigint_data);
+static RDS_LOCAL_NO_CHECK(BigintData, s_bigint_data);
 
 void zend_get_bigint_data() {
   s_bigint_data.getCheck();
@@ -1933,7 +1945,7 @@ double zend_strtod (CONST char *s00, const char **se)
   CONST char *s, *s0, *s1;
   double aadj, aadj1, adj;
   _double rv, rv0;
-  Long L;
+  ULong L;
   ULong y, z;
   Bigint *bb = 0, *bb1, *bd = 0, *bd0, *bs = 0, *delta = 0, *tmp;
   double result;
@@ -2525,7 +2537,9 @@ double zend_oct_strtod(const char *str, const char **endptr)
        */
       break;
     }
-    value = value * 8 + c - '0';
+    // Note parentheses: convert digit into integer before adding as a double
+    // in order to avoid accumulating floating point inaccuracies
+    value = value * 8 + (c - '0');
     any = 1;
   }
 
@@ -2559,7 +2573,9 @@ double zend_bin_strtod(const char *str, const char **endptr)
      * return the portion which has been converted thus far.
      */
     if ('0' == c || '1' == c)
-      value = value * 2 + c - '0';
+      // Note parentheses: convert digit into integer before adding as a double
+      // in order to avoid accumulating floating point inaccuracies
+      value = value * 2 + (c - '0');
     else
       break;
 

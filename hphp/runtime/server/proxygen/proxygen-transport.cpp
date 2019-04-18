@@ -205,6 +205,7 @@ void ProxygenTransport::onHeadersComplete(
   m_request->dumpMessage(4);
   auto method = m_request->getMethod();
   const auto& methodStr = m_request->getMethodString();
+  m_extended_method = methodStr.c_str();
   if (method == HTTPMethod::GET) {
     m_method = Transport::Method::GET;
   } else if (method == HTTPMethod::POST ||
@@ -220,10 +221,10 @@ void ProxygenTransport::onHeadersComplete(
     // than libevent:
     //   TRACE, COPY, MOVE, MKACTIVITY, CHECKOUT, MERGE, MSEARCH, NOTIFY,
     //   SUBSCRIBE, UNSUBSCRIBE, PATCH
+    m_method = Transport::Method::Unknown;
     sendErrorResponse(400 /* Bad Request */);
     return;
   }
-  m_extended_method = methodStr.c_str();
 
   const auto& headers = m_request->getHeaders();
   headers.forEach([&] (const std::string &header, const std::string &val) {
@@ -349,7 +350,15 @@ void ProxygenTransport::onEOM() noexcept {
         m_currentBodyBuf->length();
     }
     m_clientComplete = true;
-    m_server->onRequest(shared_from_this());
+    // If we've already responded to the request (most likely with a call to
+    // sendErrorResponse), then we have nothing to do and don't want to service
+    // this request further.
+    if (m_sendEnded) {
+      LOG(WARNING) << "Transaction " << *m_clientTxn << " has already been "
+              << "sent a response.";
+    } else {
+      m_server->onRequest(shared_from_this());
+    }
     return;
   } else {
     requestDoneLocking();
@@ -466,7 +475,7 @@ size_t ProxygenTransport::getRequestSize() const {
 }
 
 std::string ProxygenTransport::getHeader(const char *name) {
-  assert(name && *name);
+  assertx(name && *name);
 
   HeaderMap::const_iterator iter = m_requestHeaders.find(name);
   if (iter != m_requestHeaders.end()) {
@@ -475,15 +484,13 @@ std::string ProxygenTransport::getHeader(const char *name) {
   return "";
 }
 
-void ProxygenTransport::getHeaders(HeaderMap &headers) {
-  if (&m_requestHeaders != &headers) {
-    headers = m_requestHeaders;
-  }
+const HeaderMap& ProxygenTransport::getHeaders() {
+  return m_requestHeaders;
 }
 
 void ProxygenTransport::addHeaderImpl(const char *name, const char *value) {
-  assert(name && *name);
-  assert(value);
+  assertx(name && *name);
+  assertx(value);
 
   if (m_sendStarted) {
     Logger::Error("trying to add header '%s: %s' after 1st chunk",
@@ -495,7 +502,7 @@ void ProxygenTransport::addHeaderImpl(const char *name, const char *value) {
 }
 
 void ProxygenTransport::removeHeaderImpl(const char *name) {
-  assert(name && *name);
+  assertx(name && *name);
 
   if (m_sendStarted) {
     Logger::Error("trying to remove header '%s' after 1st chunk", name);
@@ -507,15 +514,15 @@ void ProxygenTransport::removeHeaderImpl(const char *name) {
 
 void ProxygenTransport::addRequestHeaderImpl(const char *name,
                                              const char *value) {
-  assert(name && *name);
-  assert(value);
+  assertx(name && *name);
+  assertx(value);
 
   m_request->getHeaders().add(name, value);
   m_requestHeaders[name].push_back(value);
 }
 
 void ProxygenTransport::removeRequestHeaderImpl(const char *name) {
-  assert(name && *name);
+  assertx(name && *name);
   m_request->getHeaders().remove(name);
   m_requestHeaders.erase(name);
 }
@@ -534,6 +541,7 @@ void ProxygenTransport::sendErrorResponse(uint32_t code) noexcept {
   CHECK(!m_sendStarted);
   m_sendStarted = true;
   m_sendEnded = true;
+  m_headerSent = true;
   m_responseCode = code;
   m_responseCodeInfo = response.getStatusMessage();
   m_server->onRequestError(this);
@@ -646,7 +654,9 @@ void ProxygenTransport::messageAvailable(ResponseMessage&& message) noexcept {
         for (auto it = m_pushHandlers.begin(); it != m_pushHandlers.end(); ) {
           auto pushTxn = it++->second->getTransaction();
           if (pushTxn && !pushTxn->isEgressEOMSeen()) {
-            LOG(ERROR) << "Aborting unfinished push txn=" << *pushTxn;
+            std::ostringstream oss;
+            oss << *pushTxn;
+            Logger::Error("Aborting unfinished push txn=" + oss.str());
             pushTxn->sendAbort();
           }
         }
@@ -660,8 +670,8 @@ void ProxygenTransport::messageAvailable(ResponseMessage&& message) noexcept {
 
 void ProxygenTransport::sendImpl(const void *data, int size, int code,
                                  bool chunked, bool eom) {
-  assert(data);
-  assert(!m_sendStarted || chunked);
+  assertx(data);
+  assertx(!m_sendStarted || chunked);
   if (m_sendEnded) {
     // This should never happen, but when it does we have to bail out,
     // since there's no sensible way to send data at this point and
@@ -830,6 +840,10 @@ void ProxygenTransport::abort() {
     m_clientTxn->sendAbort();
   }
   s_requestErrorCount->addValue(1);
+}
+
+void ProxygenTransport::trySetMaxThreadCount(int max) {
+  m_server->setMaxThreadCount(max);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

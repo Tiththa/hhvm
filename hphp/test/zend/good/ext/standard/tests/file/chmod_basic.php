@@ -1,6 +1,6 @@
 <?php
 
-define("MODE_MASK", 07777);
+const MODE_MASK = 07777;
 
 $filename = __FILE__ . ".tmp";
 
@@ -20,4 +20,3 @@ var_dump(chmod($filename, 0777));
 unlink($filename);
 echo "done";
 
-?>

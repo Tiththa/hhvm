@@ -6,7 +6,7 @@
 
 /* Creating soft and hard links to a file and applying is_file() on links */ 
 
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 fclose( fopen($file_path."/is_file_variation2.tmp", "w") );
 
 echo "*** Testing is_file() with links ***\n";
@@ -21,11 +21,8 @@ var_dump( is_file($file_path."/is_file_variation2_link.tmp") );  // expected: tr
 clearstatcache();
 
 echo "\n*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
-$file_path = dirname(__FILE__);
+error_reporting(0);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 unlink($file_path."/is_file_variation2_symlink.tmp");
 unlink($file_path."/is_file_variation2_link.tmp");
 unlink($file_path."/is_file_variation2.tmp");
-?>

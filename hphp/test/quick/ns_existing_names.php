@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 namespace A;
 const CO = "a";
@@ -10,5 +10,5 @@ function f() { return "b"; }
 
 use A\f;
 use A\CO;
-var_dump(f());
-var_dump(CO);
+\var_dump(f());
+\var_dump(CO);

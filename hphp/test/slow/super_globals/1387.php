@@ -2,13 +2,13 @@
 
 $a = 100;
 function f() {
-  foreach ($GLOBALS as $k => &$v) {
+  foreach ($GLOBALS as $k => $v) {
     if ($k == 'a') {
- $v = -1;
- }
+      $GLOBALS[$k] = -1;
+    }
   }
-  global $a;
-  var_dump($a);
+
+  var_dump($GLOBALS['a']);
   $b = $GLOBALS;
   $b['a'] = 0;
   var_dump($GLOBALS['a']);

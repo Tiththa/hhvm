@@ -1,9 +1,12 @@
 <?php
 
-function test() {
-  $x =& $y;
+function test(&$x, &$y) {
   $x = false;
   $y .= 'hello';
   echo $x;
 }
-test();
+
+<<__EntryPoint>>
+function main_1105() {
+  test(&$x, &$x);
+}

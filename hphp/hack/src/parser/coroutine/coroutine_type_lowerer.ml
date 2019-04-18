@@ -2,13 +2,12 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *)
 
- module Syntax = Full_fidelity_editable_syntax
- module Token = Full_fidelity_editable_token
+ module Syntax = Full_fidelity_editable_positioned_syntax
+ module Token = Syntax.Token
  module TokenKind = Full_fidelity_token_kind
  open Coroutine_syntax
  open Syntax
@@ -29,7 +28,7 @@ let is_void node =
   | _ -> false
 
 let rewrite_return_type return_type =
-  if is_missing return_type then mixed_type
+  if is_missing return_type then mixed_syntax
   else if is_void return_type then unit_type_syntax
   else return_type
 

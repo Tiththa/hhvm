@@ -54,11 +54,13 @@ struct SSATmp {
   double             dblVal() const       { return type().dblVal(); }
   const StringData*  strVal() const       { return type().strVal(); }
   const ArrayData*   arrVal() const       { return type().arrVal(); }
+  const ArrayData*   shapeVal() const     { return type().shapeVal(); }
   const ArrayData*   vecVal() const       { return type().vecVal(); }
   const ArrayData*   dictVal() const      { return type().dictVal(); }
   const ArrayData*   keysetVal() const    { return type().keysetVal(); }
   const Func*        funcVal() const      { return type().funcVal(); }
   const Class*       clsVal() const       { return type().clsVal(); }
+  const ClsMethDataRef clsmethVal() const { return type().clsmethVal(); }
   ConstCctx          cctxVal() const      { return type().cctxVal(); }
   rds::Handle        rdsHandleVal() const { return type().rdsHandleVal(); }
   TCA                tcaVal() const       { return type().tcaVal(); }

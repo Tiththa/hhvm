@@ -1,8 +1,7 @@
-<?hh
+<?hh // decl
 
 class Wrapper {
   public function __construct(public array $val) { var_dump("Make wrapper"); }
-  public function __destruct() { var_dump("Destroy wrapper"); }
 }
 
 function beep($x) {
@@ -43,4 +42,8 @@ function main($bar) {
   var_dump($bar);
 }
 
+
+<<__EntryPoint>>
+function main_pipevar_4() {
 main("Goodbye");
+}

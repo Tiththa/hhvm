@@ -2,14 +2,13 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
-open Core
-module SS = HackSearchService
+open Hh_core
+module SS = SearchUtils
 module SUtils = SearchUtils
 
 let scope_string_from_type result_type =
@@ -26,7 +25,8 @@ let desc_string_from_type result_type =
      | Ast.Cnormal -> "class"
      | Ast.Cinterface -> "interface"
      | Ast.Ctrait -> "trait"
-     | Ast.Cenum -> "enum")
+     | Ast.Cenum -> "enum"
+     | Ast.Crecord -> "record")
   (* This should never happen *)
   | SS.Class None ->  assert false
   | SS.Method (static, scope) ->
@@ -57,9 +57,34 @@ let result_to_json res =
       "scope", Hh_json.JSON_String scope_string;
     ]
 
-let go popt workers query type_ =
-  let fuzzy = !HackSearchService.fuzzy in
+let re_colon_colon = Str.regexp "::"
+
+let go workers query type_
+  : SearchUtils.result =
+  let fuzzy = SymbolIndex.fuzzy_search_enabled () in
   let results =
-    HackSearchService.MasterApi.query popt ~fuzzy workers query type_ in
+    (* If query contains "::", search class methods instead of top level definitions *)
+    match Str.split_delim re_colon_colon query with
+    | [class_name_query; method_query] ->
+      (* Get the class with the most similar name to `class_name_query` *)
+      let class_ =
+        SymbolIndex.query ~fuzzy workers class_name_query type_
+        |> List.find ~f:begin fun result ->
+          match result with
+          | SearchUtils.{result_type = SearchUtils.Class _; _} -> true
+          | _ -> false
+        end
+      in
+      begin match class_ with
+      | Some SearchUtils.{name; _} ->
+        SymbolIndex.query_class_methods name method_query
+      | None ->
+        (* When we can't find a class with a name similar to the given one,
+           just return no search results. *)
+        []
+      end
+    | _  ->
+      SymbolIndex.query ~fuzzy workers query type_
+  in
 
   List.map results SearchUtils.to_absolute

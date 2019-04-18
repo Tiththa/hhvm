@@ -1,7 +1,9 @@
 <?hh
 
+
+<<__EntryPoint>>
+function main_keygen() {
 $algos = [
-  'aead_aes256gcm',
   'aead_chacha20poly1305',
   'aead_chacha20poly1305_ietf',
   'aead_xchacha20poly1305_ietf',
@@ -21,4 +23,5 @@ foreach ($algos as $algo) {
 
   $key = $fun();
   printf("%s %d %d\n", gettype($key), strlen($key), constant($const));
+}
 }

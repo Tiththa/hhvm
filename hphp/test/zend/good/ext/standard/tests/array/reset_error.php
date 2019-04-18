@@ -1,5 +1,5 @@
 <?php
-/* Prototype  : mixed reset(array $array_arg)
+/* Prototype  : mixed reset(&array $array_arg)
  * Description: Set array argument's internal pointer to the first element and return it 
  * Source code: ext/standard/array.c
  */
@@ -12,12 +12,11 @@ echo "*** Testing reset() : error conditions ***\n";
 
 // Zero arguments
 echo "\n-- Testing reset() function with Zero arguments --\n";
-var_dump( reset() );
+try { var_dump( reset() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 //Test reset with one more than the expected number of arguments
 echo "\n-- Testing reset() function with more than expected no. of arguments --\n";
 $array_arg = array(1, 2);
 $extra_arg = 10;
-var_dump( reset($array_arg, $extra_arg) );
-?>
-===DONE===
+try { var_dump( reset(&$array_arg, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+echo "===DONE===\n";

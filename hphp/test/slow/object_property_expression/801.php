@@ -5,18 +5,22 @@ class X {
  $ref = 1;
  }
   function bar() {
-    $this->ref($this->priv);
+    $this->ref(&$this->priv);
   }
 }
-;
 class Y extends X {
  private $priv;
  }
 class Z extends Y {
 }
+
+<<__EntryPoint>>
+function main_801() {
+;
 $z = new Z;
 $z->bar();
 var_dump($z);
 $y = new Y;
 $y->bar();
 var_dump($y);
+}

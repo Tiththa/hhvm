@@ -2,23 +2,18 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
+open Core_kernel
 
 (*****************************************************************************)
 (* Configuration file *)
 (*****************************************************************************)
 
 let program_name = "hh_server"
-
-let nbr_procs = Sys_utils.nbr_procs
-
-let freq_cache_capacity = 1000
-let ordered_cache_capacity = 1000
 
 (* Configures only the workers. Workers can have more relaxed GC configs as
  * they are short-lived processes *)
@@ -48,4 +43,5 @@ let default_sharedmem_config =
     shm_dirs       = [shm_dir; tmp_dir;];
     shm_min_avail  = gig / 2; (* Half a gig by default *)
     log_level      = 0;
+    sample_rate    = 0.0;
   }

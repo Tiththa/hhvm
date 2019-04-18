@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_1798() {
 $sample_dir = __DIR__.'/../../sample_dir';
 
 $files = array();
@@ -16,7 +19,7 @@ foreach ($dir as $fileinfo) {
     $files[] = $fileinfo->getFilename();
   }
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
 
 $iterator = new DirectoryIterator($sample_dir);
@@ -47,7 +50,7 @@ foreach ($iterator as $fileinfo) {
     $files[$name] = $str;
   }
 }
-ksort($files);
+ksort(&$files);
 foreach ($files as $str) {
   echo $str;
 }
@@ -60,7 +63,7 @@ foreach ($iterator as $fileinfo) {
     $files[$fileinfo->getFilename()] = $fileinfo;
   }
 }
-ksort($files);
+ksort(&$files);
 foreach ($files as $name => $fileinfo) {
   echo $fileinfo->getFilename() . "\n";
    $fileinfo->getCTime() . "\n";
@@ -79,4 +82,5 @@ foreach ($files as $name => $fileinfo) {
    $fileinfo->isLink() . "\n";
    $fileinfo->isReadable() . "\n";
    $fileinfo->isWritable() . "\n";
+}
 }

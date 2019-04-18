@@ -1,15 +1,23 @@
 <?php
-
-$b = 10;
 class C1 {
   public function __get( $what ) {
-    global $b;
-    return $b;
+
+    return ObjectPropertyExpression795::$b;
   }
 }
-$c1 = new C1();
 function assign_ref(&$lv) {
   $lv = 8;
 }
-assign_ref($c1->a);
+
+
+<<__EntryPoint>>
+function main_795() {
+$b = 10;
+$c1 = new C1();
+assign_ref(&$c1->a);
 var_dump($b);
+}
+
+abstract final class ObjectPropertyExpression795 {
+  public static $b;
+}

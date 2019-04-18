@@ -22,6 +22,7 @@
 #include "hphp/runtime/base/stream-wrapper-registry.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
+#include "hphp/runtime/server/cli-server.h"
 
 namespace HPHP {
 
@@ -35,6 +36,26 @@ static String to_full_path(const String& filename) {
 // A wrapper for `zip_open` that prepares a full path
 // file name to consider current working directory.
 static zip* _zip_open(const String& filename, int _flags, int* zep) {
+  if (is_cli_mode()) {
+    int open_flags =
+      (_flags & ZIP_EXCL ? O_EXCL : 0)
+      | (_flags & ZIP_TRUNCATE ? O_TRUNC : 0)
+      | (_flags & ZIP_CREATE ? O_CREAT : 0)
+      | (_flags & ZIP_RDONLY ? O_RDONLY : O_RDWR);
+    auto fd = cli_openfd_unsafe(
+      filename,
+      open_flags,
+      static_cast<mode_t>(-1),
+      /* use_include_path */ false,
+      /* quiet */ true);
+    if (fd == -1) {
+      *zep = ZIP_ER_OPEN;
+      return nullptr;
+    }
+    if (auto z = zip_fdopen(fd, _flags & ZIP_CHECKCONS, zep)) return z;
+    close(fd);
+    return nullptr;
+  }
   return zip_open(to_full_path(filename).c_str(), _flags, zep);
 }
 
@@ -56,7 +77,7 @@ struct ZipStream : File {
   }
 
 
-  virtual ~ZipStream() { close(); }
+  ~ZipStream() override { close(); }
 
   bool open(const String&, const String&) override { return false; }
 
@@ -139,7 +160,7 @@ struct ZipEntry : SweepableResourceData {
     }
   }
 
-  ~ZipEntry() {
+  ~ZipEntry() override {
     close();
   }
 
@@ -224,7 +245,7 @@ struct ZipDirectory : SweepableResourceData {
                                   m_numFiles(zip_get_num_files(z)),
                                   m_curIndex(0) {}
 
-  ~ZipDirectory() { close(); }
+  ~ZipDirectory() override { close(); }
 
   bool close() {
     bool noError = true;
@@ -279,11 +300,6 @@ static req::ptr<T> getResource(ObjectData* obj, const char* varName) {
     return nullptr;
   }
   return cast<T>(var);
-}
-
-ALWAYS_INLINE
-static Variant setVariable(const Object& obj, const char* varName, const Variant& varValue) {
-  return obj->o_set(varName, varValue, s_ZipArchive);
 }
 
 #define FAIL_IF_EMPTY_STRING(func, str)                     \
@@ -342,7 +358,6 @@ static Variant HHVM_METHOD(ZipArchive, getProperty, int64_t property) {
       case 2:
         return 0;
       case 3:
-      case 4:
         return empty_string_variant();
       default:
         return init_null();
@@ -365,10 +380,6 @@ static Variant HHVM_METHOD(ZipArchive, getProperty, int64_t property) {
       return zip_get_num_files(zipDir->getZip());
     }
     case 3:
-    {
-      return this_->o_get("filename", true, s_ZipArchive).asCStrRef();
-    }
-    case 4:
     {
       int len;
       auto comment = zip_get_archive_comment(zipDir->getZip(), &len, 0);
@@ -489,25 +500,27 @@ static bool addPattern(zip* zipStruct, const String& pattern, const Array& optio
                        std::string path, int64_t flags, bool glob) {
   std::string removePath;
   if (options->exists(String("remove_path"))) {
-    auto var = options->get(String("remove_path"));
-    if (var.isString()) {
-      removePath.append(var.asCStrRef().c_str());
+    auto const rval = options->get(String("remove_path")).unboxed();
+    if (isStringType(rval.type())) {
+      auto const sd = rval.val().pstr;
+      removePath.append(sd->data(), sd->size());
     }
   }
 
   bool removeAllPath = false;
   if (options->exists(String("remove_all_path"))) {
-    auto var = options->get(String("remove_all_path"));
-    if (var.isBoolean()) {
-      removeAllPath = var.asBooleanVal();
+    auto const rval = options->get(String("remove_all_path")).unboxed();
+    if (isBoolType(rval.type())) {
+      removeAllPath = rval.val().num;
     }
   }
 
   std::string addPath;
   if (options->exists(String("add_path"))) {
-    auto var = options->get(String("add_path"));
-    if (var.isString()) {
-      addPath.append(var.asCStrRef().c_str());
+    auto const rval = options->get(String("add_path")).unboxed();
+    if (isStringType(rval.type())) {
+      auto const sd = rval.val().pstr;
+      addPath.append(sd->data(), sd->size());
     }
   }
 
@@ -614,7 +627,7 @@ static bool HHVM_METHOD(ZipArchive, close) {
 
   bool ret = zipDir->close();
 
-  setVariable(Object{this_}, "zipDir", null_resource);
+  this_->o_set("zipDir", null_resource, s_ZipArchive);
 
   return ret;
 }
@@ -753,7 +766,12 @@ static bool extractFileTo(zip* zip, const std::string &file, std::string& to,
   auto zipFile = zip_fopen_index(zip, zipStat.index, 0);
   FAIL_IF_INVALID_PTR(zipFile);
 
-  auto outFile = fopen(to.c_str(), "wb");
+  auto stream = Stream::getWrapperFromURI(to);
+  if (stream == nullptr) {
+    zip_fclose(zipFile);
+    return false;
+  }
+  auto outFile = stream->open(to, "wb", 0, nullptr);
   if (outFile == nullptr) {
     zip_fclose(zipFile);
     return false;
@@ -761,20 +779,17 @@ static bool extractFileTo(zip* zip, const std::string &file, std::string& to,
 
   for (auto n = zip_fread(zipFile, buf, len); n != 0;
        n = zip_fread(zipFile, buf, len)) {
-    if (n < 0 || fwrite(buf, sizeof(char), n, outFile) != n) {
+    if (n < 0
+        || outFile->write(String(buf, n, CopyStringMode::CopyString)) != n) {
       zip_fclose(zipFile);
-      fclose(outFile);
+      outFile->close();
       remove(to.c_str());
       return false;
     }
   }
 
   zip_fclose(zipFile);
-  if (fclose(outFile) != 0) {
-    return false;
-  }
-
-  return true;
+  return outFile->close();
 }
 
 static bool HHVM_METHOD(ZipArchive, extractTo, const String& destination,
@@ -1028,8 +1043,8 @@ static Variant HHVM_METHOD(ZipArchive, open, const String& filename,
 
   auto zipDir = req::make<ZipDirectory>(z);
 
-  setVariable(Object{this_}, "zipDir", Variant(zipDir));
-  setVariable(Object{this_}, "filename", filename);
+  this_->o_set("zipDir", Variant(zipDir), s_ZipArchive);
+  this_->o_set("filename", filename, s_ZipArchive);
 
   zip_error_clear(zipDir->getZip());
   return true;
@@ -1069,6 +1084,55 @@ static bool HHVM_METHOD(ZipArchive, renameName, const String& name,
 
   zip_error_clear(zipDir->getZip());
   return true;
+}
+
+static bool HHVM_METHOD(ZipArchive, setEncryptionIndex, int64_t index,
+                        int64_t encryption_method, const String& password) {
+#ifdef ZIP_EM_AES_256
+  auto zipDir = getResource<ZipDirectory>(this_, "zipDir");
+
+  FAIL_IF_INVALID_ZIPARCHIVE(setEncryptionIndex, zipDir);
+  FAIL_IF_EMPTY_STRING_ZIPARCHIVE(setEncryptionIndex, password);
+
+  struct zip_stat zipStat;
+  if (zip_stat_index(zipDir->getZip(), index, 0, &zipStat) != 0) {
+    return false;
+  }
+
+  if (zip_file_set_encryption(zipDir->getZip(), index, encryption_method,
+      password.c_str()) != 0 ) {
+    return false;
+  }
+
+  zip_error_clear(zipDir->getZip());
+  return true;
+#else
+  throw new Exception("zip encryption unsupported due to libzip version");
+#endif
+}
+
+static bool HHVM_METHOD(ZipArchive, setEncryptionName, const String& name,
+                        int64_t encryption_method, const String& password) {
+#ifdef ZIP_EM_AES_256
+  auto zipDir = getResource<ZipDirectory>(this_, "zipDir");
+
+  FAIL_IF_INVALID_ZIPARCHIVE(setEncryptionName, zipDir);
+  FAIL_IF_EMPTY_STRING_ZIPARCHIVE(setEncryptionName, name);
+  FAIL_IF_EMPTY_STRING_ZIPARCHIVE(setEncryptionName, password);
+
+  int index = zip_name_locate(zipDir->getZip(), name.c_str(), 0);
+  FAIL_IF_INVALID_INDEX(index);
+
+  if (zip_file_set_encryption(zipDir->getZip(), index, encryption_method,
+      password.c_str()) != 0 ) {
+    return false;
+  }
+
+  zip_error_clear(zipDir->getZip());
+  return true;
+#else
+  throw new Exception("zip encryption unsupported due to libzip version");
+#endif
 }
 
 static bool HHVM_METHOD(ZipArchive, setArchiveComment, const String& comment) {
@@ -1177,7 +1241,7 @@ static Array zipStatToArray(struct zip_stat* zipStat) {
     return Array();
   }
 
-  return make_map_array(
+  return make_darray(
     s_name,        String(zipStat->name),
     s_index,       VarNR(zipStat->index),
     s_crc,         VarNR(static_cast<int64_t>(zipStat->crc)),
@@ -1403,6 +1467,8 @@ struct zipExtension final : Extension {
     HHVM_ME(ZipArchive, setCommentName);
     HHVM_ME(ZipArchive, setCompressionIndex);
     HHVM_ME(ZipArchive, setCompressionName);
+    HHVM_ME(ZipArchive, setEncryptionIndex);
+    HHVM_ME(ZipArchive, setEncryptionName);
     HHVM_ME(ZipArchive, statIndex);
     HHVM_ME(ZipArchive, statName);
     HHVM_ME(ZipArchive, unchangeAll);
@@ -1465,6 +1531,17 @@ struct zipExtension final : Extension {
     HHVM_RCC_INT(ZipArchive, CM_LZ77, ZIP_CM_LZ77);
     HHVM_RCC_INT(ZipArchive, CM_WAVPACK, ZIP_CM_WAVPACK);
     HHVM_RCC_INT(ZipArchive, CM_PPMD, ZIP_CM_PPMD);
+#ifdef ZIP_EM_AES_256
+    HHVM_RCC_INT(ZipArchive, EM_NONE, ZIP_EM_NONE);
+    HHVM_RCC_INT(ZipArchive, EM_AES_128, ZIP_EM_AES_128);
+    HHVM_RCC_INT(ZipArchive, EM_AES_192, ZIP_EM_AES_192);
+    HHVM_RCC_INT(ZipArchive, EM_AES_256, ZIP_EM_AES_256);
+#else
+    HHVM_RCC_INT(ZipArchive, EM_NONE, 0);
+    HHVM_RCC_INT(ZipArchive, EM_AES_128, 0);
+    HHVM_RCC_INT(ZipArchive, EM_AES_192, 0);
+    HHVM_RCC_INT(ZipArchive, EM_AES_256, 0);
+#endif
 
     HHVM_FE(zip_close);
     HHVM_FE(zip_entry_close);

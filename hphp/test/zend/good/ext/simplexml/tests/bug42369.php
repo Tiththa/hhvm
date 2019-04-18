@@ -9,8 +9,7 @@
 
     echo 'no conversion' . PHP_EOL;
     for ($i = 0; $i < 100000; $i++) {
-        md5($x->x);
+        md5((string)$x->x);
     }
 
-?>
-===DONE===
+echo "===DONE===\n";

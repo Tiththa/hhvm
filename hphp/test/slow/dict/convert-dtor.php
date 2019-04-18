@@ -1,13 +1,10 @@
-<?hh
+<?hh // decl
 // Copyright 2004-present Facebook. All Rights Reserved.
 
 class Dtor {
   public $id;
   function __construct($id) {
     $this->id = $id;
-  }
-  function __destruct() {
-    echo "Dtor::__destruct(" . $this->id . ")\n";
   }
 }
 
@@ -83,4 +80,9 @@ function main() {
   echo "====================================================\n";
 }
 
-main();
+
+<<__EntryPoint>>
+function main_convert_dtor() {
+  main();
+  var_dump(hh\objprof_get_data());
+}

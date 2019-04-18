@@ -62,10 +62,12 @@ struct HardwareCounter {
   static void Init(bool enable,
                    const std::string& events,
                    bool subProc,
-                   bool excludeKernel);
+                   bool excludeKernel,
+                   bool fastReads,
+                   int exportInterval);
   static void RecordSubprocessTimes();
   static void ExcludeKernel();
-  static DECLARE_THREAD_LOCAL_NO_CHECK(HardwareCounter, s_counter);
+  static THREAD_LOCAL_NO_CHECK(HardwareCounter, s_counter);
   bool m_countersSet{false};
 private:
   void reset();
@@ -118,11 +120,13 @@ struct HardwareCounter {
   static void Init(bool enable,
                    const std::string& events,
                    bool subProc,
-                   bool excludeKernel) {}
+                   bool excludeKernel,
+                   bool fastReads,
+                   int exportInterval) {}
   static void RecordSubprocessTimes() {}
   static void ExcludeKernel() {}
 
-  // Normally exposed by DECLARE_THREAD_LOCAL_NO_CHECK
+  // Normally exposed by THREAD_LOCAL_NO_CHECK
   void getCheck() { }
   void destroy() { }
   static HardwareCounter s_counter;

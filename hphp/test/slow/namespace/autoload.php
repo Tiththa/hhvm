@@ -2,9 +2,9 @@
 
 namespace {
   function __autoload($a) {
-    var_dump($a);
+    \var_dump($a);
     if ($a == 'A') {
-      class A {};
+      include 'autoload.inc';
     }
   }
 }

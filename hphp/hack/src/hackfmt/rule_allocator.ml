@@ -2,13 +2,12 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
- open Core
+ open Core_kernel
 
  type t = {
    rule_map: Rule.t IMap.t;
@@ -31,11 +30,6 @@ let make_rule t rule_kind =
 let get_rule_kind t id =
   let r = IMap.find_unsafe id t.rule_map in
   r.Rule.kind
-
-let set_rule_kind t id rule_kind =
-  let r = IMap.find_unsafe id t.rule_map in
-  let r = { r with Rule.kind = rule_kind } in
-  { t with rule_map = IMap.add id r t.rule_map }
 
 let mark_dependencies t lazy_rules active_rule_ids child_id =
   let lazy_rule_list = ISet.elements lazy_rules in

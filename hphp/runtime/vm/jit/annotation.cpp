@@ -35,15 +35,12 @@ const StaticString s_empty("");
 const Func* lookupDirectFunc(SrcKey const sk,
                              const StringData* fname,
                              const StringData* clsName,
-                             Op pushOp) {
+                             bool isExact,
+                             bool isStatic) {
   if (clsName && !clsName->empty()) {
     auto const cls = Unit::lookupUniqueClassInContext(clsName,
                                                       sk.func()->cls());
     bool magic = false;
-    auto const isExact =
-      pushOp == Op::FPushClsMethodD ||
-      pushOp == Op::FPushClsMethodF;
-    auto const isStatic = isExact || pushOp == Op::FPushClsMethod;
     auto const func = lookupImmutableMethod(cls, fname, magic,
                                             isStatic, sk.func(), isExact);
     if (func &&
@@ -78,7 +75,7 @@ const void annotate(NormalizedInstruction* i,
     return i->m_unit->lookupLitstrId(id);
   };
 
-  if (!funcName && !clsName) {
+  if (funcName->empty() && clsName->empty()) {
     switch (pushOp) {
       case Op::FPushClsMethodD:
         decode_iva(pc);
@@ -90,22 +87,39 @@ const void annotate(NormalizedInstruction* i,
         funcName = decode_litstr();
         clsName = nullptr;
         break;
-      case Op::FPushCtorD:
-        decode_iva(pc);
-        clsName = decode_litstr();
-        break;
       default:
         return;
     }
   }
 
-  auto const func =
-    pushOp == Op::FPushCtorD ?
-    lookupDirectCtor(i->source, clsName) :
-    lookupDirectFunc(i->source, funcName, clsName, pushOp);
+  bool isStatic = false;
+  bool isExact = false;
+  switch (pushOp) {
+    case Op::FPushClsMethodD:
+      isExact = true;
+      isStatic = true;
+      break;
+    case Op::FPushClsMethod:
+      isStatic = true;
+      break;
+    case Op::FPushClsMethodS:
+    case Op::FPushClsMethodSD: {
+      decode_iva(pc);
+      auto const ref = decode_oa<SpecialClsRef>(pc);
+      isExact = (ref == SpecialClsRef::Self) || (ref == SpecialClsRef::Parent);
+      isStatic = true;
+      break;
+    }
+    default:
+      break;
+  }
+
+  auto const func = pushOp == Op::FPushCtor
+    ? lookupDirectCtor(i->source, clsName)
+    : lookupDirectFunc(i->source, funcName, clsName, isExact, isStatic);
 
   if (func) {
-    FTRACE(1, "found direct func ({}) for FCallD\n",
+    FTRACE(1, "found direct func ({}) for FCall\n",
            func->fullName()->data());
     i->funcd = func;
   }
@@ -118,9 +132,6 @@ const void annotate(NormalizedInstruction* i,
 void annotate(NormalizedInstruction* i) {
   switch (i->op()) {
   case Op::FCall:
-    annotate(i, nullptr, nullptr);
-    break;
-  case Op::FCallD:
     annotate(i,
              i->m_unit->lookupLitstrId(i->imm[1].u_SA),
              i->m_unit->lookupLitstrId(i->imm[2].u_SA));

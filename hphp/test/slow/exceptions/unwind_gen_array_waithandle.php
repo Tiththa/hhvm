@@ -1,4 +1,4 @@
-<?hh
+<?hh // decl
 
 class E1 extends Exception {
   private static $e;
@@ -9,7 +9,6 @@ class E1 extends Exception {
       self::$e = $this;
     }
   }
-  function __destruct() { var_dump(__METHOD__); }
 
   function rethrow() {
     $e = self::$e;
@@ -46,4 +45,8 @@ function test() {
   \HH\Asio\join(bar());
 }
 
+
+<<__EntryPoint>>
+function main_unwind_gen_array_waithandle() {
 test();
+}

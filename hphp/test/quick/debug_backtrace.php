@@ -1,4 +1,4 @@
-<?php // uses RenameFunction to ensure that all arguments are retained
+<?hh /* uses RenameFunction to ensure that all arguments are retained */
 
 class A {
   static function foo() {
@@ -29,6 +29,5 @@ function main() {
   foo();
 
   set_error_handler('error_handler');
-  return FakeConstant;
 }
 main();

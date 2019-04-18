@@ -19,6 +19,9 @@ function sumlen_fini($a) {
  return (int)$a;
 }
 
+
+<<__EntryPoint>>
+function main_ext_sqlite3() {
 $db = new SQLite3(':memory:test');
 $db->exec("DROP TABLE IF EXISTS foo");
 $db->exec("CREATE TABLE foo (bar STRING)");
@@ -44,6 +47,7 @@ VS($db->querysingle("SELECT * FROM foo", true), array("bar" => "ABC"));
   VS($res->columntype(0), SQLITE3_TEXT);
 
   VS($res->fetcharray(SQLITE3_NUM), array("DEF"));
+  $res->finalize();
 }
 
 // testing prepare() and sqlite3stmt
@@ -57,16 +61,18 @@ VS($db->querysingle("SELECT * FROM foo", true), array("bar" => "ABC"));
   {
     $res = $stmt->execute();
     VS($res->fetcharray(SQLITE3_NUM), array("DEF"));
+    $res->finalize();
   }
 
   VERIFY($stmt->clear());
   VERIFY($stmt->reset());
   $id = "DEF";
-  VERIFY($stmt->bindparam(":id", $id, SQLITE3_TEXT));
+  VERIFY($stmt->bindparam(":id", &$id, SQLITE3_TEXT));
   $id = "ABC";
   {
     $res = $stmt->execute();
     VS($res->fetcharray(SQLITE3_NUM), array("ABC"));
+    $res->finalize();
   }
 }
 
@@ -75,12 +81,16 @@ VS($db->querysingle("SELECT * FROM foo", true), array("bar" => "ABC"));
   VERIFY($db->createfunction("tolower", "lower", 1));
   $res = $db->query("SELECT tolower(bar) FROM foo");
   VS($res->fetcharray(SQLITE3_NUM), array("abc"));
+  $res->finalize();
 }
 {
   VERIFY($db->createaggregate("sumlen", "sumlen_step", "sumlen_fini", 1));
   $res = $db->query("SELECT sumlen(bar) FROM foo");
   VS($res->fetcharray(SQLITE3_NUM), array(6));
+  $res->finalize();
 }
+
+$stmt->close();
 
 // Since minor version can change frequently, just test the major version
 VS($db->version()['versionString'][0], "3");
@@ -94,4 +104,5 @@ try {
   new SQLite3('/'.uniqid('random', true).'/db');
 } catch (Exception $e) {
   var_dump(true);
+}
 }

@@ -5,6 +5,7 @@ function err($x, $y) { throw new Exception('heh'); }
 function foo() {
   echo "----\n";
   $lol = new stdclass;
+  $x = array();
   try {
     $x[$lol] = 2;
   } catch (Exception $y) {
@@ -16,6 +17,10 @@ function foo() {
   var_dump($x);
 }
 
+
+<<__EntryPoint>>
+function main_promote_exn_001() {
 foo();
 set_error_handler('err');
 foo();
+}

@@ -2,29 +2,89 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-module SyntaxError = Full_fidelity_syntax_error
-module Lexer = Full_fidelity_lexer
-module Operator = Full_fidelity_operator
-module Context = Full_fidelity_parser_context
+module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
+module type Lexer_S = Full_fidelity_lexer_sig.WithToken(Syntax.Token).Lexer_S
+module Context = Full_fidelity_parser_context.WithToken(Syntax.Token)
+module TokenKind = Full_fidelity_token_kind
+module type SCWithToken_S = SmartConstructorsWrappers.SyntaxKind_S
+
+module WithLexer(Lexer : Lexer_S) = struct
+  module Lexer = Lexer
+
+  module WithSmartConstructors
+  (SC : SCWithToken_S with module Token = Syntax.Token) = struct
+    module SC = SC
+
+    (* [Trick] Hack to keep track of prefix unary expressions created and change
+    parser behavior based on this knowledge *)
+    type prefix_unary_expression_type = {
+      node : SC.r;
+      operator_kind : TokenKind.t;
+      operand : SC.r;
+    } [@@deriving show]
+
+type context_type = Context.t
+let show_context_type _x = "<Full_fidelity_parser_context.WithToken(Syntax.Token).t>"
+let pp_context_type _fmt _x = Printf.printf "%s\n" "<Full_fidelity_parser_context.WithToken(Syntax.Token).t>"
 
 type t = {
   lexer : Lexer.t;
-  errors : SyntaxError.t list;
-  context: Context.t;
-  precedence : int
-}
+  errors : Full_fidelity_syntax_error.t list;
+  context: context_type;
+  precedence : int;
+  allow_as_expressions: bool;
+  env : Full_fidelity_parser_env.t;
+  sc_state : SC.t;
+  prefix_unary_expression_stack : prefix_unary_expression_type list;
+} [@@deriving show]
 
-let make lexer errors context =
-  { lexer; errors; context; precedence = 0 }
+    let pos parser = (Lexer.source parser.lexer, Lexer.end_offset parser.lexer)
+
+    let sc_call parser f =
+      let (sc_state, result) = f parser.sc_state in
+      {parser with sc_state}, result
+
+    let sc_state parser =
+      parser.sc_state
+
+
+let make env lexer errors context sc_state =
+  { lexer
+  ; errors
+  ; context
+  ; precedence = 0
+  ; env
+  ; sc_state
+  ; prefix_unary_expression_stack = []
+  ; allow_as_expressions = true
+  }
 
 let errors parser =
   parser.errors @ (Lexer.errors parser.lexer)
+
+let env parser =
+  parser.env
+
+let allow_as_expressions parser =
+  parser.allow_as_expressions
+
+let with_as_expressions parser ~enabled f =
+  let old_enabled = allow_as_expressions parser in
+  let parser =
+    if old_enabled <> enabled
+    then { parser with allow_as_expressions = enabled }
+    else parser in
+  let parser, r = f parser in
+  let parser =
+    if old_enabled <> allow_as_expressions parser
+    then { parser with allow_as_expressions = old_enabled }
+    else parser in
+  parser, r
 
 let with_errors parser errors =
   { parser with errors }
@@ -41,15 +101,21 @@ let context parser =
 let with_context parser context =
   { parser with context }
 
+let skipped_tokens parser =
+  Context.skipped_tokens parser.context
+
+let with_skipped_tokens parser skipped_tokens =
+  let new_context = Context.with_skipped_tokens
+    parser.context skipped_tokens in
+  with_context parser new_context
+
+let clear_skipped_tokens parser =
+  with_skipped_tokens parser []
+
 (** Wrapper functions for interfacing with parser context **)
 
 let expect parser token_kind_list =
   let new_context = Context.expect parser.context token_kind_list in
-  with_context parser new_context
-
-let expect_in_new_scope parser token_kind_list =
-  let new_context = Context.expect_in_new_scope
-    parser.context token_kind_list in
   with_context parser new_context
 
 let expects parser token_kind =
@@ -58,23 +124,6 @@ let expects parser token_kind =
 let expects_here parser token_kind =
   Context.expects_here parser.context token_kind
 
-let pop_scope parser token_kind_list =
-  let new_context = Context.pop_scope parser.context token_kind_list in
-  with_context parser new_context
-
-let print_expected parser =
-  Context.print_expected parser.context
-
-let carry_extra parser token =
-  let new_context = Context.carry_extra parser.context (Some token) in
-  with_context parser new_context
-
-let carrying_extra parser =
-  Context.carrying_extra parser.context
-
-let flush_extra parser =
-  let (context, trivia_list) = Context.flush_extra parser.context in
-  ({ parser with context }, trivia_list)
 
 (** Precedence functions **)
 
@@ -89,13 +138,13 @@ let with_numeric_precedence parser new_precedence parse_function =
   (parser, result)
 
 let with_operator_precedence parser operator parse_function =
-  let new_precedence = Operator.precedence operator in
+  let new_precedence = Full_fidelity_operator.precedence parser.env operator in
   with_numeric_precedence parser new_precedence parse_function
 
 let with_reset_precedence parser parse_function =
   with_numeric_precedence parser 0 parse_function
 
-let next_xhp_element_token ?no_trailing:(no_trailing=false) parser =
+let next_xhp_element_token ?(no_trailing=false) parser =
   let (lexer, token, text) =
     Lexer.next_xhp_element_token ~no_trailing parser.lexer in
   let parser = { parser with lexer } in
@@ -105,3 +154,12 @@ let next_xhp_body_token parser =
   let (lexer, token) = Lexer.next_xhp_body_token parser.lexer in
   let parser = { parser with lexer } in
   (parser, token)
+
+  include SmartConstructors.ParserWrapper(struct
+    type parser_type = t
+    module SCI = SC
+    let call = sc_call
+  end)
+end (* WithSmartConstructors *)
+end (* WithLexer *)
+end (* WithSyntax *)

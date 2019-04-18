@@ -1,11 +1,10 @@
-<?hh // decl /* -*- mode: php -*- */
+<?hh /* -*- mode: php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
 
@@ -67,6 +66,10 @@ class ZipArchive {
   const CM_LZMA = 14;
   const CM_LZ77 = 19;
   const CM_PPMD = 98;
+  const EM_NONE = 0;
+  const EM_AES_128 = 257;
+  const EM_AES_192 = 258;
+  const EM_AES_256 = 259;
 
   // Properties
   public int $status;
@@ -88,17 +91,17 @@ class ZipArchive {
   public function addGlob(
     string $pattern,
     int $flags = 0,
-    array $options = array(),
+    darray $options = darray[],
   ): bool;
   public function addPattern(
     string $pattern,
     string $path = ".",
-    array $options = array(),
+    darray $options = darray[],
   ): bool;
   public function close(): bool;
   public function deleteIndex(int $index): bool;
   public function deleteName(string $name): bool;
-  public function extractTo(string $destination, $entries = array()): bool;
+  public function extractTo(string $destination, $entries = varray[]): bool;
   public function getArchiveComment(int $flags = 0): string;
   public function getCommentIndex(int $index, int $flags = 0): string;
   public function getCommentName(string $name, int $flags = 0): string;
@@ -122,8 +125,23 @@ class ZipArchive {
   public function setArchiveComment(string $comment): bool;
   public function setCommentIndex(int $index, string $comment): bool;
   public function setCommentName(string $name, string $comment): bool;
-  public function statIndex(int $index, int $flags = 0): array;
-  public function statName(string $name, int $flags = 0): array;
+  public function setCompressionIndex(
+    int $index,
+    int $comp_method,
+    int $comp_flags = 0,
+  ): bool;
+  public function setEncryptionIndex(
+    int $index,
+    int $encryption_method,
+    string $password,
+  ): bool;
+  public function setEncryptionName(
+    string $name,
+    int $encryption_method,
+    string $password,
+  ): bool;
+  public function statIndex(int $index, int $flags = 0): darray;
+  public function statName(string $name, int $flags = 0): darray;
   public function unchangeAll(): bool;
   public function unchangeArchive(): bool;
   public function unchangeIndex(int $index): bool;
@@ -134,36 +152,43 @@ class ZipArchive {
 /**
  * Close a ZIP file archive
  */
+<<__PHPStdLib>>
 function zip_close(resource $zip): void;
 
 /**
  * Close a directory entry
  */
+<<__PHPStdLib>>
 function zip_entry_close(resource $zip_entry): bool;
 
 /**
  * Retrieve the compressed size of a directory entry
  */
+<<__PHPStdLib>>
 function zip_entry_compressedsize(resource $zip_entry): int;
 
 /**
  * Retrieve the compression method of a directory entry
  */
+<<__PHPStdLib>>
 function zip_entry_compressionmethod(resource $zip_entry): string;
 
 /**
  * Retrieve the actual file size of a directory entry
  */
+<<__PHPStdLib>>
 function zip_entry_filesize(resource $zip_entry): int;
 
 /**
  * Retrieve the name of a directory entry
  */
+<<__PHPStdLib>>
 function zip_entry_name(resource $zip_entry): string;
 
 /**
  * Open a directory entry for reading
  */
+<<__PHPStdLib>>
 function zip_entry_open(
   resource $zip,
   resource $zip_entry,
@@ -173,6 +198,7 @@ function zip_entry_open(
 /**
  * Read from an open directory entry
  */
+<<__PHPStdLib>>
 function zip_entry_read(
   resource $zip_entry,
   int $length = 1024,
@@ -181,9 +207,11 @@ function zip_entry_read(
 /**
  * Open a ZIP file archive
  */
+<<__PHPStdLib>>
 function zip_open(string $filename): mixed; // resource or false
 
 /**
  * Read next entry in a ZIP file archive
  */
+<<__PHPStdLib>>
 function zip_read(resource $zip); // resource or false

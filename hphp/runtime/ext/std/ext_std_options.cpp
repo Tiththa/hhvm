@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <pwd.h>
+#include <stdio.h>
 #include <algorithm>
 #include <vector>
 
@@ -36,8 +37,8 @@
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/php-globals.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
-#include "hphp/runtime/base/request-local.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/unit-cache.h"
@@ -56,14 +57,15 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-const StaticString s_SLASH_TMP("/tmp");
+// Linux: /tmp
+// MacOS: /var/tmp
+const StaticString s_DEFAULT_TEMP_DIR(P_tmpdir);
+
 const StaticString s_ZEND_VERSION("2.4.99");
 
 const int64_t k_ASSERT_ACTIVE      = 1;
-const int64_t k_ASSERT_CALLBACK    = 2;
 const int64_t k_ASSERT_BAIL        = 3;
 const int64_t k_ASSERT_WARNING     = 4;
-const int64_t k_ASSERT_QUIET_EVAL  = 5;
 const int64_t k_ASSERT_EXCEPTION   = 6;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -74,19 +76,14 @@ struct OptionData final : RequestEventHandler {
     assertException = 0;
     assertWarning = 1;
     assertBail = 0;
-    assertQuietEval = false;
   }
 
-  void requestShutdown() override {
-    assertCallback.unset();
-  }
+  void requestShutdown() override {}
 
   int assertActive;
   int assertException;
   int assertWarning;
   int assertBail;
-  bool assertQuietEval;
-  Variant assertCallback;
 };
 
 IMPLEMENT_STATIC_REQUEST_LOCAL(OptionData, s_option_data);
@@ -121,16 +118,6 @@ static Variant HHVM_FUNCTION(assert_options,
     if (!value.isNull()) s_option_data->assertBail = value.toInt64();
     return oldValue;
   }
-  if (what == k_ASSERT_CALLBACK) {
-    Variant oldValue = s_option_data->assertCallback;
-    if (!value.isNull()) s_option_data->assertCallback = value;
-    return oldValue;
-  }
-  if (what == k_ASSERT_QUIET_EVAL) {
-    bool oldValue = s_option_data->assertQuietEval;
-    if (!value.isNull()) s_option_data->assertQuietEval = value.toBoolean();
-    return Variant(oldValue);
-  }
   if (what == k_ASSERT_EXCEPTION) {
     int oldValue = s_option_data->assertException;
     if (!value.isNull()) s_option_data->assertException = value.toBoolean();
@@ -140,93 +127,20 @@ static Variant HHVM_FUNCTION(assert_options,
   return false;
 }
 
-static Variant eval_for_assert(ActRec* const curFP, const String& codeStr) {
-  String prefixedCode = concat3(
-    curFP->unit()->isHHFile() ? "<?hh return " : "<?php return ",
-    codeStr,
-    ";"
-  );
-
-  auto const oldErrorLevel =
-    s_option_data->assertQuietEval ? HHVM_FN(error_reporting)(Variant(0)) : 0;
-  SCOPE_EXIT {
-    if (s_option_data->assertQuietEval) HHVM_FN(error_reporting)(oldErrorLevel);
-  };
-
-  auto const unit = g_context->compileEvalString(prefixedCode.get());
-  if (unit == nullptr) {
-    raise_recoverable_error("Syntax error in assert()");
-    // Failure to compile the eval string doesn't count as an
-    // assertion failure.
-    return Variant(true);
-  }
-
-  if (!(curFP->func()->attrs() & AttrMayUseVV)) {
-    throw_not_supported("assert()",
-                        "assert called from non-varenv function");
-  }
-
-  if (!curFP->hasVarEnv()) {
-    curFP->setVarEnv(VarEnv::createLocal(curFP));
-  }
-  auto varEnv = curFP->getVarEnv();
-
-  ObjectData* thiz = nullptr;
-  Class* cls = nullptr;
-  Class* ctx = curFP->func()->cls();
-  if (ctx) {
-    if (curFP->hasThis()) {
-      thiz = curFP->getThis();
-      cls = thiz->getVMClass();
-    } else {
-      cls = curFP->getClass();
-    }
-  }
-  auto const func = unit->getMain(ctx);
-  return Variant::attach(
-    g_context->invokeFunc(
-      func,
-      init_null_variant,
-      thiz,
-      cls,
-      varEnv,
-      nullptr,
-      ExecutionContext::InvokePseudoMain
-    )
-  );
-}
-
 static Variant HHVM_FUNCTION(assert, const Variant& assertion,
                              const Variant& message /* = null */) {
+  auto const warning = "assert() is deprecated and subject"
+    " to removal from the Hack language";
+  switch (RuntimeOption::DisableAssert) {
+    case 0:  break;
+    case 1:  raise_warning(warning); break;
+    default: raise_error(warning);
+  }
+
   if (!s_option_data->assertActive) return true;
 
-  CallerFrame cf;
-  Offset callerOffset;
-  auto const fp = cf(&callerOffset);
+  if (assertion.toBoolean()) return true;
 
-  auto const passed = [&]() -> bool {
-    if (assertion.isString()) {
-      if (RuntimeOption::EvalAuthoritativeMode) {
-        // We could support this with compile-time string literals,
-        // but it's not yet implemented.
-        throw_not_supported("assert()",
-          "assert with strings argument in RepoAuthoritative mode");
-      }
-      return eval_for_assert(fp, assertion.toString()).toBoolean();
-    }
-    return assertion.toBoolean();
-  }();
-  if (passed) return true;
-
-  if (!s_option_data->assertCallback.isNull()) {
-    auto const unit = fp->m_func->unit();
-
-    PackedArrayInit ai(3);
-    ai.append(String(const_cast<StringData*>(unit->filepath())));
-    ai.append(Variant(unit->getLineNumber(callerOffset)));
-    ai.append(assertion.isString() ? assertion : empty_string_variant_ref);
-    HHVM_FN(call_user_func)(s_option_data->assertCallback, ai.toArray());
-  }
   if (s_option_data->assertException) {
     if (message.isObject()) {
       Object exn = message.toObject();
@@ -313,7 +227,7 @@ static String HHVM_FUNCTION(get_include_path) {
 }
 
 static void HHVM_FUNCTION(restore_include_path) {
-  auto path = ThreadInfo::s_threadInfo.getNoCheck()->
+  auto path = RequestInfo::s_requestInfo.getNoCheck()->
     m_reqInjectionData.getDefaultIncludePath();
   IniSetting::SetUser("include_path", path);
 }
@@ -550,7 +464,7 @@ static int php_getopt(int argc, req::vector<char*>& argv,
     }
     return opts[php_optidx].opt_char;
   }
-  assert(false);
+  assertx(false);
   return(0);  /* never reached */
 }
 
@@ -590,7 +504,7 @@ static req::vector<opt_struct> parse_opts(const char *opts, int opts_len) {
     }
     ++i;
   }
-  assert(i == count);
+  assertx(i == count);
   return paras;
 }
 
@@ -624,7 +538,7 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       opt.opt_char = 0;
       ++i;
     }
-    assert(i == opt_vec.size() - 1);
+    assertx(i == opt_vec.size() - 1);
   } else {
     opt_vec.resize(opt_vec.size() + 1);
   }
@@ -699,11 +613,11 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       /* numeric string */
       int optname_int = atoi(optname);
       if (ret.exists(optname_int)) {
-        Variant &e = ret.lvalAt(optname_int);
-        if (!e.isArray()) {
-          ret.set(optname_int, make_packed_array(e, val));
+        auto const lval = ret.lvalAt(optname_int).unboxed();
+        if (!isArrayLikeType(lval.type())) {
+          ret.set(optname_int, make_packed_array(Variant::wrap(lval.tv()), val));
         } else {
-          e.toArrRef().append(val);
+          asArrRef(lval).append(val);
         }
       } else {
         ret.set(optname_int, val);
@@ -712,11 +626,11 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       /* other strings */
       String key(optname, strlen(optname), CopyString);
       if (ret.exists(key)) {
-        Variant &e = ret.lvalAt(key);
-        if (!e.isArray()) {
-          ret.set(key, make_packed_array(e, val));
+        auto const lval = ret.lvalAt(key).unboxed();
+        if (!isArrayLikeType(lval.type())) {
+          ret.set(key, make_packed_array(Variant::wrap(lval.tv()), val));
         } else {
-          e.toArrRef().append(val);
+          asArrRef(lval).append(val);
         }
       } else {
         ret.set(key, val);
@@ -819,6 +733,10 @@ static bool HHVM_FUNCTION(clock_gettime,
   return ret == 0;
 }
 
+static int64_t HHVM_FUNCTION(clock_gettime_ns, int64_t clk_id) {
+  return gettime_ns(clockid_t(clk_id));
+}
+
 static int64_t HHVM_FUNCTION(cpu_get_count) {
   return Process::GetCPUCount();
 }
@@ -870,56 +788,56 @@ Variant HHVM_FUNCTION(ini_set,
 }
 
 static int64_t HHVM_FUNCTION(memory_get_allocation) {
-  auto total = MM().getStatsCopy().totalAlloc;
-  assert(total >= 0);
+  auto total = tl_heap->getStatsCopy().totalAlloc;
+  assertx(total >= 0);
   return total;
 }
 
 static int64_t HHVM_FUNCTION(hphp_memory_get_interval_peak_usage,
                              bool real_usage /*=false */) {
-  auto const stats = MM().getStatsCopy();
+  auto const stats = tl_heap->getStatsCopy();
   int64_t ret = real_usage ? stats.peakIntervalUsage :
                 stats.peakIntervalCap;
-  assert(ret >= 0);
+  assertx(ret >= 0);
   return ret;
 }
 
 static int64_t HHVM_FUNCTION(memory_get_peak_usage,
                              bool real_usage /*=false */) {
-  auto const stats = MM().getStatsCopy();
+  auto const stats = tl_heap->getStatsCopy();
   int64_t ret = real_usage ? stats.peakUsage : stats.peakCap;
-  assert(ret >= 0);
+  assertx(ret >= 0);
   return ret;
 }
 
 static int64_t HHVM_FUNCTION(memory_get_usage, bool real_usage /*=false */) {
-  auto const stats = MM().getStatsCopy();
-  int64_t ret = real_usage ? stats.usage() : stats.capacity;
+  auto const stats = tl_heap->getStatsCopy();
+  int64_t ret = real_usage ? stats.usage() : stats.capacity();
   // Since we don't always alloc and dealloc a shared structure from the same
   // thread it is possible that this can go negative when we are tracking
   // jemalloc stats.
-  assert((use_jemalloc && real_usage) || ret >= 0);
+  assertx((use_jemalloc && real_usage) || ret >= 0);
   return std::max<int64_t>(ret, 0);
 }
 
 static int64_t HHVM_FUNCTION(hphp_memory_heap_usage) {
   // This corresponds to PHP memory_get_usage(false), only counting
   // allocations via MemoryManager.
-  return MM().getStatsCopy().mmUsage;
+  return tl_heap->getStatsCopy().mmUsage();
 }
 
 static int64_t HHVM_FUNCTION(hphp_memory_heap_capacity) {
   // This happens to match HHVM memory_get_usage(false), and
   // PHP memory_get_usage(true).
-  return MM().getStatsCopy().capacity;
+  return tl_heap->getStatsCopy().capacity();
 }
 
 static bool HHVM_FUNCTION(hphp_memory_start_interval) {
-  return MM().startStatsInterval();
+  return tl_heap->startStatsInterval();
 }
 
 static bool HHVM_FUNCTION(hphp_memory_stop_interval) {
-  return MM().stopStatsInterval();
+  return tl_heap->stopStatsInterval();
 }
 
 const StaticString s_srv("srv"), s_cli("cli");
@@ -1049,7 +967,7 @@ static bool HHVM_FUNCTION(putenv, const String& setting) {
 }
 
 static void HHVM_FUNCTION(set_time_limit, int64_t seconds) {
-  ThreadInfo *info = ThreadInfo::s_threadInfo.getNoCheck();
+  RequestInfo *info = RequestInfo::s_requestInfo.getNoCheck();
   RequestInjectionData &data = info->m_reqInjectionData;
   if (RuntimeOption::TimeoutsUseWallTime) {
     data.setTimeout(seconds);
@@ -1066,7 +984,7 @@ String HHVM_FUNCTION(sys_get_temp_dir) {
 #else
   char *env = getenv("TMPDIR");
   if (env && *env) return String(env, CopyString);
-  return s_SLASH_TMP;
+  return s_DEFAULT_TEMP_DIR;
 #endif
 }
 
@@ -1300,6 +1218,7 @@ void StandardExtension::initOptions() {
   HHVM_FE(getrusage);
   HHVM_FE(clock_getres);
   HHVM_FE(clock_gettime);
+  HHVM_FE(clock_gettime_ns);
   HHVM_FE(cpu_get_count);
   HHVM_FE(cpu_get_model);
   HHVM_FALIAS(ini_alter, ini_set);
@@ -1336,10 +1255,8 @@ void StandardExtension::initOptions() {
   HHVM_RC_INT(INFO_ALL, 0x7FFFFFFF);
 
   HHVM_RC_INT(ASSERT_ACTIVE, k_ASSERT_ACTIVE);
-  HHVM_RC_INT(ASSERT_CALLBACK, k_ASSERT_CALLBACK);
   HHVM_RC_INT(ASSERT_BAIL, k_ASSERT_BAIL);
   HHVM_RC_INT(ASSERT_WARNING, k_ASSERT_WARNING);
-  HHVM_RC_INT(ASSERT_QUIET_EVAL, k_ASSERT_QUIET_EVAL);
   HHVM_RC_INT(ASSERT_EXCEPTION, k_ASSERT_EXCEPTION);
 
   loadSystemlib("std_options");

@@ -16,33 +16,113 @@
 
 #pragma once
 
-#include "hphp/runtime/vm/unit-emitter.h"
-
 #include <boost/variant.hpp>
+
+#include "hphp/runtime/vm/as.h"
+#include "hphp/runtime/vm/unit-emitter.h"
 
 namespace HPHP {
 
-struct MD5;
+namespace Native {
+struct FuncTable;
+}
 
-enum class HackcMode {
-  kNever,
-  kFallback,
-  kFatal
+struct SHA1;
+
+struct BadCompilerException : Exception {
+  explicit BadCompilerException(const std::string& what) : Exception(what) {}
+  template<class... A>
+  explicit BadCompilerException(A&&... args)
+    : Exception(folly::sformat(std::forward<A>(args)...))
+  {}
 };
 
-HackcMode hackc_mode();
-
-void compilers_init();
+void compilers_start();
 void compilers_shutdown();
 void compilers_set_user(const std::string& username);
+void compilers_detach_after_fork();
 
 // On success return a verified unit, and on failure return a string stating the
 // type of error encountered
-using CompilerResult = boost::variant<std::unique_ptr<Unit>,std::string>;
+using CompilerResult = boost::variant<std::unique_ptr<UnitEmitter>,std::string>;
 
-CompilerResult hackc_compile(const char* code, int len,
-                             const char* filename, const MD5& md5);
-CompilerResult php7_compile(const char* code, int len,
-                            const char* filename, const MD5& md5);
+struct FactsParser {
+  virtual ~FactsParser() {
+  }
+};
+
+std::unique_ptr<FactsParser> acquire_facts_parser();
+
+struct FactsJSONString {
+  std::string value;
+};
+
+struct FfpJSONString {
+  std::string value;
+};
+
+// On success returns a Json with value containing json-serialized results of
+// facts extraction and on failure returns a string with error text
+using ParseFactsResult = boost::variant<FactsJSONString, std::string>;
+using FfpResult = boost::variant<FfpJSONString, std::string>;
+
+ParseFactsResult extract_facts(const FactsParser&,
+                               const std::string& filename,
+                               const char* code,
+                               int len);
+FfpResult ffp_parse_file(std::string file, const char* contents, int size);
+
+std::string hackc_version();
+
+struct UnitCompiler {
+  UnitCompiler(const char* code,
+               int codeLen,
+               const char* filename,
+               const SHA1& sha1,
+               const Native::FuncTable& nativeFuncs,
+               bool forDebuggerEval,
+               const RepoOptions& options)
+      : m_code(code),
+        m_codeLen(codeLen),
+        m_filename(filename),
+        m_sha1(sha1),
+        m_nativeFuncs(nativeFuncs),
+        m_forDebuggerEval(forDebuggerEval),
+        m_options(options)
+    {}
+  virtual ~UnitCompiler() {}
+
+  static std::unique_ptr<UnitCompiler> create(
+    const char* code,
+    int codeLen,
+    const char* filename,
+    const SHA1& sha1,
+    const Native::FuncTable& nativeFuncs,
+    bool forDebuggerEval,
+    const RepoOptions& options);
+
+  virtual std::unique_ptr<UnitEmitter> compile(
+    bool wantsSymbolRefs = false) const = 0;
+
+  virtual const char* getName() const = 0;
+
+ protected:
+  const char* m_code;
+  int m_codeLen;
+  const char* m_filename;
+  const SHA1& m_sha1;
+  const Native::FuncTable& m_nativeFuncs;
+  bool m_forDebuggerEval;
+  const RepoOptions& m_options;
+};
+
+struct HackcUnitCompiler : public UnitCompiler {
+  using UnitCompiler::UnitCompiler;
+
+  virtual std::unique_ptr<UnitEmitter> compile(
+    bool wantsSymbolRefs = false) const override;
+
+  virtual const char* getName() const override { return "HackC"; }
+};
 
 }

@@ -15,13 +15,13 @@
   SetL $b
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+    PushL $a
+    PushL $b
   FPushFuncD 2 "main"
-    FPassL 0 $a
-    UnsetL $a
-    FPassL 1 $b
-    UnsetL $b
-  FCall 2
-  UnboxR
+  FCall <> 2 1 "" - "" ""
   RetC
 }
 

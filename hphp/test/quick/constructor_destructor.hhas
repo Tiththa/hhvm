@@ -4,26 +4,34 @@
 .main {
   .declvars $x;
   DefCls 0
-  FPushCtorD 1 "A"
+  NewObjD "A"
+  Dup
+  NullUninit
+  NullUninit
   String "foo"
-  FPassCE 0
-  FCall 1
-  PopR
+  FPushCtor 1
+  FCall <> 1 1 "" - "" ""
+  PopC
   SetL $x
   PopC
   CGetL $x
-  FPushObjMethodD 1 "set" NullThrows
+  NullUninit
+  NullUninit
   String "bar"
-  FPassCE 0
-  FCall 1
-  PopR
-  FPushFuncD 1 "var_dump"
+  FPushObjMethodD 1 "set" NullThrows
+  FCall <> 1 1 "" - "" ""
+  PopC
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $x
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "get" NullThrows
-  FCall 0
-  FPassR 0
-  FCall 1
-  PopR
+  FCall <> 0 1 "" - "" ""
+  FPushFuncD 1 "var_dump"
+  FCall <> 1 1 "" - "" ""
+  PopC
   Int 1
   RetC
 }

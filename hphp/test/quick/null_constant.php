@@ -1,2 +1,2 @@
-<?php
-define('FOO', null);
+<?hh
+const FOO = null;

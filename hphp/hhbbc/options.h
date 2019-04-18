@@ -18,24 +18,24 @@
 
 #include <string>
 #include <utility>
-#include <map>
-#include <set>
 
-#include "hphp/util/functional.h"
+#include "hphp/util/hash-map.h"
+#include "hphp/util/hash-set.h"
+#include "hphp/util/hash.h"
 
 namespace HPHP {
 
 enum class Op : uint16_t;
+struct OpHash {
+  size_t operator()(Op op) const {
+    return hash_int64(static_cast<uint16_t>(op));
+  }
+};
 
 namespace HHBBC {
 
-using MethodMap = std::map<
-  std::string,
-  std::set<std::string,stdltistr>,
-  stdltistr
->;
-
-using OpcodeSet = std::set<Op>;
+using MethodMap = hphp_fast_string_imap<hphp_fast_string_iset>;
+using OpcodeSet = hphp_fast_set<Op,OpHash>;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -55,14 +55,20 @@ struct Options {
    */
   OpcodeSet TraceBytecodes;
 
+  /*
+   * If non-empty, dump jemalloc memory profiles at key points during
+   * the build, using this as a prefix.
+   */
+  std::string profileMemory;
+
   //////////////////////////////////////////////////////////////////////
 
   /*
    * Flags for various limits on when to perform widening operations.
    * See analyze.cpp for details.
    */
-  uint32_t analyzeFuncWideningLimit = 50;
-  uint32_t analyzeClassWideningLimit = 20;
+  uint32_t analyzeFuncWideningLimit = 12;
+  uint32_t analyzeClassWideningLimit = 6;
 
   /*
    * When to stop refining return types.
@@ -86,6 +92,11 @@ struct Options {
   uint32_t returnTypeRefineLimit = 15;
 
   /*
+   * Limit public static property refinement for the same reason.
+   */
+  uint32_t publicSPropRefineLimit = 15;
+
+  /*
    * Whether to produce extended stats information.  (Takes extra
    * time.)
    */
@@ -102,9 +113,7 @@ struct Options {
   /*
    * If true, analyze calls to functions in a context-sensitive way.
    *
-   * Note, this is disabled by default because of the need to have an
-   * intersection operation in the type system to maintain index
-   * invariants---it doesn't quite work yet.  See comments in index.cpp.
+   * Disabled by default because its slow, with very little gain.
    */
   bool ContextSensitiveInterp = false;
 
@@ -210,38 +219,6 @@ struct Options {
   bool HardConstProp = true;
 
   /*
-   * Whether or not to assume that VerifyParamType instructions must
-   * throw if the parameter does not match the associated type
-   * constraint.
-   *
-   * This changes program behavior because parameter type hint
-   * validation is normally a recoverable fatal.  When this option is
-   * on, hhvm will fatal if the error handler tries to recover in this
-   * situation.
-   */
-  bool HardTypeHints = true;
-
-  /*
-   * Whether or not to assume that VerifyRetType* instructions must
-   * throw if the parameter does not match the associated type
-   * constraint.
-   *
-   * This changes program behavior because return type hint validation
-   * is normally a recoverable fatal.  When this option is on, hhvm will
-   * fatal if the error handler tries to recover in this situation.
-   */
-  bool HardReturnTypeHints = false;
-
-  /*
-   * Whether to assume that `this` types will be verified by Verify*Type
-   * instructions at runtime.
-   *
-   * This changes program behavior because this type hints that are checked
-   * at runtime will enable additional HHBBC optimizations.
-   */
-  bool CheckThisTypeHints = true;
-
-  /*
    * If true, we'll try to infer the types of declared private class
    * properties.
    *
@@ -255,17 +232,17 @@ struct Options {
   bool HardPrivatePropInference = true;
 
   /*
-   * If true, we'll assume that dynamic function calls (like '$f()') do not
-   * have effects on unknown locals (i.e. are not extract / compact /...).
-   */
-  bool DisallowDynamicVarEnvFuncs = true;
-
-  /*
    * If true, we'll perform optimizations which can remove invocations of the
    * autoloader, if it can be proven the invocation would not find a viable
    * function.
    */
   bool ElideAutoloadInvokes = true;
+
+  /*
+   * Whether to flatten trait methods and properties into the classes
+   * that use them.
+   */
+  bool FlattenTraits = true;
 
   /*
    * The filepath where to save the stats file.  If the path is empty, then we

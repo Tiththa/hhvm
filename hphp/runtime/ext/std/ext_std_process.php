@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /**
  * This function is identical to the backtick operator.
@@ -119,7 +119,7 @@ function system(string $command, mixed &$return_var = null): string;
  */
 <<__Native>>
 function proc_open(string $cmd,
-                   array $descriptorspec,
+                   darray<int, mixed> $descriptorspec,
                    mixed &$pipes,
                    ?string $cwd = null,
                    mixed $env = null,
@@ -140,7 +140,7 @@ function proc_open(string $cmd,
  * @return bool - Returns the termination status of the process that was run.
  *
  */
-<<__ParamCoerceModeFalse, __Native>>
+<<__Native>>
 function proc_terminate(resource $process, int $signal = 15): bool;
 
 /**

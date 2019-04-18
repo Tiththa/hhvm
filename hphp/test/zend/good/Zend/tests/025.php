@@ -13,10 +13,7 @@ $class = 'foo';
 
 foo::a();
 foo::$a();
-foo::$$b();
 
 $class::a();
 $class::$a();
-$class::$$b();
 
-?>

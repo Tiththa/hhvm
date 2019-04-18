@@ -2,18 +2,17 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
+open Core_kernel
 open Ast
-open Core
 
 type result = Pos.absolute list
 
-module PosSet = Set.Make(Pos)
+module PosSet = Caml.Set.Make(Pos)
 
 module LocalPositions = struct
   (**
@@ -167,9 +166,6 @@ module LocalMap = struct
 
   let previous_scopechain localmap =
     ScopeChains.previous localmap.scopechains
-
-  let previous_scopechains localmap =
-    ScopeChains.pop localmap.scopechains
 
   let replace_head scopechain localmap =
     let scopechains =
@@ -458,46 +454,9 @@ class local_finding_visitor = object(this)
      let localmap = LocalMap.push localmap in
      (* No need to pop; we're going to pop the whole scopechain. *)
      let localmap = List.fold_left use_list ~init:localmap
-       ~f:begin fun l ((p, n), _) -> LocalMap.add_from_use n p l end in
+       ~f:begin fun l ((p, n)) -> LocalMap.add_from_use n p l end in
      let localmap = this#on_fun_ localmap fn in
      LocalMap.pop_scopechain localmap
-
-   method on_static_variable localmap static =
-     (**
-       * Introducing a static variable hides any existing variable in this
-       * scope of the same name. We model this by simply replacing the existing
-       * scope entry with the new one. See commentary to force_add, above.
-       *
-       * There are two forms we are concerned with:
-       *
-       * static $x;
-       * static $x = 123;
-       *
-       * If we have neither expected form then we do not attempt to add a
-       * local to the map.
-       *
-       * Note that in the second form we do scan the initializer looking for
-       * locals; if the program has one then it is an error because the
-       * initializer must be a constant. But we should look for the use of a
-       * local because that is still a usage of the local! One imagines that
-       * the IDE could for instance detect something like
-       *
-       * static $a = 123;
-       * static $b = $a;
-       *
-       * and fix up the error appropriately. We cannot do that if we cannot
-       * find the local inside the initializer.
-       *)
-     match static with
-     | _, Lvar (pos, name) -> LocalMap.force_add name pos localmap
-     | _, Binop(Eq None, (_, Lvar (pos, name)), init) ->
-       let localmap = LocalMap.force_add name pos localmap in
-       this#on_expr localmap init
-     | _ -> localmap
-
-  method! on_static_var localmap statics =
-    List.fold_left statics ~init:localmap
-      ~f:begin fun l s -> this#on_static_variable l s end
 
   method! on_catch localmap (_, (pos, name), body) =
     (**
@@ -512,14 +471,14 @@ class local_finding_visitor = object(this)
     LocalMap.pop localmap
 end
 
-let parse tcopt content =
+let parse tcopt path content =
   Errors.ignore_ begin fun () ->
-    let {Parser_hack.ast; comments = _; file_mode = _; content = _;} =
-      Parser_hack.program
-        tcopt
-        Relative_path.default
-        content
-    in ast
+    let open Full_fidelity_ast in
+    (* path is needed because of different leading markup behavior in .hack *)
+    (* files vs .php files *)
+    let env = make_env ~parser_options:tcopt path in
+    let {Parser_return.ast; _} = from_text_with_legacy env content in
+    ast
   end
 
 let go_from_ast ast line char =
@@ -529,15 +488,15 @@ let go_from_ast ast line char =
   LocalMap.results localmap
 
  (**
-  * This is the entrypoint to this module. The contents of a file, and a
-  * position within it, identifying a local, are given. The result is a
-  * list of the positions of other uses of that local in the file.
+  * This is the entrypoint to this module. The relative path of a file,
+  * the contents of a file, and a position within it, identifying a local, are given.
+  * The result is a list of the positions of other uses of that local in the file.
   *)
-let go tcopt content line char =
+let go tcopt path content line char =
   try
-    let ast = parse tcopt content in
+    let ast = parse tcopt path content in
     let results_list = go_from_ast ast line char in
-    List.map results_list Pos.to_absolute
+    List.map results_list (fun pos -> Pos.set_file path pos)
   with Failure error ->
     failwith (
       (Printf.sprintf "Find locals service failed with error %s:\n" error) ^

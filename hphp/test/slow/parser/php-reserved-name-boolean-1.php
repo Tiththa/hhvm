@@ -1,5 +1,8 @@
 <?php
-if (false) {
-  class Boolean {}
-}
+
+
+
+
+class Boolean {}
+
 echo "Done\n";

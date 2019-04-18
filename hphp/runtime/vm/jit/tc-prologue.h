@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2016 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -30,7 +30,26 @@ namespace tc {
  *
  * Precondition: calling thread owns both code and metadata locks
  */
-TCA emitFuncPrologueOptInternal(ProfTransRec* rec);
+void emitFuncPrologueOptInternal(PrologueMetaInfo& info);
+
+/*
+ * Publish the metadata for the given func prologue.  Returns whether or not it
+ * succeeded.
+ */
+bool publishFuncPrologueMeta(Func* func, int nArgs, TransKind kind,
+                             PrologueMetaInfo& info);
+
+/*
+ * Publish the code for the given func prologue.  Returns whether or not it
+ * succeeded.
+ */
+bool publishFuncPrologueCode(Func* func, int nArgs, PrologueMetaInfo& info);
+
+/*
+ * Smash the callers of the ProfPrologue associated with `rec' to call a new
+ * prologue at `start' address.
+ */
+void smashFuncCallers(TCA start, ProfTransRec* rec);
 
 /*
  * Emit the prologue dispatch for func which contains dvs DV initializers, and
@@ -40,7 +59,9 @@ TCA emitFuncPrologueOptInternal(ProfTransRec* rec);
  * Precondition: calling thread owns both code and metadata locks
  */
 TCA emitFuncBodyDispatchInternal(Func* func, const DVFuncletsVec& dvs,
-                                 TransKind kind);
+                                 TransKind kind, CodeCache::View view);
+
+void publishFuncBodyDispatch(Func* func, TCA start, TCA end);
 
 }
 

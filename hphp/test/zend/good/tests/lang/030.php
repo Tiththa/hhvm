@@ -1,18 +1,15 @@
 <?php
 class foo {
 	function foo($name) {
-     	$GLOBALS['List']= &$this;
+     	$GLOBALS['List']= $this;
      	$this->Name = $name;
 		$GLOBALS['List']->echoName();
 	}
 
 	function echoName() {
+		if (!array_key_exists('names', $GLOBALS)) $GLOBALS['names'] = array();
      	$GLOBALS['names'][]=$this->Name;
 	}
-}
-
-function &foo2(&$foo) {
-	return $foo;
 }
 
 
@@ -21,11 +18,4 @@ $bar1->Name = 'outside';
 $bar1->echoName();
 $List->echoName();
 
-$bar1 =& foo2(new foo('constructor'));
-$bar1->Name = 'outside';
-$bar1->echoName();
-
-$List->echoName();
-
-print ($names==array('constructor','outside','outside','constructor','outside','outside')) ? 'success':'failure';
-?>
+print ($names==array('constructor','outside','outside')) ? 'success':'failure';

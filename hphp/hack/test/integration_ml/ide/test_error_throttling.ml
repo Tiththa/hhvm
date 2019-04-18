@@ -2,9 +2,9 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
+ *
  *
  *)
 
@@ -99,9 +99,7 @@ let () =
     Test.fail "Expected diagnostics for baz.php";
 
   (* Trigger global recheck *)
-  let env, loop_output = Test.status env in
-  Test.assert_no_diagnostics loop_output;
-  let env, loop_output = Test.(run_loop_once env default_loop_input) in
+  let env, loop_output = Test.full_check env in
 
   let diagnostics_map = get_diagnostics_map loop_output in
   let files_with_errors = get_files_with_errors diagnostics_map in
@@ -121,8 +119,6 @@ let () =
   Test.assert_diagnostics loop_output bar_10_clear_diagnostics;
 
   (* Trigger another global recheck to get more global errors *)
-  let env, loop_output = Test.status env in
-  Test.assert_no_diagnostics loop_output;
-  let _, loop_output = Test.(run_loop_once env default_loop_input) in
+  let _, loop_output = Test.full_check env in
 
   Test.assert_diagnostics loop_output bar_107_diagnostics;

@@ -89,13 +89,13 @@ int64_t VirtualHost::GetLowestMaxPostSize() {
 
 int64_t VirtualHost::GetMaxPostSize() {
   const VirtualHost *vh = GetCurrent();
-  assert(vh);
+  assertx(vh);
   return vh->getMaxPostSize();
 }
 
 int64_t VirtualHost::GetUploadMaxFileSize() {
   const VirtualHost *vh = GetCurrent();
-  assert(vh);
+  assertx(vh);
   if (vh->m_runtimeOption.uploadMaxFileSize != -1) {
     return vh->m_runtimeOption.uploadMaxFileSize;
   }
@@ -104,9 +104,9 @@ int64_t VirtualHost::GetUploadMaxFileSize() {
 
 void VirtualHost::UpdateSerializationSizeLimit() {
   const VirtualHost *vh = GetCurrent();
-  assert(vh);
+  assertx(vh);
   if (vh->m_runtimeOption.serializationSizeLimit != StringData::MaxSize) {
-    VariableSerializer::serializationSizeLimit =
+    VariableSerializer::serializationSizeLimit->value =
       vh->m_runtimeOption.serializationSizeLimit;
   }
 }
@@ -119,7 +119,7 @@ bool VirtualHost::alwaysDecodePostData(const String& origPath) const {
 
 const std::vector<std::string> &VirtualHost::GetAllowedDirectories() {
   const VirtualHost *vh = GetCurrent();
-  assert(vh);
+  assertx(vh);
   if (!vh->m_runtimeOption.allowedDirectories.empty()) {
     return vh->m_runtimeOption.allowedDirectories;
   }
@@ -176,7 +176,7 @@ void VirtualHost::initRuntimeOption(const IniSetting::Map& ini, const Hdf& vh) {
       ini,
       vh, "overwrite.ResourceLimit.SerializationSizeLimit",
       StringData::MaxSize, false);
-  m_runtimeOption.allowedDirectories = Config::GetVector(
+  m_runtimeOption.allowedDirectories = Config::GetStrVector(
     ini,
     vh, "overwrite.Server.AllowedDirectories",
     m_runtimeOption.allowedDirectories, false);
@@ -191,7 +191,7 @@ void VirtualHost::initRuntimeOption(const IniSetting::Map& ini, const Hdf& vh) {
     m_documentRoot.pop_back();
     // Make sure we've not converted "/" to "" (which is why we're checking
     // length() > 1 instead of !empty() above)
-    assert(!m_documentRoot.empty());
+    assertx(!m_documentRoot.empty());
   }
 }
 
@@ -320,7 +320,7 @@ void VirtualHost::init(const IniSetting::Map& ini, const Hdf& vh,
     std::string namePattern = Config::GetString(ini_lf, hdf_lf, "pattern", "",
                                             false);
     std::vector<std::string> names;
-    names = Config::GetVector(ini_lf, hdf_lf, "params", names, false);
+    names = Config::GetStrVector(ini_lf, hdf_lf, "params", names, false);
 
     if (namePattern.empty()) {
       for (unsigned int i = 0; i < names.size(); i++) {
@@ -366,7 +366,7 @@ bool VirtualHost::match(const String &host) const {
 }
 
 static int get_backref(const char **s) {
-  assert('0' <= **s && **s <= '9');
+  assertx('0' <= **s && **s <= '9');
   int val = **s - '0';
   *s += 1;
   if ('0' <= **s && **s <= '9') {
@@ -504,7 +504,7 @@ std::string VirtualHost::serverName(const std::string &host) const {
 // query string filter
 
 std::string VirtualHost::filterUrl(const std::string &url) const {
-  assert(!m_queryStringFilters.empty());
+  assertx(!m_queryStringFilters.empty());
 
   for (unsigned int i = 0; i < m_queryStringFilters.size(); i++) {
     const QueryStringFilter &filter = m_queryStringFilters[i];

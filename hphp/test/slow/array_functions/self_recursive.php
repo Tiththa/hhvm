@@ -10,12 +10,14 @@ function test($g) {
 }
 
 function main() {
-  $a = array();
-  $a['g'] = &$a;
+  $a = array('g' => $GLOBALS);
 
   test($a);
   test($GLOBALS);
-  var_dump(compact($a));
 }
 
+
+<<__EntryPoint>>
+function main_self_recursive() {
 main();
+}

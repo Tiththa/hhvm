@@ -1,8 +1,8 @@
-<?hh
+<?hh // partial
 
 function consumeArrayWithNoTypeParameters(array $arg): void {}
 
-function provideDarrayOrVarrayOfInt(): darray_or_varray<int> {
+function provideDarrayOrVarrayOfInt(): varray_or_darray<int> {
   return darray["a" => 0];
 }
 

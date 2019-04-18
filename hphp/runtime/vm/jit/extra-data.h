@@ -34,6 +34,8 @@
 
 #include <folly/Conv.h>
 #include <folly/Optional.h>
+#include <folly/gen/Base.h>
+#include <folly/gen/String.h>
 
 #include <algorithm>
 #include <string>
@@ -117,7 +119,7 @@ struct ClassData : IRExtraData {
   explicit ClassData(const Class* cls)
     : cls(cls)
   {
-    assert(cls != nullptr);
+    assertx(cls != nullptr);
   }
 
   std::string show() const {
@@ -129,10 +131,59 @@ struct ClassData : IRExtraData {
   }
 
   size_t hash() const {
-    return hash_int64(reinterpret_cast<intptr_t>(cls));
+    return pointer_hash<Class>()(cls);
   }
 
   const Class* cls;
+};
+
+/*
+ * Class pointer, suppress flag, is or as operation flag and range into the
+ * stack (for type structures) needed for resolve type struct instruction
+ *
+ * Class pointer could be null.
+ */
+struct ResolveTypeStructData : IRExtraData {
+  explicit ResolveTypeStructData(
+    const Class* cls,
+    bool suppress,
+    IRSPRelOffset offset,
+    uint32_t size,
+    bool isOrAsOp
+  )
+    : cls(cls)
+    , suppress(suppress)
+    , offset(offset)
+    , size(size)
+    , isOrAsOp(isOrAsOp)
+  {}
+
+  std::string show() const {
+    return folly::sformat("{},{},{},{},{}",
+                          cls ? cls->name()->data() : "nullptr",
+                          suppress ? "suppress" : "no-suppress",
+                          offset.offset,
+                          size,
+                          isOrAsOp);
+  }
+
+  bool equals(const ResolveTypeStructData& o) const {
+    return cls == o.cls && suppress == o.suppress &&
+           offset == o.offset && size == o.size && isOrAsOp == o.isOrAsOp;
+  }
+
+  size_t hash() const {
+    return (pointer_hash<Class>()(cls)
+            + std::hash<int32_t>()(offset.offset)
+            + std::hash<uint32_t>()(size))
+           ^ ((int64_t)(suppress ? -1 : 0) << 32 | (isOrAsOp ? -1 : 0));
+  }
+
+  const Class* cls;
+  bool suppress;
+  IRSPRelOffset offset;
+  uint32_t size;
+  bool isOrAsOp;
 };
 
 /*
@@ -142,7 +193,7 @@ struct ExtendsClassData : IRExtraData {
   explicit ExtendsClassData(const Class* cls, bool strictLikely = false)
       : cls(cls), strictLikely(strictLikely)
   {
-    assert(cls != nullptr);
+    assertx(cls != nullptr);
   }
 
   std::string show() const {
@@ -155,7 +206,7 @@ struct ExtendsClassData : IRExtraData {
   }
 
   size_t hash() const {
-    return pointer_hash<Class>()(cls);
+    return pointer_hash<Class>()(cls) ^ (strictLikely ? -1 : 0);
   }
 
   const Class* cls;
@@ -210,6 +261,21 @@ struct IfaceMethodData : IRExtraData {
 
   Slot vtableIdx;
   Slot methodIdx;
+};
+
+/*
+ * Func
+ */
+struct FuncData : IRExtraData {
+  explicit FuncData(const Func* f)
+    : func(f)
+  {}
+
+  std::string show() const {
+    return folly::format("{}", func->fullName()).str();
+  }
+
+  const Func* func;
 };
 
 /*
@@ -289,7 +355,7 @@ struct IterId : IRExtraData {
  * `keyId` set to -1u.
  */
 struct IterData : IRExtraData {
-  explicit IterData(uint32_t iter, uint32_t key, uint32_t val)
+  IterData(uint32_t iter, uint32_t key, uint32_t val)
     : iterId(iter)
     , keyId(key)
     , valId(val)
@@ -303,6 +369,15 @@ struct IterData : IRExtraData {
   uint32_t iterId;
   uint32_t keyId;
   uint32_t valId;
+};
+
+struct IterInitData : public IterData {
+  IterInitData(uint32_t iter, uint32_t key,
+               uint32_t val, bool stack)
+    : IterData{iter, key, val}
+    , fromStack{stack}
+  {}
+  bool fromStack;
 };
 
 /*
@@ -548,7 +623,7 @@ struct DefInlineFPData : IRExtraData {
   std::string show() const {
     return folly::to<std::string>(
       target->fullName()->data(), "(),",
-      retBCOff, ',',
+      callBCOff, ',',
       retSPOff.offset, ',',
       spOffset.offset
     );
@@ -556,74 +631,64 @@ struct DefInlineFPData : IRExtraData {
 
   const Func* target;
   SSATmp* ctx;  // Ctx, Cls or Nullptr.
-  Offset retBCOff;
+  Offset callBCOff;
   FPInvOffset retSPOff;
   IRSPRelOffset spOffset; // offset from caller SP to bottom of callee's ActRec
   uint32_t numNonDefault;
+  bool asyncEagerReturn;
 };
 
 struct SyncReturnBCData : IRExtraData {
-  SyncReturnBCData(Offset bcOff, IRSPRelOffset spOff)
-    : bcOffset(bcOff)
+  SyncReturnBCData(Offset callBCOff, IRSPRelOffset spOff)
+    : callBCOffset(callBCOff)
     , spOffset(spOff)
   {}
   std::string show() const {
-    return folly::to<std::string>(bcOffset, ",", spOffset.offset);
+    return folly::to<std::string>(callBCOffset, ",", spOffset.offset);
   }
 
-  Offset bcOffset;
+  Offset callBCOffset;
   IRSPRelOffset spOffset;
 };
 
-struct CallArrayData : IRExtraData {
-  explicit CallArrayData(IRSPRelOffset spOffset,
-                         uint32_t numParams,
-                         Offset pcOffset,
-                         Offset after,
-                         const Func* callee,
-                         bool writeLocals,
-                         bool readLocals)
+struct CallUnpackData : IRExtraData {
+  explicit CallUnpackData(IRSPRelOffset spOffset,
+                          uint32_t numParams,
+                          uint32_t numOut,
+                          Offset callOffset,
+                          const Func* callee)
     : spOffset(spOffset)
     , numParams(numParams)
-    , pc(pcOffset)
-    , after(after)
+    , numOut(numOut)
+    , callOffset(callOffset)
     , callee(callee)
-    , writeLocals(writeLocals)
-    , readLocals(readLocals)
-  {}
+  {
+    assertx(numParams > 0);
+  }
 
   std::string show() const {
     return folly::to<std::string>(
-      pc, ",",
-      after,
+      callOffset, ",",
       callee
         ? folly::sformat(",{}", callee->fullName())
-        : std::string{},
-      writeLocals ? ",writeLocals" : "",
-      readLocals ? ",readLocals" : "");
+        : std::string{});
   }
 
   IRSPRelOffset spOffset; // offset from StkPtr to bottom of call's ActRec+args
   uint32_t numParams;
-  Offset pc;     // XXX why isn't this available in the marker?
-  Offset after;  // offset from unit m_bc (unlike m_soff in ActRec)
+  uint32_t numOut;
+  Offset callOffset;  // offset from unit m_bc (unlike m_callOff in ActRec)
   const Func* callee; // nullptr if not statically known
-  bool writeLocals;
-  bool readLocals;
 };
 
 struct CallBuiltinData : IRExtraData {
   explicit CallBuiltinData(IRSPRelOffset spOffset,
                            const Func* callee,
                            int32_t numNonDefault,
-                           bool writeLocals,
-                           bool readLocals,
                            bool needsFrame)
     : spOffset(spOffset)
     , callee{callee}
     , numNonDefault{numNonDefault}
-    , writeLocals{writeLocals}
-    , readLocals{readLocals}
     , needsCallerFrame{needsFrame}
   {}
 
@@ -631,8 +696,6 @@ struct CallBuiltinData : IRExtraData {
     return folly::to<std::string>(
       spOffset.offset, ',',
       callee->fullName()->data(),
-      writeLocals ? ",writeLocals" : "",
-      readLocals ? ",readLocals" : "",
       needsCallerFrame ? ",needsCallerFrame" : ""
     );
   }
@@ -640,71 +703,64 @@ struct CallBuiltinData : IRExtraData {
   IRSPRelOffset spOffset; // offset from StkPtr to last passed arg
   const Func* callee;
   int32_t numNonDefault;
-  bool writeLocals;
-  bool readLocals;
   bool needsCallerFrame;
 };
 
 struct CallData : IRExtraData {
   explicit CallData(IRSPRelOffset spOffset,
                     uint32_t numParams,
-                    Offset after,
+                    uint32_t numOut,
+                    Offset callOffset,
                     const Func* callee,
-                    bool writeLocals,
-                    bool readLocals,
                     bool needsFrame,
-                    bool fcallAwait)
+                    bool asyncEagerReturn)
     : spOffset(spOffset)
     , numParams(numParams)
-    , after(after)
+    , numOut(numOut)
+    , callOffset(callOffset)
     , callee(callee)
-    , writeLocals(writeLocals)
-    , readLocals(readLocals)
     , needsCallerFrame(needsFrame)
-    , fcallAwait(fcallAwait)
+    , asyncEagerReturn(asyncEagerReturn)
   {}
 
   std::string show() const {
     return folly::to<std::string>(
-      spOffset.offset, ',', numParams, ',', after,
+      spOffset.offset, ',', numParams, ',', callOffset,
       callee
         ? folly::format(",{}", callee->fullName()).str()
         : std::string{},
-      writeLocals ? ",writeLocals" : "",
-      readLocals ? ",readLocals" : "",
       needsCallerFrame ? ",needsCallerFrame" : "",
-      fcallAwait ? ",fcallAwait" : ""
+      asyncEagerReturn ? ",asyncEagerReturn" : ""
     );
   }
 
   IRSPRelOffset spOffset; // offset from StkPtr to bottom of call's ActRec+args
   uint32_t numParams;
-  Offset after;        // m_soff style: offset from func->base()
+  uint32_t numOut;     // number of values returned via stack from the callee
+  Offset callOffset;   // m_callOff style: offset from func->base()
   const Func* callee;  // nullptr if not statically known
-  bool writeLocals;
-  bool readLocals;
   bool needsCallerFrame;
-  bool fcallAwait;
+  bool asyncEagerReturn;
 };
 
 struct RetCtrlData : IRExtraData {
-  explicit RetCtrlData(IRSPRelOffset spOffset, bool suspendingResumed,
+  explicit RetCtrlData(IRSPRelOffset offset, bool suspendingResumed,
                        folly::Optional<AuxUnion> aux = folly::none)
-    : spOffset(spOffset)
+    : offset(offset)
     , suspendingResumed(suspendingResumed)
     , aux(aux)
   {}
 
   std::string show() const {
     return folly::to<std::string>(
-      spOffset.offset,
+      offset.offset,
       suspendingResumed ? ",suspendingResumed" : ""
     );
   }
 
   // Adjustment we need to make to the stack pointer (for cross-tracelet ABI
   // purposes) before returning.
-  IRSPRelOffset spOffset;
+  IRSPRelOffset offset;
 
   // Indicates that the current resumable frame is being suspended without
   // decrefing locals.  Used by refcount optimizer.
@@ -765,33 +821,8 @@ struct ProfileSubClsCnsData : IRExtraData {
   rds::Handle handle;
 };
 
-/*
- * The name of a static local in a function.
- */
-struct StaticLocName : IRExtraData {
-  StaticLocName(const Func* func, const StringData* name)
-    : func(func)
-    , name(name)
-  {}
-
-  std::string show() const {
-    return folly::to<std::string>(
-      func->fullName()->data(), "$", name->data()
-    );
-  }
-
-  bool equals(const StaticLocName& o) const {
-    return func == o.func && name == o.name;
-  }
-  size_t hash() const {
-    return hash_int64_pair((intptr_t)func, (intptr_t)name);
-  }
-  const Func* func;
-  const StringData* name;
-};
-
-struct LdFuncCachedData : IRExtraData {
-  explicit LdFuncCachedData(const StringData* name)
+struct FuncNameData : IRExtraData {
+  explicit FuncNameData(const StringData* name)
     : name(name)
   {}
 
@@ -800,7 +831,7 @@ struct LdFuncCachedData : IRExtraData {
   }
 
   size_t hash() const { return name->hash(); }
-  bool equals(const LdFuncCachedData& o) const {
+  bool equals(const FuncNameData& o) const {
     return name == o.name;
   }
 
@@ -809,43 +840,17 @@ struct LdFuncCachedData : IRExtraData {
 
 struct LdObjMethodData : IRExtraData {
   explicit LdObjMethodData(IRSPRelOffset offset,
-                           const StringData* method,
-                           bool fatal)
+                           const StringData* method)
     : offset(offset)
     , method(method)
-    , fatal(fatal)
   {}
 
   std::string show() const {
-    return folly::to<std::string>(offset.offset, ',', method->data(), ',',
-      fatal ? "fatal" : "warn");
+    return folly::to<std::string>(offset.offset, ',', method->data());
   }
 
   IRSPRelOffset offset;
   const StringData* method;
-  bool fatal;
-};
-
-struct LdFuncCachedUData : IRExtraData {
-  explicit LdFuncCachedUData(const StringData* name,
-                             const StringData* fallback)
-    : name(name)
-    , fallback(fallback)
-  {}
-
-  std::string show() const {
-    return folly::to<std::string>(name->data(), ',', fallback->data());
-  }
-
-  size_t hash() const {
-    return hash_int64_pair((uint32_t)name->hash(), (uint32_t)fallback->hash());
-  }
-  bool equals(const LdFuncCachedUData& o) const {
-    return name == o.name && fallback == o.fallback;
-  }
-
-  const StringData* name;
-  const StringData* fallback;
 };
 
 /*
@@ -1055,6 +1060,34 @@ struct InitPackedArrayLoopData : IRExtraData {
   uint32_t size;
 };
 
+struct CreateAAWHData : IRExtraData {
+  explicit CreateAAWHData(uint32_t first, uint32_t count)
+    : first(first)
+    , count(count)
+  {}
+
+  std::string show() const {
+    return folly::format("{},{}", first, count).str();
+  }
+
+  uint32_t first;
+  uint32_t count;
+};
+
+struct CountWHNotDoneData : IRExtraData {
+  explicit CountWHNotDoneData(uint32_t first, uint32_t count)
+    : first(first)
+    , count(count)
+  {}
+
+  std::string show() const {
+    return folly::format("{},{}", first, count).str();
+  }
+
+  uint32_t first;
+  uint32_t count;
+};
+
 struct NewKeysetArrayData : IRExtraData {
   explicit NewKeysetArrayData(IRSPRelOffset offset, uint32_t size)
     : offset(offset)
@@ -1069,13 +1102,140 @@ struct NewKeysetArrayData : IRExtraData {
   uint32_t size;
 };
 
-struct MemoData : IRExtraData {
-  explicit MemoData(LocalRange locals)
-    : locals(locals) {}
+struct MemoValueStaticData : IRExtraData {
+  explicit MemoValueStaticData(const Func* func,
+                               folly::Optional<bool> asyncEager,
+                               bool loadAux)
+    : func{func}
+    , asyncEager{asyncEager}
+    , loadAux{loadAux} {}
+  std::string show() const {
+    return folly::sformat(
+      "{},{},{}",
+      func->fullName()->toCppString(),
+      asyncEager ? folly::to<std::string>(*asyncEager) : "-",
+      loadAux
+    );
+  }
+  const Func* func;
+  folly::Optional<bool> asyncEager;
+  bool loadAux;
+};
 
-  std::string show() const { return HPHP::show(locals); }
+struct MemoValueInstanceData : IRExtraData {
+  explicit MemoValueInstanceData(Slot slot,
+                                 const Func* func,
+                                 folly::Optional<bool> asyncEager,
+                                 bool loadAux)
+    : slot{slot}
+    , func{func}
+    , asyncEager{asyncEager}
+    , loadAux{loadAux} {}
+  std::string show() const {
+    return folly::sformat(
+      "{},{},{},{}",
+      slot,
+      func->fullName(),
+      asyncEager ? folly::to<std::string>(*asyncEager) : "-",
+      loadAux
+    );
+  }
+  Slot slot;
+  const Func* func;
+  folly::Optional<bool> asyncEager;
+  bool loadAux;
+};
 
-  LocalRange locals;
+struct MemoCacheStaticData : IRExtraData {
+  MemoCacheStaticData(const Func* func,
+                      LocalRange keys,
+                      const bool* types,
+                      folly::Optional<bool> asyncEager,
+                      bool loadAux)
+    : func{func}
+    , keys{keys}
+    , types{types}
+    , asyncEager{asyncEager}
+    , loadAux{loadAux} {}
+
+  MemoCacheStaticData* clone(Arena& arena) const {
+    auto p =
+      new (arena) MemoCacheStaticData(func, keys, types, asyncEager, loadAux);
+    auto tmp = new (arena) bool[keys.count];
+    std::copy(types, types + keys.count, tmp);
+    p->types = tmp;
+    return p;
+  }
+
+  std::string show() const {
+    auto ret = folly::sformat("{},{}", func->fullName(), HPHP::show(keys));
+    if (keys.count > 0) {
+      ret += ",<";
+      for (auto i = 0; i < keys.count; ++i) {
+        if (i > 0) ret += ",";
+        ret += folly::sformat("{}", types[i] ? "string" : "int");
+      }
+      ret += ">";
+    }
+    return ret;
+  }
+
+  const Func* func;
+  LocalRange keys;
+  const bool* types;
+  folly::Optional<bool> asyncEager;
+  bool loadAux;
+};
+
+struct MemoCacheInstanceData : IRExtraData {
+  MemoCacheInstanceData(Slot slot,
+                        LocalRange keys,
+                        const bool* types,
+                        const Func* func,
+                        bool shared,
+                        folly::Optional<bool> asyncEager,
+                        bool loadAux)
+    : slot{slot}
+    , keys{keys}
+    , types{types}
+    , func{func}
+    , shared{shared}
+    , asyncEager{asyncEager}
+    , loadAux{loadAux} {}
+
+  MemoCacheInstanceData* clone(Arena& arena) const {
+    auto p = new (arena) MemoCacheInstanceData(
+      slot, keys, types, func, shared, asyncEager, loadAux
+    );
+    auto tmp = new (arena) bool[keys.count];
+    std::copy(types, types + keys.count, tmp);
+    p->types = tmp;
+    return p;
+  }
+
+  std::string show() const {
+    return folly::sformat(
+      "{},{},{},<{}>,{}",
+      slot,
+      func->fullName(),
+      HPHP::show(keys),
+      [&]{
+        using namespace folly::gen;
+        return range<uint32_t>(0, keys.count)
+          | map([this] (uint32_t i) { return types[i] ? "string" : "int"; })
+          | unsplit<std::string>(",");
+      }(),
+      shared ? "shared" : "non-shared"
+    );
+  }
+
+  Slot slot;
+  LocalRange keys;
+  const bool* types;
+  const Func* func;
+  bool shared;
+  folly::Optional<bool> asyncEager;
+  bool loadAux;
 };
 
 struct MOpModeData : IRExtraData {
@@ -1122,20 +1282,20 @@ struct GeneratorState : IRExtraData {
 };
 
 struct ContEnterData : IRExtraData {
-  explicit ContEnterData(IRSPRelOffset spOffset, Offset returnBCOffset,
+  explicit ContEnterData(IRSPRelOffset spOffset, Offset callBCOffset,
                          bool isAsync)
     : spOffset(spOffset)
-    , returnBCOffset(returnBCOffset)
+    , callBCOffset(callBCOffset)
     , isAsync(isAsync)
   {}
 
   std::string show() const {
-    return folly::to<std::string>(spOffset.offset, ',', returnBCOffset,
+    return folly::to<std::string>(spOffset.offset, ',', callBCOffset,
                                   isAsync ? ",async" : "");
   }
 
   IRSPRelOffset spOffset;
-  Offset returnBCOffset;
+  Offset callBCOffset;
   bool isAsync;
 };
 
@@ -1213,13 +1373,15 @@ struct LookupClsMethodData : IRExtraData {
 };
 
 
-struct ProfileMethodData : IRExtraData {
-  ProfileMethodData(IRSPRelOffset bcSPOff, rds::Handle handle)
+struct ProfileCallTargetData : IRExtraData {
+  ProfileCallTargetData(IRSPRelOffset bcSPOff, rds::Handle handle)
     : bcSPOff(bcSPOff)
     , handle(handle)
   {}
 
-  std::string show() const { return folly::to<std::string>(handle); }
+  std::string show() const {
+    return folly::to<std::string>(bcSPOff.offset, ",", handle);
+  }
 
   IRSPRelOffset bcSPOff;
   rds::Handle handle;
@@ -1240,6 +1402,99 @@ struct FuncGuardData : IRExtraData {
   const Func* func;
   TCA* prologueAddrPtr;
 };
+
+struct BeginInliningData : IRExtraData {
+  BeginInliningData(IRSPRelOffset offset, const Func* func, int cost)
+    : offset(offset)
+    , func(func)
+    , cost(cost)
+  {}
+
+  std::string show() const {
+    return folly::to<std::string>("IRSPOff ", offset.offset,
+                                  " FUNC ", func->fullName()->data());
+  }
+
+  IRSPRelOffset offset;
+  const Func* func;
+  int cost;
+};
+
+struct ParamData : IRExtraData {
+  explicit ParamData(int32_t paramId) : paramId(paramId) {}
+
+  std::string show() const {
+    return folly::to<std::string>(paramId);
+  }
+
+  int32_t paramId;
+};
+
+struct RaiseHackArrNoticeData : IRExtraData {
+  explicit RaiseHackArrNoticeData(AnnotType type)
+    : type{type} {}
+
+  std::string show() const {
+    if (type == AnnotType::VArray) return "varray";
+    if (type == AnnotType::DArray) return "darray";
+    if (type == AnnotType::VArrOrDArr) return "varray_or_darray";
+    return "array";
+  }
+
+  AnnotType type;
+};
+
+struct RaiseHackArrParamNoticeData : RaiseHackArrNoticeData {
+  RaiseHackArrParamNoticeData(AnnotType type, int32_t id, bool isReturn)
+    : RaiseHackArrNoticeData{type}
+    , id{id}
+    , isReturn{isReturn} {}
+
+  std::string show() const {
+    auto const typeStr = RaiseHackArrNoticeData::show();
+    return folly::to<std::string>(
+      typeStr, ",",
+      id, ",",
+      isReturn ? "true" : "false"
+    );
+  }
+
+  int32_t id;
+  bool isReturn;
+};
+
+struct RaiseArrayIndexNoticeData : IRExtraData {
+  explicit RaiseArrayIndexNoticeData(bool isInOut) : isInOut(isInOut) {}
+
+  std::string show() const {
+    if (isInOut) return "inout";
+    return "none";
+  }
+
+  bool isInOut;
+};
+
+struct RaiseArrayKeyNoticeData : IRExtraData {
+  explicit RaiseArrayKeyNoticeData(bool isInOut) : isInOut(isInOut) {}
+
+  std::string show() const {
+    if (isInOut) return "inout";
+    return "none";
+  }
+
+  bool isInOut;
+};
+
+struct AssertReason : IRExtraData {
+  explicit AssertReason(Reason r) : reason{r.file, r.line} {}
+
+  std::string show() const {
+    return jit::show(reason);
+  }
+
+  Reason reason;
+};
+#define ASSERT_REASON AssertReason{Reason{__FILE__, __LINE__}}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -1263,45 +1518,35 @@ X(LdLocPseudoMain,              LocalId);
 X(StLoc,                        LocalId);
 X(StLocPseudoMain,              LocalId);
 X(StLocRange,                   LocalIdRange);
-X(LdClsRef,                     ClsRefSlotData);
-X(StClsRef,                     ClsRefSlotData);
-X(KillClsRef,                   ClsRefSlotData);
+X(LdClsRefCls,                  ClsRefSlotData);
+X(LdClsRefTS,                   ClsRefSlotData);
+X(StClsRefCls,                  ClsRefSlotData);
+X(StClsRefTS,                   ClsRefSlotData);
+X(KillClsRefCls,                ClsRefSlotData);
+X(KillClsRefTS,                 ClsRefSlotData);
 X(IterFree,                     IterId);
-X(MIterFree,                    IterId);
-X(DecodeCufIter,                IterId);
-X(StCufIterFunc,                IterId);
-X(StCufIterCtx,                 IterId);
-X(StCufIterInvName,             IterId);
-X(LdCufIterFunc,                IterId);
-X(LdCufIterCtx,                 IterId);
-X(LdCufIterInvName,             IterId);
-X(KillCufIter,                  IterId);
-X(IterInit,                     IterData);
-X(IterInitK,                    IterData);
+X(IterInit,                     IterInitData);
+X(IterInitK,                    IterInitData);
 X(IterNext,                     IterData);
 X(IterNextK,                    IterData);
-X(WIterInit,                    IterData);
-X(WIterInitK,                   IterData);
-X(WIterNext,                    IterData);
-X(WIterNextK,                   IterData);
-X(MIterInit,                    IterData);
-X(MIterInitK,                   IterData);
-X(MIterNext,                    IterData);
-X(MIterNextK,                   IterData);
+X(LIterInit,                    IterInitData);
+X(LIterInitK,                   IterInitData);
+X(LIterNext,                    IterData);
+X(LIterNextK,                   IterData);
 X(ConstructInstance,            ClassData);
-X(CheckInitProps,               ClassData);
 X(InitProps,                    ClassData);
-X(CheckInitSProps,              ClassData);
 X(InitSProps,                   ClassData);
 X(NewInstanceRaw,               ClassData);
 X(InitObjProps,                 ClassData);
+X(InitObjMemoSlots,             ClassData);
 X(InstanceOfIfaceVtable,        ClassData);
+X(ResolveTypeStruct,            ResolveTypeStructData);
 X(ExtendsClass,                 ExtendsClassData);
 X(SpillFrame,                   ActRecInfo);
 X(CheckStk,                     IRSPRelOffsetData);
 X(HintStkInner,                 IRSPRelOffsetData);
 X(StStk,                        IRSPRelOffsetData);
-X(CastStk,                      IRSPRelOffsetData);
+X(StOutValue,                   IndexData);
 X(CoerceStk,                    CoerceStkData);
 X(CoerceMem,                    CoerceMemData);
 X(CoerceCellToInt,              FuncArgData);
@@ -1314,9 +1559,10 @@ X(DefSP,                        FPInvOffsetData);
 X(LdStk,                        IRSPRelOffsetData);
 X(LdStkAddr,                    IRSPRelOffsetData);
 X(DefInlineFP,                  DefInlineFPData);
-X(BeginInlining,                IRSPRelOffsetData);
+X(BeginInlining,                BeginInliningData);
 X(SyncReturnBC,                 SyncReturnBCData);
 X(InlineReturn,                 FPRelOffsetData);
+X(InlineSuspend,                FPRelOffsetData);
 X(InlineReturnNoFrame,          FPRelOffsetData);
 X(ReqRetranslate,               ReqRetranslateData);
 X(ReqBindJmp,                   ReqBindJmpData);
@@ -1325,14 +1571,12 @@ X(CheckCold,                    TransIDData);
 X(IncProfCounter,               TransIDData);
 X(Call,                         CallData);
 X(CallBuiltin,                  CallBuiltinData);
-X(CallArray,                    CallArrayData);
+X(CallUnpack,                   CallUnpackData);
 X(RetCtrl,                      RetCtrlData);
-X(AsyncRetCtrl,                 RetCtrlData);
-X(AsyncRetFast,                 RetCtrlData);
-X(AsyncSwitchFast,              RetCtrlData);
+X(AsyncFuncRet,                 IRSPRelOffsetData);
+X(AsyncFuncRetSlow,             IRSPRelOffsetData);
+X(AsyncSwitchFast,              IRSPRelOffsetData);
 X(LdArrFuncCtx,                 IRSPRelOffsetData);
-X(LdArrFPushCuf,                IRSPRelOffsetData);
-X(LdStrFPushCuf,                IRSPRelOffsetData);
 X(LdFunc,                       IRSPRelOffsetData);
 X(LookupClsMethod,              LookupClsMethodData);
 X(LookupClsMethodCache,         ClsMethodData);
@@ -1341,20 +1585,23 @@ X(LdClsMethodCacheCls,          ClsMethodData);
 X(LdClsMethodFCacheFunc,        ClsMethodData);
 X(LookupClsMethodFCache,        ClsMethodData);
 X(LdIfaceMethod,                IfaceMethodData);
-X(LdClosureStaticLoc,           StaticLocName);
-X(LdStaticLoc,                  StaticLocName);
-X(CheckStaticLoc,               StaticLocName);
-X(InitStaticLoc,                StaticLocName);
 X(LdClsCns,                     ClsCnsName);
 X(InitClsCns,                   ClsCnsName);
 X(LdSubClsCns,                  LdSubClsCnsData);
 X(CheckSubClsCns,               LdSubClsCnsData);
 X(ProfileSubClsCns,             ProfileSubClsCnsData);
-X(LdFuncCached,                 LdFuncCachedData);
-X(LdFuncCachedSafe,             LdFuncCachedData);
-X(LdFuncCachedU,                LdFuncCachedUData);
+X(LdFuncCached,                 FuncNameData);
+X(LookupFuncCached,             FuncNameData);
 X(LdObjMethod,                  LdObjMethodData);
 X(RaiseMissingArg,              FuncArgData);
+X(RaiseTooManyArg,              FuncArgData);
+X(RaiseParamRefMismatchForFunc, ParamData);
+X(RaiseArrayIndexNotice,        RaiseArrayIndexNoticeData);
+X(RaiseArrayKeyNotice,          RaiseArrayKeyNoticeData);
+X(CheckClsReifiedGenericMismatch,
+                                ClassData);
+X(CheckFunReifiedGenericMismatch,
+                                FuncData);
 X(InterpOne,                    InterpOneData);
 X(InterpOneCF,                  InterpOneData);
 X(StClosureArg,                 ByteOffsetData);
@@ -1362,11 +1609,17 @@ X(RBTraceEntry,                 RBEntryData);
 X(RBTraceMsg,                   RBMsgData);
 X(OODeclExists,                 ClassKindData);
 X(NewStructArray,               NewStructData);
+X(NewStructDArray,              NewStructData);
+X(NewStructDict,                NewStructData);
+X(NewRecord,                    NewStructData);
 X(AllocPackedArray,             PackedArrayData);
+X(AllocVArray,                  PackedArrayData);
 X(AllocVecArray,                PackedArrayData);
 X(NewKeysetArray,               NewKeysetArrayData);
 X(InitPackedLayoutArrayLoop,    InitPackedArrayLoopData);
 X(InitPackedLayoutArray,        IndexData);
+X(CreateAAWH,                   CreateAAWHData);
+X(CountWHNotDone,               CountWHNotDoneData);
 X(CheckMixedArrayOffset,        IndexData);
 X(CheckDictOffset,              IndexData);
 X(CheckKeysetOffset,            IndexData);
@@ -1381,29 +1634,49 @@ X(ProfileMixedArrayOffset,      RDSHandleData);
 X(ProfileDictOffset,            RDSHandleData);
 X(ProfileKeysetOffset,          RDSHandleData);
 X(ProfileType,                  RDSHandleData);
-X(ProfileMethod,                ProfileMethodData);
+X(ProfileFunc,                  ProfileCallTargetData);
+X(ProfileMethod,                ProfileCallTargetData);
 X(LdRDSAddr,                    RDSHandleData);
+X(CheckRDSInitialized,          RDSHandleData);
+X(MarkRDSInitialized,           RDSHandleData);
+X(LdInitRDSAddr,                RDSHandleData);
 X(BaseG,                        MOpModeData);
 X(PropX,                        MOpModeData);
 X(PropDX,                       MOpModeData);
 X(ElemX,                        MOpModeData);
 X(ElemDX,                       MOpModeData);
 X(ElemUX,                       MOpModeData);
+X(ElemArrayX,                   MOpModeData);
+X(ElemDictX,                    MOpModeData);
+X(ElemKeysetX,                  MOpModeData);
 X(CGetProp,                     MOpModeData);
 X(CGetElem,                     MOpModeData);
-X(MemoGet,                      MemoData);
-X(MemoSet,                      MemoData);
+X(ArrayGet,                     MOpModeData);
+X(MemoGetStaticValue,           MemoValueStaticData);
+X(MemoSetStaticValue,           MemoValueStaticData);
+X(MemoGetStaticCache,           MemoCacheStaticData);
+X(MemoSetStaticCache,           MemoCacheStaticData);
+X(MemoGetLSBValue,              MemoValueStaticData);
+X(MemoSetLSBValue,              MemoValueStaticData);
+X(MemoGetLSBCache,              MemoCacheStaticData);
+X(MemoSetLSBCache,              MemoCacheStaticData);
+X(MemoGetInstanceValue,         MemoValueInstanceData);
+X(MemoSetInstanceValue,         MemoValueInstanceData);
+X(MemoGetInstanceCache,         MemoCacheInstanceData);
+X(MemoSetInstanceCache,         MemoCacheInstanceData);
 X(SetOpProp,                    SetOpData);
 X(SetOpCell,                    SetOpData);
+X(SetOpCellVerify,              SetOpData);
 X(IncDecProp,                   IncDecData);
 X(SetOpElem,                    SetOpData);
 X(IncDecElem,                   IncDecData);
-X(StAsyncArResume,              ResumeOffset);
-X(StContArResume,               ResumeOffset);
+X(StArResumeAddr,               ResumeOffset);
 X(StContArState,                GeneratorState);
 X(ContEnter,                    ContEnterData);
 X(DbgAssertARFunc,              IRSPRelOffsetData);
+X(AssertARFunc,                 IRSPRelOffsetData);
 X(LdARFuncPtr,                  IRSPRelOffsetData);
+X(LdARIsDynamic,                IRSPRelOffsetData);
 X(LdARCtx,                      IRSPRelOffsetData);
 X(EndCatch,                     IRSPRelOffsetData);
 X(EagerSyncVMRegs,              IRSPRelOffsetData);
@@ -1412,6 +1685,7 @@ X(DbgTrashStk,                  IRSPRelOffsetData);
 X(DbgTrashFrame,                IRSPRelOffsetData);
 X(DbgTraceCall,                 IRSPRelOffsetData);
 X(LdPropAddr,                   ByteOffsetData);
+X(LdInitPropAddr,               ByteOffsetData);
 X(NewCol,                       NewColData);
 X(NewColFromArray,              NewColData);
 X(InitExtraArgs,                FuncEntryData);
@@ -1423,9 +1697,20 @@ X(ContValid,                    IsAsyncData);
 X(LdContResumeAddr,             IsAsyncData);
 X(LdContActRec,                 IsAsyncData);
 X(DecRef,                       DecRefData);
+X(DecRefNZ,                     DecRefData);
 X(LdTVAux,                      LdTVAuxData);
 X(CheckRefs,                    CheckRefsData);
 X(FuncGuard,                    FuncGuardData);
+X(RaiseHackArrParamNotice,      RaiseHackArrParamNoticeData);
+X(RaiseHackArrPropNotice,       RaiseHackArrNoticeData);
+X(DbgAssertRefCount,            AssertReason);
+X(Unreachable,                  AssertReason);
+X(EndBlock,                     AssertReason);
+X(VerifyRetCallable,            ParamData);
+X(VerifyRetCls,                 ParamData);
+X(VerifyRetFail,                ParamData);
+X(VerifyRetFailHard,            ParamData);
+X(VerifyReifiedLocalType,       ParamData);
 
 #undef X
 

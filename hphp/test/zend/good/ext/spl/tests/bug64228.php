@@ -10,6 +10,5 @@ foreach ($i as $key => $value) {
 
 @rmdir($empty_dir);
 
-sort($dirs);
+sort(&$dirs);
 print_r($dirs);
-?>

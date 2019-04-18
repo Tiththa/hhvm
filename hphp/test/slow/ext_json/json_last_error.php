@@ -1,6 +1,10 @@
 <?php
+
+
 // A valid json string
-$json[] = '{"Organization": "PHP Documentation Team"}';
+<<__EntryPoint>>
+function main_json_last_error() {
+$json = ['{"Organization": "PHP Documentation Team"}'];
 
 // An invalid json string which will cause an syntax
 // error, in this case we used ' instead of " for quotation
@@ -18,4 +22,4 @@ foreach ($json as $string) {
     echo json_last_error_msg();
     echo "\n";
 }
-
+}

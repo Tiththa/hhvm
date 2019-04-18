@@ -4,10 +4,10 @@
 int(657930)
 
 --float -10.5--
-int(657910)
+int(658166)
 
 --float 10.1234567e10--
-bool(false)
+int(658008)
 
 --float 10.7654321E-10--
 int(657920)
@@ -18,22 +18,18 @@ int(657920)
 --empty array--
 
 Warning: %s
-NULL
 
 --int indexed array--
 
 Warning: %s
-NULL
 
 --associative array--
 
 Warning: %s
-NULL
 
 --nested arrays--
 
 Warning: %s
-NULL
 
 --uppercase NULL--
 int(657920)
@@ -56,42 +52,34 @@ int(657920)
 --empty string DQ--
 
 Warning: %s
-NULL
 
 --empty string SQ--
 
 Warning: %s
-NULL
 
 --string DQ--
 
 Warning: %s
-NULL
 
 --string SQ--
 
 Warning: %s
-NULL
 
 --mixed case string--
 
 Warning: %s
-NULL
 
 --heredoc--
 
 Warning: %s
-NULL
 
 --instance of classWithToString--
 
 Warning: %s
-NULL
 
 --instance of classWithoutToString--
 
 Warning: %s
-NULL
 
 --undefined var--
 int(657920)
@@ -102,5 +90,4 @@ int(657920)
 --file resource--
 
 Warning: %s
-NULL
 ===DONE===

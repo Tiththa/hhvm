@@ -2,13 +2,12 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 
 type t = {
   chunks: Chunk.t list;
@@ -29,25 +28,38 @@ let get_rule_kind t id =
   r.Rule.kind
 
 let get_char_range t =
-  t.chunks |> List.fold ~init:(max_int,0)
+  t.chunks |> List.fold ~init:(Int.max_value,0)
     ~f:(fun (start_char, end_char) chunk ->
-      min start_char chunk.Chunk.start_char,
-      max end_char chunk.Chunk.end_char
+      let chunk_start, chunk_end = Chunk.get_range chunk in
+      min start_char chunk_start,
+      max end_char chunk_end
     )
 
-let constrain_rules t rbm rule_list =
-  let aux rule_id = Rule.cares_about_children (get_rule_kind t rule_id) in
-  let rules_that_care = List.filter rule_list ~f:aux in
-  List.fold rules_that_care ~init:rbm ~f:(fun acc k -> IMap.add k true acc)
+let propagate_breakage t initial_bindings =
+  initial_bindings
+  |> IMap.filter (fun _ is_broken -> is_broken)
+  |> IMap.keys
+  |> List.fold ~init:initial_bindings ~f:begin fun acc rule_id ->
+    let dependencies =
+      try IMap.find_unsafe rule_id t.rule_dependency_map
+      with Caml.Not_found -> []
+    in
+    dependencies
+    |> List.filter ~f:(fun id -> Rule.cares_about_children (get_rule_kind t id))
+    |> List.fold ~init:acc ~f:(fun acc id -> IMap.add id true acc)
+  end
+
+let get_always_rules t =
+  t.rule_map
+  |> IMap.filter (fun _ v -> v.Rule.kind = Rule.Always)
+  |> IMap.keys
+
+let get_always_rule_bindings t =
+  get_always_rules t
+  |> List.fold ~init:IMap.empty ~f:(fun acc id -> IMap.add id true acc)
 
 let get_initial_rule_bindings t =
-  let is_always_rule _k v = v.Rule.kind = Rule.Always in
-  let always_rules = IMap.filter is_always_rule t.rule_map in
-  let get_dependencies rule_id =
-    try IMap.find_unsafe rule_id t.rule_dependency_map with Not_found -> [] in
-  let constrain k _v acc = constrain_rules t acc (get_dependencies k) in
-  let init_map = IMap.map (fun k -> true) always_rules in
-  IMap.fold constrain always_rules init_map
+  propagate_breakage t (get_always_rule_bindings t)
 
 (* When a child rule is broken on, all its parent rules must break too. *)
 let is_dependency_satisfied parent_kind parent_val child_val =
@@ -64,7 +76,7 @@ let is_dependency_satisfied parent_kind parent_val child_val =
 let are_rule_bindings_valid t rbm =
   let valid_map = IMap.mapi (fun rule_id v ->
     let parent_list = try IMap.find_unsafe rule_id t.rule_dependency_map
-      with Not_found -> []
+      with Caml.Not_found -> []
     in
     List.for_all parent_list ~f:(fun parent_id ->
       let parent_rule = IMap.find_unsafe parent_id t.rule_map in
@@ -78,6 +90,6 @@ let dependency_map_to_string t =
   let get_map_values map = List.map ~f:snd @@ IMap.bindings @@ map in
   let str_list = get_map_values @@ IMap.mapi (fun k v_list ->
     let values = List.map v_list ~f:string_of_int in
-    string_of_int k ^ ": [" ^ String.concat ", " values ^ "]"
+    string_of_int k ^ ": [" ^ String.concat ~sep:", " values ^ "]"
   ) t.rule_dependency_map in
-  "{" ^ String.concat ", " str_list ^ "}"
+  "{" ^ String.concat ~sep:", " str_list ^ "}"

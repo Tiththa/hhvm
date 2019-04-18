@@ -4,35 +4,13 @@ class base1 {
 }
 class base2 {
 }
+
+<<__EntryPoint>>
+function main_1462() {
 if (true) {
-  class a extends base1 {
-    const aconst = "firstA";
-    const a1const = 0;
-    static $astat = 1;
-    static $a1stat = 1;
-    function __construct() {
- echo "first def made
-";
- }
-    static function foo() {
- return 1;
-}
-  }
-}
- else {
-  class a extends base2 {
-    const aconst = "secondA";
-    const a2const = 0;
-    static $astat = 2;
-    static $a2stat = 2;
-    function __construct() {
- echo "second def made
-";
- }
-    static function foo() {
- return 2;
-}
-  }
+  include '1462-1.inc';
+} else {
+  include '1462-2.inc';
 }
 $foo = "foo";
 $y = new a;
@@ -52,3 +30,4 @@ var_dump(get_parent_class($y));
 var_dump(is_subclass_of("a", "base1"));
 var_dump(is_subclass_of("a", "base2"));
 var_dump(get_object_vars($y));
+}

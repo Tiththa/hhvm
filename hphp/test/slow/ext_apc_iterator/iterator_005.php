@@ -15,10 +15,8 @@ foreach($it as $key=>$value) {
 foreach($it2 as $key=>$value) {
   $vals2[$key] = $value['key'];
 }
-ksort($vals2);
+ksort(&$vals2);
 var_dump($vals);
 var_dump($vals2);
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";

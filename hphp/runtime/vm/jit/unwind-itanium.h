@@ -67,13 +67,13 @@ struct UnwindRDS {
     void* originalRip;
   };
   TYPE_SCAN_IGNORE_FIELD(originalRip);
-  Offset debuggerReturnOff;
+  Offset debuggerCallOff;
 
   /* This will be true iff the currently executing catch trace should side exit
    * to somewhere else in the TC, rather than resuming the unwind process. */
   bool doSideExit;
 };
-extern rds::Link<UnwindRDS, true /* normal_only */> g_unwind_rds;
+extern rds::Link<UnwindRDS, rds::Mode::Normal> g_unwind_rds;
 
 #define IMPLEMENT_OFF(Name, member)                             \
   inline ptrdiff_t unwinder##Name##Off() {                      \
@@ -82,7 +82,7 @@ extern rds::Link<UnwindRDS, true /* normal_only */> g_unwind_rds;
 IMPLEMENT_OFF(Exn, exn)
 IMPLEMENT_OFF(TV, tv)
 IMPLEMENT_OFF(SideExit, doSideExit)
-IMPLEMENT_OFF(DebuggerReturnOff, debuggerReturnOff)
+IMPLEMENT_OFF(DebuggerCallOff, debuggerCallOff)
 IMPLEMENT_OFF(DebuggerReturnSP, debuggerReturnSP)
 IMPLEMENT_OFF(OriginalRip, originalRip)
 #undef IMPLEMENT_OFF

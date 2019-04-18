@@ -18,8 +18,9 @@
 #define incl_HPHP_TYPED_VALUE_H_
 
 #include "hphp/runtime/base/datatype.h"
-
+#include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/util/type-scan.h"
+#include "hphp/util/type-traits.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +37,10 @@ struct ObjectData;
 struct RefData;
 struct ResourceHdr;
 struct StringData;
+struct MemoCacheBase;
+struct Func;
+struct Class;
+struct RecordData;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -49,11 +54,16 @@ union Value {
   int64_t       num;    // KindOfInt64, KindOfBool (must be zero-extended)
   double        dbl;    // KindOfDouble
   StringData*   pstr;   // KindOfString, KindOfPersistentString
-  ArrayData*    parr;   // KindOfArray, KindOfVec, KindOfDict, KindOfKeyset
+  ArrayData*    parr;   // KindOfArray, KindOfVec, KindOfDict, KindOfShape, KindOfKeyset
   ObjectData*   pobj;   // KindOfObject
   ResourceHdr*  pres;   // KindOfResource
   RefData*      pref;   // KindOfRef
   MaybeCountable* pcnt; // for alias-safe generic refcounting operations
+  MemoCacheBase* pcache; // Not valid except when in a MemoSlot
+  const Func*   pfunc;  // KindOfFunc
+  Class*        pclass; // KindOfClass
+  ClsMethDataRef pclsmeth; // KindOfClsMeth
+  RecordData*   prec;   // KindOfRecord
 };
 
 enum VarNrFlag { NR_FLAG = 1 << 29 };
@@ -71,8 +81,10 @@ struct ConstModifiers {
 union AuxUnion {
   // Undiscriminated raw value.
   uint32_t u_raw;
-  // True if we're suspending an FCallAwait.
-  uint32_t u_fcallAwaitFlag;
+  // Valid only if the async eager return optimization was requested.
+  // True if the function returned an Awaitable. The Awaitable may be
+  // already finished, as interpreter's RetC always boxes the result.
+  uint32_t u_asyncNonEagerReturnFlag;
   // Key type and hash for MixedArray.
   int32_t u_hash;
   // Magic number for asserts in VarNR.
@@ -85,6 +97,8 @@ union AuxUnion {
   ConstModifiers u_constModifiers;
   // Used by InvokeResult.
   bool u_ok;
+  // Used by system constants
+  bool u_dynamic;
 };
 
 /*
@@ -140,6 +154,9 @@ struct TypedValueAux : TypedValue {
   ConstModifiers& constModifiers() {
     return m_aux.u_constModifiers;
   }
+
+  const bool& dynamic() const { return m_aux.u_dynamic; }
+        bool& dynamic()       { return m_aux.u_dynamic; }
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -170,11 +187,73 @@ using TypedNum = TypedValue;
 
 /*
  * Assertions on Cells and TypedValues.  Should usually only happen inside an
- * assert().
+ * assertx().
  */
 bool tvIsPlausible(TypedValue);
 bool cellIsPlausible(Cell);
 bool refIsPlausible(Ref);
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * TV-lval "concept"-like trait.
+ *
+ * This enables us to take functions that logically operate on a TypedValue&
+ * and parametrize them over any opaque mutable reference to a DataType tag and
+ * a Value data element.  This decouples the representation of a TypedValue
+ * from its actual memory layout.
+ *
+ * See tv-mutate.h for usage examples.
+ */
+template<typename T, typename Ret = void>
+using enable_if_lval_t = typename std::enable_if<
+  conjunction<
+    std::is_same<
+      ident_t<decltype((type(std::declval<T>())))>,
+      DataType&
+    >,
+    std::is_same<
+      ident_t<decltype((val(std::declval<T>())))>,
+      Value&
+    >,
+    std::is_same<
+      ident_t<decltype((as_tv(std::declval<T>())))>,
+      TypedValue
+    >
+  >::value,
+  Ret
+>::type;
+
+template<typename T, typename Ret = void>
+using enable_if_tv_val_t = typename std::enable_if<
+  conjunction<
+    std::is_convertible<
+      ident_t<decltype((type(std::declval<T>())))>,
+      DataType
+    >,
+    std::is_convertible<
+      ident_t<decltype((val(std::declval<T>())))>,
+      Value
+    >,
+    std::is_convertible<
+      ident_t<decltype((as_tv(std::declval<T>())))>,
+      TypedValue
+    >
+  >::value,
+  Ret
+>::type;
+
+/*
+ * TV-lval API for TypedValue.
+ */
+ALWAYS_INLINE DataType& type(TypedValue& tv) { return tv.m_type; }
+ALWAYS_INLINE Value& val(TypedValue& tv) { return tv.m_data; }
+ALWAYS_INLINE TypedValue as_tv(TypedValue& tv) { return tv; }
+ALWAYS_INLINE DataType& type(TypedValue* tv) { return tv->m_type; }
+ALWAYS_INLINE Value& val(TypedValue* tv) { return tv->m_data; }
+ALWAYS_INLINE const DataType& type(const TypedValue* tv) { return tv->m_type; }
+ALWAYS_INLINE const Value& val(const TypedValue* tv) { return tv->m_data; }
+ALWAYS_INLINE TypedValue as_tv(const TypedValue* tv) { return *tv; }
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -188,6 +267,8 @@ X(KindOfNull,         void);
 X(KindOfBoolean,      bool);
 X(KindOfInt64,        int64_t);
 X(KindOfDouble,       double);
+X(KindOfShape,        ArrayData*);
+X(KindOfPersistentShape,  const ArrayData*);
 X(KindOfArray,        ArrayData*);
 X(KindOfPersistentArray,  const ArrayData*);
 X(KindOfVec,          ArrayData*);
@@ -201,6 +282,10 @@ X(KindOfResource,     ResourceHdr*);
 X(KindOfRef,          RefData*);
 X(KindOfString,       StringData*);
 X(KindOfPersistentString, const StringData*);
+X(KindOfFunc,         Func*);
+X(KindOfClass,        Class*);
+X(KindOfClsMeth,      ClsMethDataRef);
+X(KindOfRecord,       RecordData*);
 
 #undef X
 
@@ -225,6 +310,12 @@ typename std::enable_if<
 
 inline Value make_value(double d) { Value v; v.dbl = d; return v; }
 
+inline Value make_value(ClsMethDataRef clsMeth) {
+  Value v;
+  v.pclsmeth = clsMeth;
+  return v;
+}
+
 /*
  * Pack a base data element into a TypedValue for use elsewhere in the runtime.
  *
@@ -238,7 +329,7 @@ typename std::enable_if<
   TypedValue ret;
   ret.m_data = make_value(val);
   ret.m_type = DType;
-  assert(tvIsPlausible(ret));
+  assertx(tvIsPlausible(ret));
   return ret;
 }
 
@@ -249,7 +340,7 @@ typename std::enable_if<
 >::type make_tv() {
   TypedValue ret;
   ret.m_type = DType;
-  assert(tvIsPlausible(ret));
+  assertx(tvIsPlausible(ret));
   return ret;
 }
 
@@ -258,40 +349,39 @@ typename std::enable_if<
  *
  * int64_t val = unpack_tv<KindOfInt64>(tv);
  */
-template <DataType DType>
+template <DataType DType, typename T>
 typename std::enable_if<
   std::is_same<typename DataTypeCPPType<DType>::type,double>::value,
-  double
->::type unpack_tv(TypedValue *tv) {
-  assert(DType == tv->m_type);
-  assert(tvIsPlausible(*tv));
-  return tv->m_data.dbl;
+  enable_if_lval_t<T, double>
+>::type unpack_tv(T tv) {
+  assertx(DType == type(tv));
+  return val(tv).dbl;
 }
 
-template <DataType DType>
+template <DataType DType, typename T>
 typename std::enable_if<
   std::is_integral<typename DataTypeCPPType<DType>::type>::value,
-  typename DataTypeCPPType<DType>::type
->::type unpack_tv(TypedValue *tv) {
-  assert(DType == tv->m_type);
-  assert(tvIsPlausible(*tv));
-  return tv->m_data.num;
+  enable_if_lval_t<T, typename DataTypeCPPType<DType>::type>
+>::type unpack_tv(T tv) {
+  assertx(DType == type(tv));
+  assertx(tvIsPlausible(*tv));
+  return val(tv).num;
 }
 
-template <DataType DType>
+template <DataType DType, typename T>
 typename std::enable_if<
   std::is_pointer<typename DataTypeCPPType<DType>::type>::value,
-  typename DataTypeCPPType<DType>::type
->::type unpack_tv(TypedValue *tv) {
-  assert((DType == tv->m_type) ||
-         (isStringType(DType) && isStringType(tv->m_type)) ||
-         (isArrayType(DType) && isArrayType(tv->m_type)) ||
-         (isVecType(DType) && isVecType(tv->m_type)) ||
-         (isDictType(DType) && isDictType(tv->m_type)) ||
-         (isKeysetType(DType) && isKeysetType(tv->m_type)));
-  assert(tvIsPlausible(*tv));
+  enable_if_lval_t<T, typename DataTypeCPPType<DType>::type>
+>::type unpack_tv(T tv) {
+  assertx((DType == type(tv)) ||
+         (isStringType(DType) && isStringType(type(tv))) ||
+         (isArrayType(DType) && isArrayType(type(tv))) ||
+         (isVecType(DType) && isVecType(type(tv))) ||
+         (isDictType(DType) && isDictType(type(tv))) ||
+         (isKeysetType(DType) && isKeysetType(type(tv))));
+  assertx(tvIsPlausible(*tv));
   return reinterpret_cast<typename DataTypeCPPType<DType>::type>
-           (tv->m_data.pstr);
+           (val(tv).pstr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

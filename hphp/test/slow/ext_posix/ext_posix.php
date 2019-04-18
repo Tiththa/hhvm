@@ -7,9 +7,12 @@ function VS($x, $y) {
 }
 function VERIFY($x) { VS($x != false, true); }
 
+
 //////////////////////////////////////////////////////////////////////
 
 
+<<__EntryPoint>>
+function main_ext_posix() {
 VERIFY(posix_access(__DIR__."/ext_posix.php"));
 
 VERIFY(strlen(posix_ctermid()));
@@ -42,7 +45,7 @@ $ret = posix_getpwnam("root");
 VERIFY($ret != false);
 VERIFY(count((array)$ret) != 0);
 VS(posix_getpwnam(""), false);
-VS(posix_getpwnam(-1), false);
+VS(posix_getpwnam('-1'), false);
 
 $ret = posix_getpwuid(0);
 VERIFY($ret != false);
@@ -71,3 +74,4 @@ VERIFY(count((array)$ret) != 0);
 $ret = posix_uname();
 VERIFY($ret != false);
 VERIFY(count((array)$ret) != 0);
+}

@@ -77,9 +77,8 @@ $inputs = array(
 $iterator = 1;
 foreach($inputs as $input) {
 	echo "\n-- Iteration $iterator --\n";
-	var_dump(round(123.4456789, $input));
+	try { var_dump(round(123.4456789, $input)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 	$iterator++;
 };
 fclose($fp);
-?>
-===Done===
+echo "===Done===";

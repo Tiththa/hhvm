@@ -1,11 +1,9 @@
-<?hh // strict
+<?hh
 
 if (getenv("NOFOO")) {
-  class B {}
+  include 'non-unique-base-1.inc';
 } else {
-  class B {
-    protected function foo() { echo "hi from foo\n"; }
-  }
+  include 'non-unique-base-2.inc';
 }
 
 trait T {

@@ -2,9 +2,9 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
+ *
  *
  *)
 
@@ -25,8 +25,8 @@ let schedule_timer_to_append ~result id =
   (* When this test is run in isolation on a powerful development server, the callback is invoked
    * within ~ 0.063ms of the target. However, when run with hundreds of other tests, I've seen it
    * fire a full 1.87ms after the target. On Sandcastle, I've seen it fire 22.6ms after the target.
-   * So let's set the maximum delay to 100ms, to make this test more robust *)
-  let maximum_delay = 0.1 in
+   * So let's set the maximum delay to 400ms, to make this test more robust *)
+  let maximum_delay = 0.4 in
 
   let callback () =
     let stop = Unix.gettimeofday () in

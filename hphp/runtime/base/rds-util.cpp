@@ -22,22 +22,68 @@ namespace HPHP { namespace rds {
 
 //////////////////////////////////////////////////////////////////////
 
-Link<StaticLocalData, true /* normal_only */>
-bindStaticLocal(const Func* func, const StringData* name) {
-  auto ret = bind<StaticLocalData,true>(
-    StaticLocal { func->getFuncId(), name },
-    Mode::Normal
+Link<TypedValue, Mode::Normal>
+bindClassConstant(const StringData* clsName, const StringData* cnsName) {
+  auto ret = bind<TypedValue,Mode::Normal,kTVSimdAlign>(
+    ClsConstant { clsName, cnsName }
   );
   return ret;
 }
 
-Link<TypedValue, true /* normal_only */>
-bindClassConstant(const StringData* clsName, const StringData* cnsName) {
-  auto ret = bind<TypedValue,true,kTVSimdAlign>(
-    ClsConstant { clsName, cnsName },
-    Mode::Normal
+Link<Cell, rds::Mode::Normal>
+bindStaticMemoValue(const Func* func) {
+  return bind<Cell,Mode::Normal>(
+    StaticMemoValue { func->getFuncId() }
   );
-  return ret;
+}
+
+Link<Cell, rds::Mode::Normal>
+attachStaticMemoValue(const Func* func) {
+  return attach<Cell,Mode::Normal>(
+    StaticMemoValue { func->getFuncId() }
+  );
+}
+
+Link<MemoCacheBase*, rds::Mode::Normal>
+bindStaticMemoCache(const Func* func) {
+  return bind<MemoCacheBase*,Mode::Normal>(
+    StaticMemoCache { func->getFuncId() }
+  );
+}
+
+Link<MemoCacheBase*, rds::Mode::Normal>
+attachStaticMemoCache(const Func* func) {
+  return attach<MemoCacheBase*,Mode::Normal>(
+    StaticMemoCache { func->getFuncId() }
+  );
+}
+
+Link<Cell, rds::Mode::Normal>
+bindLSBMemoValue(const Class* cls, const Func* func) {
+  return bind<Cell,Mode::Normal>(
+    LSBMemoValue { cls, func->getFuncId() }
+  );
+}
+
+Link<Cell, rds::Mode::Normal>
+attachLSBMemoValue(const Class* cls, const Func* func) {
+  return attach<Cell,Mode::Normal>(
+    LSBMemoValue { cls, func->getFuncId() }
+  );
+}
+
+Link<MemoCacheBase*, rds::Mode::Normal>
+bindLSBMemoCache(const Class* cls, const Func* func) {
+  return bind<MemoCacheBase*,Mode::Normal>(
+    LSBMemoCache { cls, func->getFuncId() }
+  );
+}
+
+Link<MemoCacheBase*, rds::Mode::Normal>
+attachLSBMemoCache(const Class* cls, const Func* func) {
+  return attach<MemoCacheBase*,Mode::Normal>(
+    LSBMemoCache { cls, func->getFuncId() }
+  );
 }
 
 //////////////////////////////////////////////////////////////////////

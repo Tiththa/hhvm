@@ -21,8 +21,10 @@
 #include <folly/ScopeGuard.h>
 #include <folly/portability/Sockets.h>
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/file.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/ext/sockets/ext_sockets.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
@@ -38,7 +40,7 @@ namespace HPHP {
 static Mutex NetworkMutex;
 
 Variant HHVM_FUNCTION(gethostname) {
-  char h_name[HOST_NAME_MAX];
+  char h_name[HOST_NAME_MAX + 1];
 
   if (gethostname(h_name, sizeof(h_name)) != 0) {
     raise_warning(
@@ -90,7 +92,7 @@ String HHVM_FUNCTION(gethostbyname, const String& hostname) {
   memcpy(&in.s_addr, *(result.hostbuf.h_addr_list), sizeof(in.s_addr));
   try {
     return String(folly::IPAddressV4(in).str());
-  } catch (folly::IPAddressFormatException &e) {
+  } catch (folly::IPAddressFormatException& e) {
     return hostname;
   }
 }
@@ -107,7 +109,7 @@ Variant HHVM_FUNCTION(gethostbynamel, const String& hostname) {
     struct in_addr in = *(struct in_addr *)result.hostbuf.h_addr_list[i];
     try {
       ret.append(String(folly::IPAddressV4(in).str()));
-    } catch (folly::IPAddressFormatException &e) {
+    } catch (folly::IPAddressFormatException& e) {
         // ok to skip
     }
   }
@@ -207,7 +209,7 @@ String HHVM_FUNCTION(long2ip, const String& proper_address) {
   unsigned long ul = strtoul(proper_address.c_str(), nullptr, 0);
   try {
     return folly::IPAddress::fromLongHBO(ul).str();
-  } catch (folly::IPAddressFormatException &e) {
+  } catch (folly::IPAddressFormatException& e) {
     return s_empty;
   }
 }
@@ -282,7 +284,7 @@ void HHVM_FUNCTION(header, const String& str, bool replace /* = true */,
   }
 }
 
-static IMPLEMENT_THREAD_LOCAL(int, s_response_code);
+static RDS_LOCAL(int, s_response_code);
 
 Variant HHVM_FUNCTION(http_response_code, int response_code /* = 0 */) {
   Transport *transport = g_context->getTransport();
@@ -306,16 +308,14 @@ Variant HHVM_FUNCTION(http_response_code, int response_code /* = 0 */) {
 }
 
 Array HHVM_FUNCTION(headers_list) {
-  Transport *transport = g_context->getTransport();
-  Array ret = Array::Create();
+  auto const transport = g_context->getTransport();
+  auto ret = Array::CreateVArray();
   if (transport) {
     HeaderMap headers;
     transport->getResponseHeaders(headers);
-    for (HeaderMap::const_iterator iter = headers.begin();
-         iter != headers.end(); ++iter) {
-      const std::vector<std::string> &values = iter->second;
-      for (unsigned int i = 0; i < values.size(); i++) {
-        ret.append(String(iter->first + ": " + values[i]));
+    for (const auto& iter : headers) {
+      for (const auto& values : iter.second) {
+        ret.append(String(iter.first + ": " + values));
       }
     }
   }

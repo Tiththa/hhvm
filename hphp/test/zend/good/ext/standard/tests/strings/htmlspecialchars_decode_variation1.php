@@ -79,12 +79,11 @@ $values = array(
 $iterator = 1;
 foreach($values as $value) {
       echo "-- Iterator $iterator --\n";
-      var_dump( htmlspecialchars_decode($value) );
+      try { var_dump( htmlspecialchars_decode($value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
       $iterator++;
 };
 
 // close the file resource used
 fclose($file_handle);
 
-?>
-===DONE===
+echo "===DONE===\n";

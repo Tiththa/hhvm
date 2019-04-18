@@ -1,4 +1,4 @@
-<?php
+<?hh
 function f($pass) {
   echo "Begin f($pass)\n";
   foreach (['null','NULL','SID'] as $k) {
@@ -13,7 +13,6 @@ function f($pass) {
 }
 
 function main() {
-  f(1);
   session_start();
   f(2);
   $s1 = SID;

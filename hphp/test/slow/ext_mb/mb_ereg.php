@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_mb_ereg() {
 var_dump(!mb_ereg_match("a", "some apples"));
 var_dump(mb_ereg_match("a", "a kiwi"));
 var_dump(mb_ereg_match(".*a", "some apples"));
@@ -9,7 +12,7 @@ var_dump(str_replace(" is", " was", $str));
 var_dump(mb_ereg_replace("( )is", "\\1was", $str));
 var_dump(mb_ereg_replace("(( )is)", "\\2was", $str));
 
-$num = 4;
+$num = '4';
 $str = "This string has four words.";
 $str = mb_ereg_replace("four", $num, $str);
 var_dump($str);
@@ -81,7 +84,7 @@ $r = mb_ereg_search_getregs(); // get first result
 var_dump($r === array("Pr\xC3\x9C\xC3\x9D"."fung"));
 
 $date = "1973-04-30";
-mb_ereg("([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})", $date, $regs);
+mb_ereg("([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})", $date, &$regs);
 var_dump($regs[3]);
 var_dump($regs[2]);
 var_dump($regs[1]);
@@ -104,5 +107,6 @@ var_dump(mb_eregi("z", $str));
 
 $str = "XYZ";
 $matches = array();
-var_dump(mb_eregi("z", $str, $matches));
+var_dump(mb_eregi("z", $str, &$matches));
 var_dump($matches);
+}

@@ -1,6 +1,6 @@
 <?php
 /* Prototype  : int mb_ereg(string $pattern, string $string [, array $registers])
- * Description: Regular expression match for multibyte string 
+ * Description: Regular expression match for multibyte string
  * Source code: ext/mbstring/php_mbregex.c
  */
 
@@ -58,7 +58,7 @@ $inputs = array(
        false,
        TRUE,
        FALSE,
- 
+
 // empty data
 /*16*/ "",
        '',
@@ -67,7 +67,7 @@ $inputs = array(
 /*18*/ "string",
        'string',
        $heredoc,
- 
+
 // object data
 /*21*/ new classA(),
 
@@ -88,7 +88,7 @@ foreach($inputs as $input) {
 		$regs = null;
 	}
 	echo "\n-- Iteration $iterator --\n";
-	var_dump( mb_ereg($pattern, $input, $regs) );
+	try { var_dump( mb_ereg($pattern, $input, &$regs) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 	var_dump($regs);
 	$iterator++;
 };
@@ -96,6 +96,3 @@ foreach($inputs as $input) {
 fclose($fp);
 
 echo "Done";
-
-?>
-

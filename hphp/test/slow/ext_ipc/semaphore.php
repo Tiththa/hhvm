@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_semaphore() {
 $ret = sem_get(0xDEADBEEF);
 if ($ret === false) { echo "failed\n"; exit(1); }
 $sem = $ret;
@@ -29,4 +32,5 @@ if ($pid == 0) {
 
 sleep(3); // aha
 sem_release($sem);
-pcntl_waitpid($pid, $status);
+pcntl_waitpid($pid, &$status);
+}

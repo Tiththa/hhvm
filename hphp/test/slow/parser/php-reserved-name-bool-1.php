@@ -1,5 +1,8 @@
 <?php
-if (false) {
-  class Bool {}
-}
+
+
+
+
+class Bool {}
+
 echo "Done\n";

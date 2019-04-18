@@ -2,7 +2,6 @@
 
 class GenClass {
   function __construct() { echo "Making GenClass\n"; }
-  function __destruct()  { echo "Destroying GenClass\n"; }
   function genInner()    { throw new Exception; yield 5; }
 }
 
@@ -16,9 +15,13 @@ function genOuter() {
   echo "Finished genOuter()\n";
 }
 
-$o = genOuter();
-try {
-  $o->current();
-} catch (Exception $ex) {
-  echo "Caught Exception (main)\n";
+
+<<__EntryPoint>>
+function main_yield_from_unwind_generator() {
+  $o = genOuter();
+  try {
+    $o->next();
+  } catch (Exception $ex) {
+    echo "Caught Exception (main)\n";
+  }
 }

@@ -17,10 +17,11 @@
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/ext/memcached/libmemcached_portability.h"
 #include "hphp/runtime/ext/sockets/ext_sockets.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/zend-string.h"
 #include <vector>
@@ -48,8 +49,8 @@ struct MEMCACHEGlobals final {
   std::string hash_function;
 };
 
-static __thread MEMCACHEGlobals* s_memcache_globals;
-#define MEMCACHEG(name) s_memcache_globals->name
+static RDS_LOCAL_NO_CHECK(MEMCACHEGlobals*, s_memcache_globals){nullptr};
+#define MEMCACHEG(name) (*s_memcache_globals)->name
 
 const StaticString s_MemcacheData("MemcacheData");
 
@@ -161,11 +162,17 @@ static uint32_t memcache_get_flag_for_type(const Variant& var) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
+    case KindOfFunc:
+    case KindOfClass:
+    case KindOfClsMeth:
+    case KindOfRecord:
       return MMC_TYPE_STRING;
   }
   not_reached();
@@ -245,10 +252,14 @@ static Variant unserialize_if_serialized(const char *payload,
                                          uint32_t flags) {
   Variant ret = uninit_null();
   if (flags & MMC_SERIALIZED) {
-    ret = unserialize_from_buffer(payload, payload_len);
+    ret = unserialize_from_buffer(
+      payload,
+      payload_len,
+      VariableUnserializer::Type::Serialize
+    );
   } else {
     if (payload_len == 0) {
-      ret = String("");
+      ret = empty_string();
     } else {
       ret = String(payload, payload_len, CopyString);
     }
@@ -691,9 +702,6 @@ static Array HHVM_METHOD(Memcache, getextendedstats,
 
   for (int server_id = 0; server_id < server_count; server_id++) {
     memcached_stat_st *stat;
-    char stats_key[30] = {0};
-    size_t key_len;
-
     LMCD_SERVER_POSITION_INSTANCE_TYPE instance =
       memcached_server_instance_by_position(&data->m_memcache, server_id);
     const char *hostname = LMCD_SERVER_HOSTNAME(instance);
@@ -706,9 +714,13 @@ static Array HHVM_METHOD(Memcache, getextendedstats,
       continue;
     }
 
-    key_len = snprintf(stats_key, sizeof(stats_key), "%s:%d", hostname, port);
-
-    return_val.set(String(stats_key, key_len, CopyString), server_stats);
+    auto const port_str = folly::to<std::string>(port);
+    auto const key_len = strlen(hostname) + 1 + port_str.length();
+    auto key = String(key_len, ReserveString);
+    key += hostname;
+    key += ":";
+    key += port_str;
+    return_val.set(key, server_stats);
   }
 
   free(stats);
@@ -747,8 +759,8 @@ HHVM_METHOD(Memcache, addserver, const String& host, int port /* = 11211 */,
 struct MemcacheExtension final : Extension {
     MemcacheExtension() : Extension("memcache", "3.0.8") {};
     void threadInit() override {
-      assert(!s_memcache_globals);
-      s_memcache_globals = new MEMCACHEGlobals;
+      *s_memcache_globals = new MEMCACHEGlobals;
+      assertx(*s_memcache_globals);
       IniSetting::Bind(this, IniSetting::PHP_INI_ALL,
                        "memcache.hash_strategy", "standard",
                        IniSetting::SetAndGet<std::string>(
@@ -765,8 +777,8 @@ struct MemcacheExtension final : Extension {
                        &MEMCACHEG(hash_function));
     }
     void threadShutdown() override {
-      delete s_memcache_globals;
-      s_memcache_globals = nullptr;
+      delete *s_memcache_globals;
+      *s_memcache_globals = nullptr;
     }
 
     void moduleInit() override {

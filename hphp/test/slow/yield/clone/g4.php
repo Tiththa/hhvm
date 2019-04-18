@@ -1,4 +1,7 @@
 <?php
+
+<<__EntryPoint>>
+function main_g4() {
 $foo = function ($a1, &$a2) {
   $a1 += 10;
   $a2 += 100;
@@ -12,7 +15,7 @@ $foo = function ($a1, &$a2) {
 };
 $a1 = 1;
 $a2 = -999999999;
-$x = $foo($a1, $a2);
+$x = $foo($a1, &$a2);
 $a2 = 2;
 $x->rewind();
 $y1 = clone $x;
@@ -46,3 +49,4 @@ for ($x->next(); $x->valid(); $x->next()) {
 }
 echo "--------\n";
 var_dump($a1, $a2);
+}

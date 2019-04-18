@@ -2,9 +2,8 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
@@ -14,13 +13,13 @@
  * have the proper type, and restricts what types can be used for enums.
  *)
 (*****************************************************************************)
-open Core
+open Core_kernel
 open Nast
 open Typing_defs
-open Utils
 
 module SN = Naming_special_names
 module Phase = Typing_phase
+module Cls = Typing_classes_heap
 
 let member_type env member_ce =
   let lazy default_result = member_ce.ce_type in
@@ -37,8 +36,8 @@ let member_type env member_ce =
       (match maybe_enum with
         | None -> default_result
         | Some tc ->
-          (match Decl_enum.is_enum (tc.tc_pos, tc.tc_name)
-              tc.tc_enum_type tc.tc_ancestors with
+          (match Decl_enum.enum_kind (Cls.pos tc, Cls.name tc)
+              (Cls.enum_type tc) (Cls.get_ancestor tc) with
                 | None -> default_result
                 | Some (_base, (_, enum_ty), _constraint) ->
                   let ty = (fst default_result), enum_ty in
@@ -58,10 +57,10 @@ let check_valid_array_key_type f_fail ~allow_any:allow_any env p t =
     (* Enums have to be valid array keys *)
     | Tabstract (AKenum _, _) -> ()
     | Terr | Tany when allow_any -> ()
-    | Terr | Tany | Tmixed | Tarraykind _ | Tprim _ | Toption _
-      | Tvar _ | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _)
+    | Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Toption _ | Tdynamic
+      | Tvar _ | Tabstract _ | Tclass _ | Ttuple _ | Tanon _
       | Tfun _ | Tunresolved _ | Tobject | Tshape _ ->
-        f_fail p (Reason.to_pos r) (Typing_print.error t') trail);
+        f_fail p (Reason.to_pos r) (Typing_print.error env (r, t')) trail);
   env
 
 let enum_check_const ty_exp env (_, (p, _), _) t =
@@ -84,8 +83,8 @@ let enum_check_const ty_exp env (_, (p, _), _) t =
  * hints are compatible with the type. *)
 let enum_class_check env tc consts const_types =
   let enum_info_opt =
-    Decl_enum.is_enum (tc.tc_pos, tc.tc_name) tc.tc_enum_type
-    tc.tc_ancestors in
+    Decl_enum.enum_kind (Cls.pos tc, Cls.name tc) (Cls.enum_type tc)
+    (Cls.get_ancestor tc) in
   match enum_info_opt with
     | Some (ty_exp, _, ty_constraint) ->
         let ety_env = Phase.env_with_self env in
@@ -96,13 +95,12 @@ let enum_class_check env tc consts const_types =
           (* We disallow first-class enums from being non-exact types, because
            * a switch on such an enum can lead to very unexpected results,
            * since switch uses == equality. *)
-          | Tmixed | Tprim Tarraykey when tc.tc_enum_type <> None ->
+          | Tnonnull | Tprim Tarraykey when Cls.enum_type tc <> None ->
               Errors.enum_type_bad (Reason.to_pos r)
-                (Typing_print.error ty_exp') trail
-          (* We disallow typedefs that point to mixed *)
-          | Tmixed when snd ty_exp <> Tmixed ->
-              Errors.enum_type_typedef_mixed (Reason.to_pos r)
-          | Tmixed -> ()
+                (Typing_print.error env (r, ty_exp')) trail
+          | Tnonnull when snd ty_exp <> Tnonnull ->
+              Errors.enum_type_typedef_nonnull (Reason.to_pos r)
+          | Tnonnull -> ()
           | Tprim Tint | Tprim Tstring | Tprim Tarraykey -> ()
           (* Allow enums in terms of other enums *)
           | Tabstract (AKenum _, _) -> ()
@@ -110,51 +108,26 @@ let enum_class_check env tc consts const_types =
            * Enum subclasses that need to do that *)
           | Tabstract (AKgeneric _, _) -> ()
           | Terr | Tany | Tarraykind _ | Tprim _ | Toption _ | Tvar _
-            | Tabstract (_, _) | Tclass (_, _) | Ttuple _ | Tanon (_, _)
-            | Tunresolved _ | Tobject | Tfun _ | Tshape _ ->
+            | Tabstract (_, _) | Tclass _ | Ttuple _ | Tanon (_, _)
+            | Tunresolved _ | Tobject | Tfun _ | Tshape _ | Tdynamic ->
               Errors.enum_type_bad (Reason.to_pos r)
-                (Typing_print.error ty_exp') trail);
+                (Typing_print.error env (r, ty_exp')) trail);
 
-        (* Make sure that if a constraint was given that the base type is
-         * actually a subtype of it. *)
+        (* If a constraint was given, make sure that it is a subtype
+           of arraykey, and that the base type is actually a subtype
+           of it. *)
         let env = (match ty_constraint with
           | Some ty ->
              let env, ty = Phase.localize ~ety_env env ty in
-             Typing_ops.sub_type tc.tc_pos Reason.URenum_cstr env ty_exp ty
+             let ty_arraykey = (
+               Reason.Rimplicit_upper_bound (Cls.pos tc, "arraykey"),
+               Tprim Tarraykey
+             ) in
+             let env = Typing_ops.sub_type (Cls.pos tc) Reason.URenum_cstr env
+               ty ty_arraykey in
+             Typing_ops.sub_type (Cls.pos tc) Reason.URenum_cstr env ty_exp ty
           | None -> env) in
 
         List.fold2_exn ~f:(enum_check_const ty_exp) ~init:env consts const_types
 
     | None -> env
-
-let get_constant tc (seen, has_default) = function
-  | Default _ -> (seen, true)
-  | Case ((pos, Class_const (CI ((_, cls), _), (_, const))), _) ->
-    if cls <> tc.tc_name then
-      (Errors.enum_switch_wrong_class pos (strip_ns tc.tc_name) (strip_ns cls);
-       (seen, has_default))
-    else
-      (match SMap.get const seen with
-        | None -> (SMap.add const pos seen, has_default)
-        | Some old_pos ->
-          Errors.enum_switch_redundant const old_pos pos;
-          (seen, has_default))
-  | Case ((pos, _), _) ->
-    Errors.enum_switch_not_const pos;
-    (seen, has_default)
-
-let check_enum_exhaustiveness pos tc caselist coming_from_unresolved =
-  (* If this check comes from an enum inside a Tunresolved, then
-     don't punish for having an extra default case *)
-  let (seen, has_default) =
-    List.fold_left ~f:(get_constant tc) ~init:(SMap.empty, false) caselist in
-  let consts = SMap.remove SN.Members.mClass tc.tc_consts in
-  let all_cases_handled = SMap.cardinal seen = SMap.cardinal consts in
-  match (all_cases_handled, has_default, coming_from_unresolved) with
-    | false, false, _ ->
-      let const_list = SMap.keys consts in
-      let unhandled =
-        List.filter const_list (function k -> not (SMap.mem k seen)) in
-      Errors.enum_switch_nonexhaustive pos unhandled tc.tc_pos
-    | true, true, false -> Errors.enum_switch_redundant_default pos tc.tc_pos
-    | _ -> ()

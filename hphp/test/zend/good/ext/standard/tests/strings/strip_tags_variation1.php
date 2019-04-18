@@ -79,9 +79,8 @@ $values = array(
 $iterator = 1;
 foreach($values as $value) {
       echo "-- Iteration $iterator --\n";
-      var_dump( strip_tags($value) );
+      try { var_dump( strip_tags($value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
       $iterator++;
 };
 
-?>
-===DONE===
+echo "===DONE===\n";

@@ -1,4 +1,4 @@
-<?php
+<?hh
 // Copyright 2004-2015 Facebook. All Rights Reserved.
 
 class c {
@@ -6,7 +6,9 @@ class c {
   private static $otherthing;
 
   public static function doit($id, $value) {
+    self::$thing = array();
     self::$thing[(string)$id] = $value;
+    self::$otherthing = array();
     self::$otherthing[(string)$id] = $value;
   }
 

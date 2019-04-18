@@ -1,4 +1,4 @@
-<?hh
+<?hh // decl
 
 class DestructLogger {
   private $where;
@@ -7,9 +7,6 @@ class DestructLogger {
     echo "constructing in {$this->where}\n";
   }
 
-  private function __destruct() {
-    echo "destructing in {$this->where}\n";
-  }
 }
 
 function l($obj, $where) {
@@ -53,4 +50,8 @@ async function baz($from, $to) {
   echo "end baz\n";
 }
 
+
+<<__EntryPoint>>
+function main_foreach_await_as() {
 HH\Asio\join(baz(42, 100));
+}

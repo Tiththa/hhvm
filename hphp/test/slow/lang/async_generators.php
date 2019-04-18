@@ -1,4 +1,4 @@
-<?hh
+<?hh // decl
 
 class Logger {
   public static function attach($obj) {
@@ -10,10 +10,6 @@ class Logger {
   private function __construct($what) {
     $this->what = $what;
     echo "constructing {$this->what}\n";
-  }
-
-  private function __destruct() {
-    echo "destructing {$this->what}\n";
   }
 }
 
@@ -110,6 +106,9 @@ async function main($exit_type) {
   } while ($res);
 }
 
+
+<<__EntryPoint>>
+function main_async_generators() {
 Exception::setTraceOptions(DEBUG_BACKTRACE_IGNORE_ARGS);
 echo "start\n";
 for ($exit_type = 0; $exit_type < 4; ++$exit_type) {
@@ -122,3 +121,4 @@ for ($exit_type = 0; $exit_type < 4; ++$exit_type) {
   }
 }
 echo "end\n";
+}

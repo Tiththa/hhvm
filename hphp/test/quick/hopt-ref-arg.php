@@ -1,12 +1,14 @@
-<?php
+<?hh
+
+function set(&$b) {
+  $b = 3;
+}
 
 function run(&$a) {
-  $b =& $a;
-
-  $b = 3;
+  set(&$a);
   return $a;
 }
 
 $a = 5;
-run($a);
+run(&$a);
 var_dump($a);

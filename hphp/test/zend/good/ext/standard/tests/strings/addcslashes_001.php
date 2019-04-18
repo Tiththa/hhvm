@@ -22,10 +22,9 @@ $charlist = array (
 $counter = 1;
 foreach($charlist as $char) {
   echo "-- Iteration $counter --\n";
-  var_dump( addcslashes($string, $char) );
+  try { var_dump( addcslashes($string, $char) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $counter++;
 }
 
 echo "Done\n"; 
 
-?>

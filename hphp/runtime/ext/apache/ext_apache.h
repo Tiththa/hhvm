@@ -18,8 +18,11 @@
 #ifndef incl_HPHP_EXT_APACHE_H_
 #define incl_HPHP_EXT_APACHE_H_
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/ext/extension.h"
+#include "hphp/runtime/server/transport.h"
 #include "hphp/util/health-monitor-types.h"
+#include "hphp/util/text-util.h"
 
 namespace HPHP {
 
@@ -29,9 +32,6 @@ struct ApacheExtension final : Extension {
   ApacheExtension();
   ~ApacheExtension() override;
   void moduleInit() override;
-  void moduleLoad(const IniSetting::Map& ini, Hdf config) override;
-  static bool Enable;
-  bool moduleEnabled() const override { return Enable; }
 
   static void UpdateHealthLevel(HealthLevel newStatus) {
     m_healthLevel = newStatus;
@@ -44,6 +44,25 @@ struct ApacheExtension final : Extension {
  private:
   static HealthLevel m_healthLevel;
 };
+
+static Array get_headers(const HeaderMap& headers, bool allHeaders = false) {
+  DArrayInit ret(headers.size());
+  for (auto& iter : headers) {
+    const auto& values = iter.second;
+    if (auto size = values.size()) {
+      if (!allHeaders) {
+        ret.set(String(iter.first), String(values.back()));
+      } else {
+        VArrayInit dups(size);
+        for (auto& dup : values) {
+          dups.append(String(dup));
+        }
+        ret.set(String(toLower(iter.first)), dups.toArray());
+      }
+    }
+  }
+  return ret.toArray();
+}
 
 }
 

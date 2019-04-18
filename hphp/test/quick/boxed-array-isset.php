@@ -1,12 +1,11 @@
-<?php
+<?hh
 
 
-function main($o) {
-  $x =& $y;
+function main($o, &$x) {
   $x = $o->prop;
   return isset($x[23]) ? true : false;
 }
 
 $o = new stdclass;
 $o->prop = array(23 => 'hi');
-echo main($o) ? "true\n" : "false\n";
+echo main($o, &$y) ? "true\n" : "false\n";

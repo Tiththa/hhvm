@@ -2,12 +2,12 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
+open Core_kernel
 (* 1-based position is used here *)
 type position = {
   line : int;
@@ -39,6 +39,26 @@ type coverage_level =
   | Partial   (* Partially checked code, e.g. array, Awaitable<_> with no
                  concrete type parameters *)
   | Checked   (* Completely checked code *)
+
+let ide_pos_to_fc (x: position) : File_content.position =
+  let line, column = x.line, x.column in
+  { File_content.line; column; }
+
+let ide_range_to_fc (x: range) : File_content.range =
+  let st, ed = x.st |> ide_pos_to_fc, x.ed |> ide_pos_to_fc in
+  { File_content.st; ed; }
+
+let ide_text_edit_to_fc (x: text_edit) : File_content.text_edit =
+  let text, range = x.text, x.range |> Option.map ~f:ide_range_to_fc in
+  { File_content.text; range; }
+
+let ide_pos_from_fc (x: File_content.position) : position =
+  let line, column = x.File_content.line, x.File_content.column in
+  { line; column; }
+
+let ide_range_from_fc (x: File_content.range) : range =
+  let st, ed = x.File_content.st |> ide_pos_from_fc, x.File_content.ed |> ide_pos_from_fc in
+  { st; ed; }
 
 let pos_to_range x =
   let st_line, st_column, ed_line, ed_column = Pos.destruct_range x in

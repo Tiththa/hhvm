@@ -5,8 +5,11 @@ function f(&$a) {
   ++$a;
   yield $a;
 }
+
+<<__EntryPoint>>
+function main_g11() {
 $a = 3;
-$x = f($a);
+$x = f(&$a);
 unset($a);
 $y1 = clone $x;
 $y2 = clone $x;
@@ -20,4 +23,5 @@ foreach ($y2 as $v) {
 echo "========\n";
 foreach ($x as $v) {
   echo $v . "\n";
+}
 }

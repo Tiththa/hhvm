@@ -91,10 +91,16 @@ if (ENABLE_COTIRE)
       "${CMAKE_BINARY_DIR}")
 
   # XED headers need to be wrapped in extern "C"
-  if (LibXed_INCLUDE_DIR)
-    set_property(DIRECTORY
-      APPEND PROPERTY COTIRE_PREFIX_HEADER_IGNORE_PATH
-        "${LibXed_INCLUDE_DIR}")
+  if (ENABLE_XED)
+    if (LibXed_INCLUDE_DIR)
+      set_property(DIRECTORY
+          APPEND PROPERTY COTIRE_PREFIX_HEADER_IGNORE_PATH
+            "${LibXed_INCLUDE_DIR}")
+    else()
+      set_property(DIRECTORY
+          APPEND PROPERTY COTIRE_PREFIX_HEADER_IGNORE_PATH
+            "${TP_DIR}/xed/xed/build/include/xed")
+    endif()
   endif()
 endif()
 
@@ -134,9 +140,6 @@ if (RUNTIME_TEST_BIN)
   add_subdirectory(runtime/test)
 endif ()
 
-if (ENABLE_ZEND_COMPAT)
-  add_subdirectory(runtime/ext_zend_compat)
-endif()
 add_subdirectory(system)
 add_subdirectory(util)
 add_subdirectory(ppc64-asm)
@@ -151,6 +154,8 @@ if (TEST_BIN)
 endif ()
 
 add_subdirectory(tools/gdb)
+
+include(test/dso_test/dso_test.cmake)
 
 # Keep this last
 add_subdirectory(tools/hphpize)

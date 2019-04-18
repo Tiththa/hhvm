@@ -1,7 +1,10 @@
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   String "DONE\n"
   Print
@@ -30,27 +33,29 @@
 
   CGetL $obj
   AssertRATStk 0 Obj=Cls1
+  NullUninit
+  NullUninit
+  CGetL $x
+  CGetL $x
+  CGetL $x
+  CGetL $x
+  CGetL $x
   FPushObjMethodD 5 "foobaz" NullThrows
-  FPassL 0 $x
-  FPassL 1 $x
-  FPassL 2 $x
-  FPassL 3 $x
-  FPassL 4 $x
-  FCallD 5 "Cls1" "foobaz"
-  UnboxRNop
+  FCall <> 5 1 "" - "Cls1" "foobaz"
   Jmp end
 
 cls2:
   CGetL $obj
   AssertRATStk 0 Obj=Cls2
+  NullUninit
+  NullUninit
+  CGetL $x
+  CGetL $x
+  CGetL $x
+  CGetL $x
+  CGetL $x
   FPushObjMethodD 5 "foobaz" NullThrows
-  FPassL 0 $x
-  FPassL 1 $x
-  FPassL 2 $x
-  FPassL 3 $x
-  FPassL 4 $x
-  FCallD 5 "Cls2" "foobaz"
-  UnboxRNop
+  FCall <> 5 1 "" - "Cls2" "foobaz"
   Jmp end
 
 end:
@@ -61,31 +66,43 @@ end:
   CGetL $type
   JmpZ cls2
 
-  FPushCtorD 0 "Cls1"
-  FCall 0
-  PopR
+  NewObjD "Cls1"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $obj
   PopC
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $obj
+  CGetL $type
+  CGetL $x
   FPushFuncD 3 "test"
-  FPassL 0 $obj
-  FPassL 1 $type
-  FPassL 2 $x
-  FCall 3
-  UnboxRNop
+  FCall <> 3 1 "" - "" ""
   RetC
 
 cls2:
-  FPushCtorD 0 "Cls2"
-  FCall 0
-  PopR
+  NewObjD "Cls2"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $obj
   PopC
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $obj
+  CGetL $type
+  CGetL $x
   FPushFuncD 3 "test"
-  FPassL 0 $obj
-  FPassL 1 $type
-  FPassL 2 $x
-  FCall 3
-  UnboxRNop
+  FCall <> 3 1 "" - "" ""
   RetC
 }
 
@@ -100,12 +117,14 @@ header:
   Lt
   JmpZ end
 
-  FPushFuncD 2 "test_outer"
-  FPassL 0 $type
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $type
   Int 1
-  FPassC 1
-  FCall 2
-  PopR
+  FPushFuncD 2 "test_outer"
+  FCall <> 2 1 "" - "" ""
+  PopC
 
   IncDecL $count PreInc
   PopC
@@ -117,20 +136,21 @@ end:
 }
 
 .function main() {
-  FPushFuncD 2 "loop"
+  NullUninit
+  NullUninit
+  NullUninit
   False
-  FPassC 0
   Int 40
-  FPassC 1
-  FCall 2
-  PopR
-
   FPushFuncD 2 "loop"
+  FCall <> 2 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   True
-  FPassC 0
   Int 100
-  FPassC 1
-  FCall 2
-  UnboxRNop
+  FPushFuncD 2 "loop"
+  FCall <> 2 1 "" - "" ""
   RetC
 }

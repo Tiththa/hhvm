@@ -39,11 +39,10 @@ function d() {
 }
 
 function e() {
-  $v = 1;
-  $a = array("one" => 1);
-  $b = array("two" => &$v);
-  $r = array_merge($a, array($b));
   $v = 2;
+  $a = array("one" => 1);
+  $b = array("two" => $v);
+  $r = array_merge($a, array($b));
   var_dump($r);
 }
 
@@ -61,9 +60,13 @@ function g() {
   var_dump(array_merge($a, array($b)));
 }
 
+
+<<__EntryPoint>>
+function main_array_merge() {
 a();
 b();
 c();
 d();
 e();
 f();
+}

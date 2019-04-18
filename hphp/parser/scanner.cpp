@@ -87,7 +87,7 @@ void ScannerToken::xhpDecode() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Scanner::Scanner(const std::string& filename, int type, bool md5 /* = false */)
+Scanner::Scanner(const std::string& filename, int type, bool sha1 /* = false */)
     : m_filename(filename), m_stream(nullptr), m_source(nullptr), m_len(0), m_pos(0),
       m_state(Start), m_type(type), m_yyscanner(nullptr), m_token(nullptr),
       m_loc(nullptr), m_lastToken(-1), m_isHHFile(0), m_lookaheadLtDepth(0) {
@@ -112,40 +112,40 @@ Scanner::Scanner(const std::string& filename, int type, bool md5 /* = false */)
     throw FileOpenException(m_filename);
   }
 #endif
-  if (md5) computeMd5();
+  if (sha1) computeSha1();
   init();
 }
 
 Scanner::Scanner(std::istream &stream, int type,
                  const char *fileName /* = "" */,
-                 bool md5 /* = false */)
+                 bool sha1 /* = false */)
     : m_filename(fileName), m_source(nullptr), m_len(0), m_pos(0),
       m_state(Start), m_type(type), m_yyscanner(nullptr), m_token(nullptr),
       m_loc(nullptr), m_lastToken(-1), m_isHHFile(0), m_lookaheadLtDepth(0) {
   m_stream = &stream;
   m_streamOwner = false;
-  if (md5) computeMd5();
+  if (sha1) computeSha1();
   init();
 }
 
 Scanner::Scanner(const char *source, int len, int type,
-                 const char *fileName /* = "" */, bool md5 /* = false */)
+                 const char *fileName /* = "" */, bool sha1 /* = false */)
     : m_filename(fileName), m_stream(nullptr), m_source(source), m_len(len),
       m_pos(0), m_state(Start), m_type(type), m_yyscanner(nullptr),
       m_token(nullptr), m_loc(nullptr), m_lastToken(-1), m_isHHFile(0),
       m_lookaheadLtDepth(0) {
   assert(m_source);
   m_streamOwner = false;
-  if (md5) {
+  if (sha1) {
     m_stream = new std::istringstream(std::string(source, len));
     m_streamOwner = true;
-    computeMd5();
+    computeSha1();
   }
 
   init();
 }
 
-void Scanner::computeMd5() {
+void Scanner::computeSha1() {
   size_t startpos = m_stream->tellg();
   always_assert(startpos != -1 &&
                 startpos <= std::numeric_limits<int32_t>::max());
@@ -157,7 +157,7 @@ void Scanner::computeMd5() {
   auto const ptr = (char*)malloc(length);
   m_stream->read(ptr, length);
   m_stream->seekg(startpos, std::ios::beg);
-  m_md5 = string_md5(folly::StringPiece{ptr, length});
+  m_sha1 = string_sha1(folly::StringPiece{ptr, length});
   free(ptr);
 }
 
@@ -274,19 +274,32 @@ bool Scanner::tryParseTypeList(TokenStore::iterator& pos) {
 bool Scanner::tryParseNonEmptyLambdaParams(TokenStore::iterator& pos) {
   for (;; nextLookahead(pos)) {
     if (pos->t == ')' || pos->t == T_LAMBDA_CP) return true;
+    bool inout_param = false;
+    if (pos->t == T_INOUT) {
+      inout_param = true;
+      nextLookahead(pos);
+    }
     if (pos->t != T_VARIABLE) {
-      if (pos->t == T_ELLIPSIS) {
+      /* This is the (...) ==> {} and (...$x) ==> {} cases */
+      if (!inout_param && pos->t == T_ELLIPSIS) {
         nextLookahead(pos);
+        if (pos->t == T_VARIABLE) {
+          nextLookahead(pos);
+        }
         return true;
       }
-      if (!tryParseNSType(pos)) return false;
+      if (!tryParseNSType(pos)) { return false; }
+      /* We may have an ellipsis now, e.g. for (int ...$x) ==> {} */
+      if (!inout_param && pos->t == T_ELLIPSIS) {
+        nextLookahead(pos);
+      }
       if (pos->t == '&') {
         nextLookahead(pos);
       }
       if (pos->t != T_VARIABLE) return false;
     }
     nextLookahead(pos);
-    if (pos->t == '=') {
+    if (!inout_param && pos->t == '=') {
       nextLookahead(pos);
       parseApproxParamDefVal(pos);
     }
@@ -371,6 +384,7 @@ void Scanner::parseApproxParamDefVal(TokenStore::iterator& pos) {
       case T_NS_SEPARATOR:
       case T_NAMESPACE:
       case T_SHAPE:
+      case T_TUPLE:
       case T_ARRAY:
       case T_DICT:
       case T_VEC:
@@ -394,9 +408,13 @@ void Scanner::parseApproxParamDefVal(TokenStore::iterator& pos) {
 
 bool Scanner::tryParseFuncTypeList(TokenStore::iterator& pos) {
   for (int parsed = 0;;parsed++) {
+    /* For cases such as function(...):void */
     if (pos->t == T_ELLIPSIS) {
       nextLookahead(pos);
       return true;
+    }
+    if (pos->t == T_INOUT) {
+      nextLookahead(pos);
     }
     auto cpPos = pos;
     if (!tryParseNSType(cpPos)) {
@@ -408,6 +426,11 @@ bool Scanner::tryParseFuncTypeList(TokenStore::iterator& pos) {
       }
     }
     pos = cpPos;
+    /* For cases such as function(int...):void */
+    if (pos->t == T_ELLIPSIS) {
+      nextLookahead(pos);
+      return true;
+    }
     if (pos->t != ',') return true;
     nextLookahead(pos);
   }
@@ -470,6 +493,7 @@ Scanner::tryParseNSType(TokenStore::iterator& pos) {
       case T_KEYSET:
       case T_VARRAY:
       case T_DARRAY:
+      case T_TUPLE:
       case T_CALLABLE:
       case T_UNRESOLVED_TYPE:
       case T_UNRESOLVED_NEWTYPE:
@@ -601,6 +625,7 @@ static bool isValidClassConstantName(int tokid) {
   case T_KEYSET:
   case T_VARRAY:
   case T_DARRAY:
+  case T_INOUT:
     return true;
   default:
     return false;
@@ -682,6 +707,7 @@ static bool isUnresolved(int tokid) {
 }
 
 int Scanner::getNextToken(ScannerToken &t, Location &l) {
+  int prevTokid = m_lastToken;
   int tokid;
   bool la = !m_lookahead.empty();
   tokid = fetchToken(t, l);
@@ -710,7 +736,14 @@ int Scanner::getNextToken(ScannerToken &t, Location &l) {
     auto pos = m_lookahead.begin();
     auto typePos = pos;
     nextLookahead(pos);
-    if (isValidClassConstantName(pos->t)) {
+    if (
+      isValidClassConstantName(pos->t)
+      || (
+        pos->t == T_NS_SEPARATOR
+        && tokid == T_UNRESOLVED_TYPE
+        && prevTokid == T_USE
+      )
+    ) {
       typePos->t = tokid == T_UNRESOLVED_TYPE ? T_TYPE : T_NEWTYPE;
     } else {
       typePos->t = T_STRING;

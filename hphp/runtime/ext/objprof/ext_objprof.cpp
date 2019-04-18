@@ -36,6 +36,7 @@
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/collections.h"
+#include "hphp/runtime/base/object-iterator.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/ext/datetime/ext_datetime.h"
@@ -114,7 +115,6 @@ enum ObjprofFlags {
 
 std::pair<int, double> tvGetSize(
   TypedValue tv,
-  int ref_adjust,
   const ObjectData* source,
   ObjprofStack* stack,
   PathsToObject* paths,
@@ -126,7 +126,8 @@ void tvGetStrings(
   TypedValue tv,
   ObjprofStrings* metrics,
   ObjprofStack* path,
-  std::unordered_set<void*>* pointers);
+  std::unordered_set<void*>* pointers,
+  ObjprofValuePtrStack* val_stack);
 
 std::pair<int, double> getObjSize(
   const ObjectData* obj,
@@ -140,7 +141,7 @@ std::pair<int, double> getObjSize(
 );
 
 String pathString(ObjprofStack* stack, const char* sep) {
-  assert(stack->size() < 100000000);
+  assertx(stack->size() < 100000000);
   StringBuffer sb;
   for (size_t i = 0; i < stack->size(); ++i) {
     if (i != 0) sb.append(sep);
@@ -177,7 +178,6 @@ bool isObjprofRoot(
  * These are not measured:
  * kApcKind     // APCArray
  * kGlobalsKind // GlobalsArray
- * kProxyKind   // ProxyArray
  */
 std::pair<int, double> sizeOfArray(
   const ArrayData* ad,
@@ -193,8 +193,7 @@ std::pair<int, double> sizeOfArray(
   auto arrKind = ad->kind();
   if (
     arrKind == ArrayData::ArrayKind::kApcKind ||
-    arrKind == ArrayData::ArrayKind::kGlobalsKind ||
-    arrKind == ArrayData::ArrayKind::kProxyKind
+    arrKind == ArrayData::ArrayKind::kGlobalsKind
   ) {
     return std::make_pair(0, 0);
   }
@@ -217,7 +216,6 @@ std::pair<int, double> sizeOfArray(
     IterateV(ad, [&] (TypedValue v) {
       auto val_size_pair = tvGetSize(
         v,
-        0, /* ref_adjust */
         source,
         stack,
         paths,
@@ -254,7 +252,6 @@ std::pair<int, double> sizeOfArray(
           }
           key_size_pair = tvGetSize(
             k,
-            0, /* ref_adjust */
             source,
             stack,
             paths,
@@ -273,7 +270,6 @@ std::pair<int, double> sizeOfArray(
           }
           key_size_pair = tvGetSize(
             k,
-            0, /* ref_adjust */
             source,
             stack,
             paths,
@@ -291,6 +287,7 @@ std::pair<int, double> sizeOfArray(
         case KindOfBoolean:
         case KindOfPersistentDict:
         case KindOfDouble:
+        case KindOfPersistentShape:
         case KindOfPersistentArray:
         case KindOfPersistentKeyset:
         case KindOfObject:
@@ -298,14 +295,18 @@ std::pair<int, double> sizeOfArray(
         case KindOfVec:
         case KindOfDict:
         case KindOfRef:
+        case KindOfShape:
         case KindOfArray:
         case KindOfKeyset:
+        case KindOfFunc:
+        case KindOfClass:
+        case KindOfClsMeth:
+        case KindOfRecord:
           always_assert(false);
       }
 
       auto val_size_pair = tvGetSize(
         v,
-        0, /* ref_adjust */
         source,
         stack,
         paths,
@@ -316,10 +317,8 @@ std::pair<int, double> sizeOfArray(
       FTRACE(2, "  Value size for that key was {}:{}\n",
         val_size_pair.first, val_size_pair.second);
       if (histogram) {
-        auto histogram_key = std::make_pair(
-          cls,
-          String::attach(tvCastToString(k)).c_str()
-        );
+        auto const k_str = tvCastToString(k);
+        auto const histogram_key = std::make_pair(cls, k_str.toCppString());
         auto& metrics = (*histogram)[histogram_key];
         metrics.instances += 1;
         metrics.bytes += val_size_pair.first + key_size_pair.first;
@@ -345,14 +344,22 @@ void stringsOfArray(
   const ArrayData* ad,
   ObjprofStrings* metrics,
   ObjprofStack* path,
-  std::unordered_set<void*>* pointers
+  std::unordered_set<void*>* pointers,
+  ObjprofValuePtrStack* val_stack
 ) {
+  auto ptr_begin = val_stack->begin();
+  auto ptr_end = val_stack->end();
+  if (std::find(ptr_begin, ptr_end, ad) != ptr_end) {
+    return;
+  }
+  val_stack->push_back(ad);
+
   path->push_back(std::string("array()"));
 
   if (ad->hasPackedLayout()) {
     path->push_back(std::string("[]"));
     IterateV(ad, [&] (TypedValue v) {
-      tvGetStrings(v, metrics, path, pointers);
+      tvGetStrings(v, metrics, path, pointers, val_stack);
       return false;
     });
     path->pop_back();
@@ -362,7 +369,7 @@ void stringsOfArray(
         case KindOfPersistentString:
         case KindOfString: {
           auto const str = k.m_data.pstr;
-          tvGetStrings(k, metrics, path, pointers);
+          tvGetStrings(k, metrics, path, pointers, val_stack);
           path->push_back(std::string("[\"" + str->toCppString() + "\"]"));
           break;
         }
@@ -370,7 +377,7 @@ void stringsOfArray(
           auto const num = k.m_data.num;
           auto key_str = std::to_string(num);
           path->push_back(std::string(key_str));
-          tvGetStrings(k, metrics, path, pointers);
+          tvGetStrings(k, metrics, path, pointers, val_stack);
           path->pop_back();
           path->push_back(std::string("[" + key_str + "]"));
           break;
@@ -381,6 +388,7 @@ void stringsOfArray(
         case KindOfBoolean:
         case KindOfPersistentDict:
         case KindOfDouble:
+        case KindOfPersistentShape:
         case KindOfPersistentArray:
         case KindOfPersistentKeyset:
         case KindOfObject:
@@ -388,22 +396,28 @@ void stringsOfArray(
         case KindOfVec:
         case KindOfDict:
         case KindOfRef:
+        case KindOfShape:
         case KindOfArray:
         case KindOfKeyset:
+        case KindOfFunc:
+        case KindOfClass:
+        case KindOfClsMeth:
+        case KindOfRecord:
           // this should be an always_assert(false), but that appears to trigger
           // a gcc-4.9 bug (t16350411); even after t16350411 is fixed, we
           // can't always_assert(false) here until we stop supporting gcc-4.9
           // for open source users, since they may be using an older version
-          assert(false);
+          assertx(false);
       }
 
-      tvGetStrings(v, metrics, path, pointers);
+      tvGetStrings(v, metrics, path, pointers, val_stack);
       path->pop_back();
       return false;
     });
   }
 
   path->pop_back();
+  val_stack->pop_back();
 }
 
 /**
@@ -414,11 +428,9 @@ void stringsOfArray(
  * kEmptyKind   // The singleton static empty array
  * kSharedKind  // SharedArray
  * kGlobalsKind // GlobalsArray
- * kProxyKind   // ProxyArray
  */
 std::pair<int, double> tvGetSize(
   TypedValue tv,
-  int ref_adjust,
   const ObjectData* source,
   ObjprofStack* stack,
   PathsToObject* paths,
@@ -434,7 +446,9 @@ std::pair<int, double> tvGetSize(
     case KindOfNull:
     case KindOfBoolean:
     case KindOfInt64:
-    case KindOfDouble: {
+    case KindOfDouble:
+    case KindOfFunc:
+    case KindOfClass: {
       // Counted as part sizeof(TypedValue)
       break;
     }
@@ -454,13 +468,15 @@ std::pair<int, double> tvGetSize(
         );
         size += obj_size_pair.first;
         if (obj->isRefCounted()) {
-          auto obj_ref_count = tvGetCount(tv) + ref_adjust;
-          FTRACE(3, " ObjectData tv: at {} with ref count {} after adjust {}\n",
+          auto obj_ref_count = int{tvGetCount(tv)};
+          FTRACE(3, " ObjectData tv: at {} with ref count {}\n",
             (void*)obj,
-            obj_ref_count,
-            ref_adjust
+            obj_ref_count
           );
-          if (obj_ref_count > 0) {
+          if (one_bit_refcount) {
+            sized += obj_size_pair.second;
+          } else {
+            assertx(obj_ref_count > 0);
             sized += obj_size_pair.second / (double)(obj_ref_count);
           }
         }
@@ -494,6 +510,8 @@ std::pair<int, double> tvGetSize(
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray: {
       ArrayData* arr = tv.m_data.parr;
@@ -509,23 +527,24 @@ std::pair<int, double> tvGetSize(
         flags
       );
       if (arr->isRefCounted()) {
-        auto arr_ref_count = tvGetCount(tv) + ref_adjust;
-        FTRACE(3, " ArrayData tv: at {} with ref count {} after adjust {}\n",
+        auto arr_ref_count = int{tvGetCount(tv)};
+        FTRACE(3, " ArrayData tv: at {} with ref count {}\n",
           (void*)arr,
-          arr_ref_count,
-          ref_adjust
+          arr_ref_count
         );
         size += sizeof(*arr);
         size += size_of_array_pair.first;
-        if (arr_ref_count > 0) {
+        if (one_bit_refcount) {
+          sized += sizeof(*arr);
+          sized += size_of_array_pair.second;
+        } else {
+          assertx(arr_ref_count > 0);
           sized += sizeof(*arr) / (double)arr_ref_count;
           sized += size_of_array_pair.second / (double)(arr_ref_count);
         }
       } else {
         // static or uncounted array
-        FTRACE(3, " ArrayData tv: at {} not refcounted, after adjust {}\n",
-          (void*)arr, ref_adjust
-        );
+        FTRACE(3, " ArrayData tv: at {} not refcounted\n", (void*)arr);
         size += sizeof(*arr);
         size += size_of_array_pair.first;
       }
@@ -533,31 +552,31 @@ std::pair<int, double> tvGetSize(
       break;
     }
     case KindOfResource: {
-      auto res_ref_count = tvGetCount(tv) + ref_adjust;
       auto resource = tv.m_data.pres;
       auto resource_size = resource->heapSize();
       size += resource_size;
-      if (res_ref_count > 0) {
-        sized += resource_size / (double)(res_ref_count);
+      if (one_bit_refcount) {
+        sized += resource_size;
+      } else {
+        assertx(tvGetCount(tv) > 0);
+        sized += resource_size / (double)(tvGetCount(tv));
       }
       break;
     }
     case KindOfRef: {
+      auto ref_ref_count = int{tvGetCount(tv)};
       RefData* ref = tv.m_data.pref;
       size += sizeof(*ref);
       sized += sizeof(*ref);
 
-      auto ref_ref_count = ref->getRealCount() + ref_adjust;
-      FTRACE(3, " RefData tv at {} that with ref count {} after adjust {}\n",
+      FTRACE(3, " RefData tv at {} that with ref count {}\n",
         (void*)ref,
-        ref_ref_count,
-        ref_adjust
+        ref_ref_count
       );
 
-      Cell* cell = ref->tv();
+      Cell* cell = ref->cell();
       auto size_of_tv_pair = tvGetSize(
         *cell,
-        0, /* ref_adjust */
         source,
         stack,
         paths,
@@ -567,7 +586,10 @@ std::pair<int, double> tvGetSize(
       );
       size += size_of_tv_pair.first;
 
-      if (ref_ref_count > 0) {
+      if (one_bit_refcount) {
+        sized += size_of_tv_pair.second;
+      } else {
+        assertx(ref_ref_count > 0);
         sized += size_of_tv_pair.second / (double)(ref_ref_count);
       }
       break;
@@ -577,24 +599,49 @@ std::pair<int, double> tvGetSize(
       StringData* str = tv.m_data.pstr;
       size += str->size();
       if (str->isRefCounted()) {
-        auto str_ref_count = tvGetCount(tv) + ref_adjust;
-        FTRACE(3, " String tv: {} string at {} ref count: {} after adjust {}\n",
+        auto str_ref_count = int{tvGetCount(tv)};
+        FTRACE(3, " String tv: {} string at {} ref count: {}\n",
           str->data(),
           (void*)str,
-          str_ref_count,
-          ref_adjust
+          str_ref_count
         );
-        if (str_ref_count > 0) {
+        if (one_bit_refcount) {
+          sized += str->size();
+        } else {
+          assertx(str_ref_count > 0);
           sized += (str->size() / (double)(str_ref_count));
         }
       } else {
         // static or uncounted string
-        FTRACE(3, " String tv: {} string at {} uncounted, after adjust {}\n",
-          str->data(), (void*)str, ref_adjust
+        FTRACE(3, " String tv: {} string at {} uncounted\n",
+          str->data(), (void*)str
         );
       }
       break;
     }
+    case KindOfClsMeth: {
+      auto const clsmeth = tv.m_data.pclsmeth;
+      auto const sz = sizeof(*clsmeth);
+      size += sz;
+      if (clsmeth->isRefCounted()) {
+        auto ref_count = int{tvGetCount(tv)};
+        FTRACE(3, " ClsMeth tv: clsmeth at {} with ref count {}\n",
+              (void*)clsmeth.get(), ref_count);
+        if (one_bit_refcount) {
+          sized += sz;
+        } else {
+          assertx(ref_count > 0);
+          sized += (sz / (double)(ref_count));
+        }
+      } else {
+        FTRACE(3, " ClsMeth tv: clsmeth at {} uncounted\n",
+              (void*)clsmeth.get());
+      }
+      break;
+    }
+
+    case KindOfRecord: // TODO(T41026982)
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
   }
 
   return std::make_pair(size, sized);
@@ -604,7 +651,8 @@ void tvGetStrings(
   TypedValue tv,
   ObjprofStrings* metrics,
   ObjprofStack* path,
-  std::unordered_set<void*>* pointers
+  std::unordered_set<void*>* pointers,
+  ObjprofValuePtrStack* val_stack
 ) {
   switch (tv.m_type) {
     case HPHP::KindOfUninit:
@@ -612,7 +660,10 @@ void tvGetStrings(
     case HPHP::KindOfNull:
     case HPHP::KindOfBoolean:
     case HPHP::KindOfInt64:
-    case HPHP::KindOfDouble: {
+    case HPHP::KindOfDouble:
+    case HPHP::KindOfFunc:
+    case HPHP::KindOfClass:
+    case HPHP::KindOfClsMeth: {
       // Not strings
       break;
     }
@@ -626,16 +677,18 @@ void tvGetStrings(
     case HPHP::KindOfDict:
     case HPHP::KindOfPersistentKeyset:
     case HPHP::KindOfKeyset:
+    case HPHP::KindOfPersistentShape:
+    case HPHP::KindOfShape:
     case HPHP::KindOfPersistentArray:
     case HPHP::KindOfArray: {
-      ArrayData* arr = tv.m_data.parr;
-      stringsOfArray(arr, metrics, path, pointers);
+      auto* arr = tv.m_data.parr;
+      stringsOfArray(arr, metrics, path, pointers, val_stack);
       break;
     }
     case HPHP::KindOfRef: {
       RefData* ref = tv.m_data.pref;
-      Cell* cell = ref->tv();
-      tvGetStrings(*cell, metrics, path, pointers);
+      Cell* cell = ref->cell();
+      tvGetStrings(*cell, metrics, path, pointers, val_stack);
       break;
     }
     case HPHP::KindOfPersistentString:
@@ -664,30 +717,8 @@ void tvGetStrings(
       );
       break;
     }
-  }
-}
-
-bool supportsToArray(const ObjectData* obj) {
-  if (obj->isCollection()) {
-    // we never want to toArray on a collection; if we're asking if we can,
-    // then something has gone horribly wrong
-    always_assert(false);
-  } else if (UNLIKELY(obj->getAttribute(ObjectData::CallToImpl))) {
-    return obj->instanceof(SimpleXMLElement_classof());
-  } else if (UNLIKELY(obj->instanceof(SystemLib::s_ArrayObjectClass))) {
-    return true;
-  } else if (UNLIKELY(obj->instanceof(SystemLib::s_ArrayIteratorClass))) {
-    return true;
-  } else if (UNLIKELY(obj->instanceof(c_Closure::classof()))) {
-    return true;
-  } else if (UNLIKELY(obj->instanceof(DateTimeData::getClass()))) {
-    return true;
-  } else {
-    if (LIKELY(!obj->hasInstanceDtor())) {
-      return true;
-    }
-
-    return false;
+    case HPHP::KindOfRecord: // TODO(T41026982)
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
   }
 }
 
@@ -717,7 +748,7 @@ std::pair<int, double> getObjSize(
     obj
   );
   int size;
-  if (UNLIKELY(obj->getAttribute(ObjectData::IsWaitHandle))) {
+  if (UNLIKELY(obj->isWaitHandle())) {
     size = asio_object_size(obj);
   } else {
     size = sizeof(ObjectData);
@@ -749,7 +780,6 @@ std::pair<int, double> getObjSize(
       auto pair = static_cast<const c_Pair*>(obj);
       auto elm_size_pair = tvGetSize(
         *pair->get(0),
-        0, /* ref_adjust */
         source,
         stack,
         paths,
@@ -761,7 +791,6 @@ std::pair<int, double> getObjSize(
       sized += elm_size_pair.second;
       elm_size_pair = tvGetSize(
         *pair->get(1),
-        0, /* ref_adjust */
         source,
         stack,
         paths,
@@ -774,45 +803,24 @@ std::pair<int, double> getObjSize(
     }
 
     if (stack) stack->pop_back();
+    FTRACE(3, "Popping {} frm stack in getObjSize. Stack size before pop {}\n",
+      val_stack->back(), val_stack->size()
+    );
+    val_stack->pop_back();
     return std::make_pair(size, sized);
   }
 
-  if (!supportsToArray(obj)) {
-    if (stack) stack->pop_back();
-    return std::make_pair(size, sized);
-  }
+  IteratePropMemOrderNoInc(
+    obj,
+    [&](Slot slot, const Class::Prop& prop, tv_rval val) {
+      FTRACE(2, "Skipping declared property key {}\n", prop.name->data());
 
-  // We're increasing ref count by calling toArray, need to adjust it later
-  auto arr = obj->toArray(); // TODO t12985984 avoid toArray.
-  bool is_packed = arr->hasPackedLayout();
-
-  for (ArrayIter iter(arr); iter; ++iter) {
-    auto const key_tv = *iter.first().asTypedValue();
-    auto const val_tv = iter.secondVal();
-    auto key = tvAsCVarRef(&key_tv).toString();
-    if (isStringType(key_tv.m_type)) {
-      // If the key begins with a NUL, it's a private or protected property.
-      // Read the class name from between the two NUL bytes.
-      //
-      // Note: Copied from object-data.cpp
-      if (!key.empty() && key[0] == '\0') {
-        int subLen = key.find('\0', 1) + 1;
-        key = key.substr(subLen);
-        FTRACE(3, "Resolved private prop name: {}\n", key.c_str());
+      FTRACE(2, "Counting value for key {}\n", prop.name->data());
+      if (stack) {
+        stack->push_back(std::string("Property:" + prop.name->toCppString()));
       }
-    }
-
-    bool is_declared = isStringType(key_tv.m_type) &&
-                       cls->lookupDeclProp(key.get()) != kInvalidSlot;
-
-    int key_size = 0;
-    double key_sized = 0;
-    if (!is_declared && !is_packed) {
-      FTRACE(2, "Counting string key {} because it's non-declared/packed\n",
-        key.c_str());
-      auto key_size_pair = tvGetSize(
-        key_tv,
-        -1, /* ref_adjust */
+      auto val_size_pair = tvGetSize(
+        val.tv(),
         source,
         stack,
         paths,
@@ -820,55 +828,79 @@ std::pair<int, double> getObjSize(
         exclude_classes,
         flags
       );
-      key_size = key_size_pair.first;
-      key_sized = key_size_pair.second;
-      if (stack) stack->push_back(std::string("Key:"+key));
-    } else {
-      FTRACE(2, "Skipping key {} because it's declared/packed\n", key.c_str());
-      if (is_packed) {
-        if (stack) stack->push_back(std::string("PropertyIndex"));
-      } else {
-        if (stack) stack->push_back(std::string("Property:" + key));
-      }
-    }
+      if (stack) stack->pop_back();
 
-    FTRACE(2, "Counting value for key {}\n", key.c_str());
-    auto val_size_pair = tvGetSize(
-      val_tv,
-      -1, /* ref_adjust */
-      source,
-      stack,
-      paths,
-      val_stack,
-      exclude_classes,
-      flags
-    );
-
-    FTRACE(2, "   Summary for key {} with size key={}:{}, val={}:{}\n",
-      key.c_str(),
-      key_size,
-      key_sized,
-      val_size_pair.first,
-      val_size_pair.second
-    );
-
-    if (histogram) {
-      auto histogram_key = std::make_pair(
-        cls,
-        is_packed ? "<index>" : std::string(key.c_str())
+      FTRACE(2, "   Summary for key {} with size key=0:0, val={}:{}\n",
+        prop.name->data(),
+        val_size_pair.first,
+        val_size_pair.second
       );
-      auto& metrics = (*histogram)[histogram_key];
-      metrics.instances += 1;
-      metrics.bytes += val_size_pair.first + key_size;
-      metrics.bytes_rel += val_size_pair.second + key_sized;
+
+      if (histogram) {
+        auto histogram_key = std::make_pair(cls, prop.name->toCppString());
+        auto& metrics = (*histogram)[histogram_key];
+        metrics.instances += 1;
+        metrics.bytes += val_size_pair.first;
+        metrics.bytes_rel += val_size_pair.second;
+      }
+
+      size += val_size_pair.first;
+      sized += val_size_pair.second;
+    },
+    [&](Cell key_tv, TypedValue val) {
+      auto key = tvCastToString(key_tv);
+      std::pair<int, double> key_size_pair = {0, 0.0};
+      if (isStringType(key_tv.m_type)) {
+        FTRACE(2, "Counting dynamic string key {}\n", key.c_str());
+        key_size_pair = tvGetSize(
+          key_tv,
+          source,
+          stack,
+          paths,
+          val_stack,
+          exclude_classes,
+          flags
+        );
+      } else {
+        assertx(isIntType(key_tv.m_type));
+        FTRACE(2, "Skipping dynamic int key {}\n", key.c_str());
+      }
+
+      FTRACE(2, "Counting value for key {}\n", key.c_str());
+      if (stack) stack->push_back(std::string("Key:" + key));
+      auto val_size_pair = tvGetSize(
+        val,
+        source,
+        stack,
+        paths,
+        val_stack,
+        exclude_classes,
+        flags
+      );
+      if (stack) stack->pop_back();
+
+      FTRACE(2, "   Summary for key {} with size key={}:{}, val={}:{}\n",
+        key.c_str(),
+        key_size_pair.first,
+        key_size_pair.second,
+        val_size_pair.first,
+        val_size_pair.second
+      );
+
+      if (histogram) {
+        auto histogram_key = std::make_pair(cls, key.toCppString());
+        auto& metrics = (*histogram)[histogram_key];
+        metrics.instances += 1;
+        metrics.bytes += key_size_pair.first + val_size_pair.first;
+        metrics.bytes_rel += key_size_pair.second + val_size_pair.second;
+      }
+
+      size += key_size_pair.first + val_size_pair.first;
+      sized += key_size_pair.second + val_size_pair.second;
     }
+  );
 
-    size += val_size_pair.first + key_size;
-    sized += val_size_pair.second + key_sized;
-    if (stack) stack->pop_back();
-  }
   if (stack) stack->pop_back();
-
   FTRACE(3, "Popping {} frm stack in getObjSize. Stack size before pop {}\n",
     val_stack->back(), val_stack->size()
   );
@@ -883,72 +915,57 @@ void getObjStrings(
   ObjprofStack* path,
   std::unordered_set<void*>* pointers
 ) {
-  Class* cls = obj->getVMClass();
   FTRACE(1, "Getting strings for type {} at {}\n",
     obj->getClassName().data(),
     obj
   );
 
+  // used for recursion protection
+  ObjprofValuePtrStack val_stack;
+
   if (obj->isCollection()) {
     auto const arr = collections::asArray(obj);
     path->push_back(obj->getClassName().data());
     if (arr) {
-      stringsOfArray(arr, metrics, path, pointers);
+      stringsOfArray(arr, metrics, path, pointers, &val_stack);
     } else {
-      assertx(collections::isType(cls, CollectionType::Pair));
+      assertx(collections::isType(obj->getVMClass(), CollectionType::Pair));
       auto pair = static_cast<const c_Pair*>(obj);
-      tvGetStrings(*pair->get(0), metrics, path, pointers);
-      tvGetStrings(*pair->get(1), metrics, path, pointers);
+      tvGetStrings(*pair->get(0), metrics, path, pointers, &val_stack);
+      tvGetStrings(*pair->get(1), metrics, path, pointers, &val_stack);
     }
     path->pop_back();
-    return;
-  }
-
-  if (!supportsToArray(obj)) {
     return;
   }
 
   path->push_back(obj->getClassName().data());
-  auto arr = obj->toArray(); // TODO t12985984 avoid toArray.
-  bool is_packed = arr->hasPackedLayout();
-
-  for (ArrayIter iter(arr); iter; ++iter) {
-    auto first = iter.first();
-    auto key = first.toString();
-    auto key_tv = *first.asTypedValue();
-    auto val_tv = iter.secondVal();
-
-    if (isStringType(key_tv.m_type)) {
-      // If the key begins with a NUL, it's a private or protected property.
-      // Read the class name from between the two NUL bytes.
-      //
-      // Note: Copied from object-data.cpp
-      if (!key.empty() && key[0] == '\0') {
-        int subLen = key.find('\0', 1) + 1;
-        key = key.substr(subLen);
+  IteratePropMemOrderNoInc(
+    obj,
+    [&](Slot slot, const Class::Prop& prop, tv_rval val) {
+      FTRACE(2, "Skipping declared property key {}\n", prop.name->data());
+      path->push_back(prop.name->toCppString());
+      FTRACE(2, "Inspecting value for key {}\n", prop.name->data());
+      tvGetStrings(val.tv(), metrics, path, pointers, &val_stack);
+      path->pop_back();
+      FTRACE(2, "   Finished for key/val {}\n", prop.name->data());
+    },
+    [&](Cell key_tv, TypedValue val) {
+      auto key = tvCastToString(key_tv);
+      if (isStringType(key_tv.m_type)) {
+        FTRACE(2, "Inspecting dynamic string key {}\n", key.c_str());
+        tvGetStrings(key_tv, metrics, path, pointers, &val_stack);
+        path->push_back(std::string("[\"" + key + "\"]"));
+      } else {
+        assertx(isIntType(key_tv.m_type));
+        FTRACE(2, "Skipping dynamic int key {}\n", key.c_str());
+        path->push_back(key.toCppString());
       }
+      FTRACE(2, "Inspecting value for key {}\n", key.c_str());
+      tvGetStrings(val, metrics, path, pointers, &val_stack);
+      path->pop_back();
+      FTRACE(2, "   Finished for key/val {}\n", key.c_str());
     }
-
-    bool is_declared = isStringType(key_tv.m_type) &&
-                       cls->lookupDeclProp(key.get()) != kInvalidSlot;
-
-    if (!is_declared && !is_packed) {
-      FTRACE(2, "Inspecting key {} because it's non-declared/packed\n",
-        key.c_str());
-      tvGetStrings(key_tv, metrics, path, pointers);
-      path->push_back(std::string("[\"" + key + "\"]"));
-    } else {
-      FTRACE(2, "Skipping key {} because it's declared/packed\n", key.c_str());
-      path->push_back(std::string(key));
-    }
-
-    FTRACE(2, "Inspecting value for key {}\n", key.c_str());
-    tvGetStrings(val_tv, metrics, path, pointers);
-    path->pop_back();
-    FTRACE(2, "   Finished for key/val {}\n",
-      key.c_str()
-    );
-  }
+  );
   path->pop_back();
 }
 
@@ -960,17 +977,18 @@ Array HHVM_FUNCTION(objprof_get_strings, int min_dup) {
   ObjprofStrings metrics;
 
   std::unordered_set<void*> pointers;
-  MM().forEachObject([&](const ObjectData* obj) {
+  tl_heap->forEachObject([&](const ObjectData* obj) {
+    if (obj->hasZeroRefs()) return;
     ObjprofStack path;
     getObjStrings(obj, &metrics, &path, &pointers);
   });
 
   // Create response
-  ArrayInit objs(metrics.size(), ArrayInit::Map{});
+  DArrayInit objs(metrics.size());
   for (auto& it : metrics) {
     if (it.second.dups < min_dup) continue;
 
-    auto metrics_val = make_map_array(
+    auto metrics_val = make_darray(
       s_dups, Variant(it.second.dups),
       s_refs, Variant(it.second.refs),
       s_srefs, Variant(it.second.srefs),
@@ -1002,8 +1020,9 @@ Array HHVM_FUNCTION(objprof_get_data,
     exclude_classes.insert(iter.second().toString().data());
   }
 
-  MM().forEachObject([&](const ObjectData* obj) {
+  tl_heap->forEachObject([&](const ObjectData* obj) {
     if (!isObjprofRoot(obj, (ObjprofFlags)flags, exclude_classes)) return;
+    if (obj->hasZeroRefs()) return;
     std::vector<const void*> val_stack;
     auto objsizePair = getObjSize(
       obj,
@@ -1034,7 +1053,7 @@ Array HHVM_FUNCTION(objprof_get_data,
   });
 
   // Create response
-  ArrayInit objs(histogram.size(), ArrayInit::Map{});
+  DArrayInit objs(histogram.size());
   for (auto const& it : histogram) {
     auto c = it.first;
     auto cls = c.first;
@@ -1044,7 +1063,7 @@ Array HHVM_FUNCTION(objprof_get_data,
       key += "::" + c.second;
     }
 
-    auto metrics_val = make_map_array(
+    auto metrics_val = make_darray(
       s_instances, Variant(it.second.instances),
       s_bytes, Variant(it.second.bytes),
       s_bytes_rel, it.second.bytes_rel,
@@ -1072,8 +1091,9 @@ Array HHVM_FUNCTION(objprof_get_paths,
     exclude_classes.insert(iter.second().toString().data());
   }
 
-  MM().forEachObject([&](const ObjectData* obj) {
+  tl_heap->forEachObject([&](const ObjectData* obj) {
       if (!isObjprofRoot(obj, (ObjprofFlags)flags, exclude_classes)) return;
+      if (obj->hasZeroRefs()) return;
       auto cls = obj->getVMClass();
       auto& metrics = histogram[std::make_pair(cls, "")];
       ObjprofStack stack;
@@ -1111,7 +1131,7 @@ Array HHVM_FUNCTION(objprof_get_paths,
        objsizePair.first,
        objsizePair.second
       );
-      assert(stack.size() == 0);
+      assertx(stack.size() == 0);
   });
 
   NamedEntity::foreach_class([&](Class* cls) {
@@ -1124,7 +1144,7 @@ Array HHVM_FUNCTION(objprof_get_paths,
     for (Slot i = 0; i < nSProps; ++i) {
       auto const& prop = staticProps[i];
       auto tv = cls->getSPropData(i);
-      if (tv == nullptr) {
+      if (tv == nullptr || tv->m_type == KindOfUninit) {
         continue;
       }
 
@@ -1149,7 +1169,6 @@ Array HHVM_FUNCTION(objprof_get_paths,
       stack.push_back(refname);
       tvGetSize(
         *tv,
-        -1, /* ref_adjust */
         nullptr, /* source */
         &stack,
         &pathsToObject,
@@ -1171,26 +1190,26 @@ Array HHVM_FUNCTION(objprof_get_paths,
           aggReferral.sources.insert(cls);
         }
       }
-      assert(stack.size() == 0);
+      assertx(stack.size() == 0);
     }
   });
 
   // Create response
-  ArrayInit objs(histogram.size(), ArrayInit::Map{});
+  DArrayInit objs(histogram.size());
   for (auto const& it : histogram) {
     auto c = it.first;
     auto clsPaths = pathsToClass[c.first];
-    ArrayInit pathsArr(clsPaths.size(), ArrayInit::Map{});
+    DArrayInit pathsArr(clsPaths.size());
     for (auto const& pathIt : clsPaths) {
       auto pathStr = pathIt.first;
-      auto path_metrics_val = make_map_array(
+      auto path_metrics_val = make_darray(
         s_refs, pathIt.second.refs
       );
 
       pathsArr.setValidKey(Variant(pathStr), Variant(path_metrics_val));
     }
 
-    auto metrics_val = make_map_array(
+    auto metrics_val = make_darray(
       s_instances, Variant(it.second.instances),
       s_bytes, Variant(it.second.bytes),
       s_bytes_rel, it.second.bytes_rel,
@@ -1269,7 +1288,7 @@ void HHVM_FUNCTION(set_mem_threshold_callback,
   g_context->m_memThresholdCallback = callback;
 
   // Notify MM that surprise flag should be set upon reaching the threshold
-  MM().setMemThresholdCallback(threshold);
+  tl_heap->setMemThresholdCallback(threshold);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

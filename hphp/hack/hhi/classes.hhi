@@ -1,11 +1,10 @@
-<?hh // decl /* -*- mode: php -*- */
+<?hh /* -*- mode: php -*- */
 /**
  * Copyright (c) 2014, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  */
 
@@ -95,7 +94,7 @@ final class AsyncGenerator<Tk, +Tv, -Ts>
   public function raise(Exception $e): Awaitable<?(Tk, Tv)> {}
 }
 
-final class Generator<Tk, +Tv, -Ts> implements KeyedIterator<Tk, Tv> {
+final class Generator<+Tk, +Tv, -Ts> implements KeyedIterator<Tk, Tv> {
   public function getOrigFuncName(): string {}
   public function current(): Tv {}
   public function key(): Tk {}
@@ -106,25 +105,19 @@ final class Generator<Tk, +Tv, -Ts> implements KeyedIterator<Tk, Tv> {
   public function rewind(): void {}
 }
 
-abstract class WaitHandle<+T> implements Awaitable<T> {
-  public function getWaitHandle(): this {}
-  public static function setOnIOWaitEnterCallback(?(function(): void) $callback) {}
-  public static function setOnIOWaitExitCallback(?(function(): void) $callback) {}
-  public static function setOnJoinCallback(?(function(WaitableWaitHandle<mixed>): void) $callback) {}
+<<__Sealed(
+  AwaitAllWaitHandle::class,
+  ConditionWaitHandle::class,
+  ExternalThreadEventWaitHandle::class,
+  RescheduleWaitHandle::class,
+  ResumableWaitHandle::class,
+  SleepWaitHandle::class
+)>>
+abstract class WaitableWaitHandle<+T> extends Awaitable<T> {
+}
+final class StaticWaitHandle<+T> extends Awaitable<T> {
 }
 
-final class StaticWaitHandle<+T> extends WaitHandle<T> {
-}
-
-abstract class WaitableWaitHandle<+T> extends WaitHandle<T> {
-}
-
-abstract class ResumableWaitHandle<+T> extends WaitableWaitHandle<T> {
-  public static function setOnCreateCallback(?(function(AsyncFunctionWaitHandle<mixed>, WaitableWaitHandle<mixed>): void) $callback) {}
-  public static function setOnAwaitCallback(?(function(AsyncFunctionWaitHandle<mixed>, WaitableWaitHandle<mixed>): void) $callback) {}
-  public static function setOnSuccessCallback(?(function(AsyncFunctionWaitHandle<mixed>, mixed): void) $callback) {}
-  public static function setOnFailCallback(?(function(AsyncFunctionWaitHandle<mixed>, Exception): void) $callback) {}
-}
 
 final class AsyncFunctionWaitHandle<+T> extends ResumableWaitHandle<T> {
 }
@@ -133,29 +126,52 @@ final class AsyncGeneratorWaitHandle<Tk, +Tv>
   extends ResumableWaitHandle<?(Tk, Tv)> {
 }
 
+
+<<__Sealed(StaticWaitHandle::class, WaitableWaitHandle::class)>>
+abstract class Awaitable<+T> {
+  public static function setOnIOWaitEnterCallback(?(function(): void) $callback) {}
+  public static function setOnIOWaitExitCallback(?(function(): void) $callback) {}
+  public static function setOnJoinCallback(?(function(WaitableWaitHandle<mixed>): void) $callback) {}
+}
+
+<<__Sealed(AsyncFunctionWaitHandle::class, AsyncGeneratorWaitHandle::class)>>
+abstract class ResumableWaitHandle<+T> extends WaitableWaitHandle<T> {
+  public static function setOnCreateCallback(?(function(AsyncFunctionWaitHandle<mixed>, WaitableWaitHandle<mixed>): void) $callback) {}
+  public static function setOnAwaitCallback(?(function(AsyncFunctionWaitHandle<mixed>, WaitableWaitHandle<mixed>): void) $callback) {}
+  public static function setOnSuccessCallback(?(function(AsyncFunctionWaitHandle<mixed>, mixed): void) $callback) {}
+  public static function setOnFailCallback(?(function(AsyncFunctionWaitHandle<mixed>, Exception): void) $callback) {}
+}
+
 final class AwaitAllWaitHandle extends WaitableWaitHandle<void> {
+  <<__PHPStdLib>>
   public static function fromArray<T>(
-    array<WaitHandle<T>> $deps
-  ): WaitHandle<void>;
-  public static function fromDict<Tk, Tv>(
-    dict<Tk, WaitHandle<Tv>> $deps
-  ): WaitHandle<void>;
-  public static function fromMap<Tk, Tv>(
-    ConstMap<Tk, WaitHandle<Tv>> $deps
-  ): WaitHandle<void>;
+    array<Awaitable<T>> $deps
+  ): Awaitable<void>;
+  public static function fromVArray<T>(
+    varray<Awaitable<T>> $deps
+  ): Awaitable<void>;
+  public static function fromDArray<Tk, Tv>(
+    darray<Tk, Awaitable<Tv>> $deps
+  ): Awaitable<void>;
+  public static function fromDict<Tk as arraykey, Tv>(
+    dict<Tk, Awaitable<Tv>> $deps
+  ): Awaitable<void>;
+  public static function fromMap<Tk as arraykey, Tv>(
+    ConstMap<Tk, Awaitable<Tv>> $deps
+  ): Awaitable<void>;
   public static function fromVec<T>(
-    vec<WaitHandle<T>> $deps
-  ): WaitHandle<void>;
+    vec<Awaitable<T>> $deps
+  ): Awaitable<void>;
   public static function fromVector<T>(
-    ConstVector<WaitHandle<T>> $deps
-  ): WaitHandle<void>;
+    ConstVector<Awaitable<T>> $deps
+  ): Awaitable<void>;
   public static function setOnCreateCallback(
     ?(function(AwaitAllWaitHandle, Vector<mixed>): void) $callback
   ): void {}
 }
 
 final class ConditionWaitHandle<T> extends WaitableWaitHandle<T> {
-  public static function create(WaitHandle<void> $child): ConditionWaitHandle<T> {}
+  public static function create(Awaitable<void> $child): ConditionWaitHandle<T> {}
   public static function setOnCreateCallback(?(function(ConditionWaitHandle<T>, WaitableWaitHandle<void>): void) $callback) {}
   public function succeed(T $result): void {}
   public function fail(Exception $exception): void {}
@@ -179,12 +195,4 @@ final class ExternalThreadEventWaitHandle<+T> extends WaitableWaitHandle<T> {
   public static function setOnFailCallback(?(function(ExternalThreadEventWaitHandle<mixed>, Exception): void) $callback) {}
 }
 
-/*
- * stdClass is not really final. However, because stdClass has no
- * properties of its own and is the result of casting an array to an
- * object, it is exempt from 'property must exist' checks and so should not
- * be getting extended.
- */
 final class stdClass {}
-
-class __PHP_Incomplete_Class {}

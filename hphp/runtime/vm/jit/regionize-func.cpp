@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <sstream>
 #include <vector>
 
 #include "hphp/util/assertions.h"
@@ -128,11 +129,13 @@ void markCovered(const TransCFG& cfg, const RegionDescPtr region,
 
   // Mark all outgoing arcs from the region to a head node as covered.
   for (auto& b : region->blocks()) {
-    for (auto arc : cfg.outArcs(b->id())) {
-      if (heads.count(arc->dst())) {
-        auto dstRegionEntryId = headToRegion[arc->dst()]->entry()->id();
-        markCoveredArc(arc->src(), dstRegionEntryId, cfg,
-                       *headToRegion[arc->dst()], coveredArcs);
+    for (auto srcId : findRetransSet(*region, b->id())) {
+      for (auto arc : cfg.outArcs(srcId)) {
+        if (heads.count(arc->dst())) {
+          auto dstRegionEntryId = headToRegion[arc->dst()]->entry()->id();
+          markCoveredArc(arc->src(), dstRegionEntryId, cfg,
+                         *headToRegion[arc->dst()], coveredArcs);
+        }
       }
     }
   }
@@ -291,7 +294,7 @@ RegionVec regionizeFunc(const Func* func, std::string& transCFGAnnot) {
       outFile.close();
     }
   }
-  if (mcgen::dumpTCAnnotation(*func, TransKind::Optimize) &&
+  if (mcgen::dumpTCAnnotation(TransKind::Optimize) &&
       RuntimeOption::EvalDumpRegion >= 2) {
     std::ostringstream cfgStream;
     cfg.print(cfgStream, funcId, profData);
@@ -331,6 +334,23 @@ RegionVec regionizeFunc(const Func* func, std::string& transCFGAnnot) {
     if (!coveredNodes.count(node) ||
         !allArcsCovered(cfg.inArcs(node),  coveredArcs)) {
       auto newHead = node;
+      // If the weight of node is too low, we mark it and its incoming arcs as
+      // covered but skip generating a region starting at it to reduce code
+      // size.  This node will probably trigger a live translation instead.
+      auto const minBlkPerc = RuntimeOption::EvalJitPGOMinBlockCountPercent;
+      if (cfg.weight(node) < cfg.weight(nodes[0]) * minBlkPerc / 100) {
+        FTRACE(3, "regionizeFunc: skipping forming a region to cover node {}\n",
+               newHead);
+        coveredNodes.insert(node);
+        auto const& inArcs = cfg.inArcs(node);
+        coveredArcs.insert(inArcs.begin(), inArcs.end());
+        for (auto outArc : cfg.outArcs(node)) {
+          if (heads.count(outArc->dst())) {
+            coveredArcs.insert(outArc);
+          }
+        }
+        continue;
+      }
       FTRACE(6, "regionizeFunc: selecting trace to cover node {}\n", newHead);
       RegionDescPtr region;
       HotTransContext ctx;

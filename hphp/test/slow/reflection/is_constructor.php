@@ -34,8 +34,12 @@ function main() {
     $out[$class] = $rc->getMethod('__construct')->isConstructor();
   }
 
-  ksort($out);
+  ksort(&$out);
   var_dump($out);
 }
 
+
+<<__EntryPoint>>
+function main_is_constructor() {
 main();
+}

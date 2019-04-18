@@ -1,5 +1,8 @@
 <?php
-if (false) {
-  class String {}
-}
+
+
+
+
+class String {}
+
 echo "Done\n";

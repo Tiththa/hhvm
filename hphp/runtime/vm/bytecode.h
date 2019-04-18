@@ -20,13 +20,17 @@
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/rds-util.h"
+#include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/base/tv-arith.h"
 #include "hphp/runtime/base/tv-conversions.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/tv-refcount.h"
+
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/class.h"
+#include "hphp/runtime/vm/class-meth-data-ref.h"
+#include "hphp/runtime/vm/cls-ref.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/name-value-table.h"
 #include "hphp/runtime/vm/unit.h"
@@ -53,26 +57,26 @@ struct Resumable;
 // The old value of lhs is decrefed. Caller must call tvToCell() if lhs or
 // rhs might be a ref.
 ALWAYS_INLINE
-void setopBody(Cell* lhs, SetOpOp op, Cell* rhs) {
-  assert(cellIsPlausible(*lhs));
-  assert(cellIsPlausible(*rhs));
+void setopBody(tv_lval lhs, SetOpOp op, Cell* rhs) {
+  assertx(cellIsPlausible(*lhs));
+  assertx(cellIsPlausible(*rhs));
 
   switch (op) {
-  case SetOpOp::PlusEqual:      cellAddEq(*lhs, *rhs); return;
-  case SetOpOp::MinusEqual:     cellSubEq(*lhs, *rhs); return;
-  case SetOpOp::MulEqual:       cellMulEq(*lhs, *rhs); return;
-  case SetOpOp::DivEqual:       cellDivEq(*lhs, *rhs); return;
-  case SetOpOp::PowEqual:       cellPowEq(*lhs, *rhs); return;
-  case SetOpOp::ModEqual:       cellModEq(*lhs, *rhs); return;
-  case SetOpOp::ConcatEqual:    cellConcatEq(*lhs, *rhs); return;
-  case SetOpOp::AndEqual:       cellBitAndEq(*lhs, *rhs); return;
-  case SetOpOp::OrEqual:        cellBitOrEq(*lhs, *rhs);  return;
-  case SetOpOp::XorEqual:       cellBitXorEq(*lhs, *rhs); return;
-  case SetOpOp::SlEqual:        cellShlEq(*lhs, *rhs); return;
-  case SetOpOp::SrEqual:        cellShrEq(*lhs, *rhs); return;
-  case SetOpOp::PlusEqualO:     cellAddEqO(*lhs, *rhs); return;
-  case SetOpOp::MinusEqualO:    cellSubEqO(*lhs, *rhs); return;
-  case SetOpOp::MulEqualO:      cellMulEqO(*lhs, *rhs); return;
+  case SetOpOp::PlusEqual:      cellAddEq(lhs, *rhs); return;
+  case SetOpOp::MinusEqual:     cellSubEq(lhs, *rhs); return;
+  case SetOpOp::MulEqual:       cellMulEq(lhs, *rhs); return;
+  case SetOpOp::DivEqual:       cellDivEq(lhs, *rhs); return;
+  case SetOpOp::PowEqual:       cellPowEq(lhs, *rhs); return;
+  case SetOpOp::ModEqual:       cellModEq(lhs, *rhs); return;
+  case SetOpOp::ConcatEqual:    cellConcatEq(lhs, *rhs); return;
+  case SetOpOp::AndEqual:       cellBitAndEq(lhs, *rhs); return;
+  case SetOpOp::OrEqual:        cellBitOrEq(lhs, *rhs);  return;
+  case SetOpOp::XorEqual:       cellBitXorEq(lhs, *rhs); return;
+  case SetOpOp::SlEqual:        cellShlEq(lhs, *rhs); return;
+  case SetOpOp::SrEqual:        cellShrEq(lhs, *rhs); return;
+  case SetOpOp::PlusEqualO:     cellAddEqO(lhs, *rhs); return;
+  case SetOpOp::MinusEqualO:    cellSubEqO(lhs, *rhs); return;
+  case SetOpOp::MulEqualO:      cellMulEqO(lhs, *rhs); return;
   }
   not_reached();
 }
@@ -104,6 +108,9 @@ struct ExtraArgs {
    */
   static void deallocate(ActRec*);
   static void deallocate(ExtraArgs*, unsigned numArgs);
+
+  // Just free the memory, don't dec-ref anything.
+  static void deallocateRaw(ExtraArgs*);
 
   /**
    * Make a copy of ExtraArgs.
@@ -173,8 +180,8 @@ struct VarEnv {
   void enterFP(ActRec* oldFP, ActRec* newFP);
   void exitFP(ActRec* fp);
 
-  void set(const StringData* name, const TypedValue* tv);
-  void bind(const StringData* name, TypedValue* tv);
+  void set(const StringData* name, tv_rval tv);
+  void bind(const StringData* name, tv_lval tv);
   void setWithRef(const StringData* name, TypedValue* tv);
   TypedValue* lookup(const StringData* name);
   TypedValue* lookupAdd(const StringData* name);
@@ -248,16 +255,8 @@ void debuggerPreventReturnsToTC();
 
 ///////////////////////////////////////////////////////////////////////////////
 
-inline int32_t arOffset(const ActRec* ar, const ActRec* other) {
-  return (intptr_t(other) - intptr_t(ar)) / sizeof(TypedValue);
-}
-
 inline ActRec* arAtOffset(const ActRec* ar, int32_t offset) {
   return (ActRec*)(intptr_t(ar) + intptr_t(offset * sizeof(TypedValue)));
-}
-
-inline ActRec* arFromSpOffset(const ActRec *sp, int32_t offset) {
-  return arAtOffset(sp, offset);
 }
 
 void frame_free_locals_no_hook(ActRec* fp);
@@ -276,7 +275,7 @@ void frame_free_locals_no_hook(ActRec* fp);
   ([&] {                                                                \
     TypedValue val_;                                                    \
     new (&val_) Variant(x);                                             \
-    assert(val_.m_type != KindOfRef && val_.m_type != KindOfUninit);    \
+    assertx(!isRefType(val_.m_type) && val_.m_type != KindOfUninit);    \
     return val_;                                                        \
   }())
 
@@ -300,13 +299,14 @@ struct CallCtx {
   ObjectData* this_;
   Class* cls;
   StringData* invName;
+  bool dynamic;
 };
 
 constexpr size_t kNumIterCells = sizeof(Iter) / sizeof(Cell);
 constexpr size_t kNumActRecCells = sizeof(ActRec) / sizeof(Cell);
 
 constexpr size_t clsRefCountToCells(size_t n) {
-  return (n * sizeof(LowPtr<Class>*) + sizeof(Cell) - 1) / sizeof(Cell);
+  return (n * sizeof(cls_ref) + sizeof(Cell) - 1) / sizeof(Cell);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -326,37 +326,6 @@ constexpr int kStackCheckLeafPadding = 20;
 constexpr int kStackCheckReenterPadding = 9;
 constexpr int kStackCheckPadding = kStackCheckLeafPadding +
   kStackCheckReenterPadding;
-
-constexpr int kInvalidRaiseLevel = -1;
-constexpr int kInvalidNesting = -1;
-
-struct Fault {
-  explicit Fault()
-    : m_raiseNesting(kInvalidNesting),
-      m_raiseFrame(nullptr),
-      m_raiseOffset(kInvalidOffset),
-      m_handledCount(0) {}
-
-  ObjectData* m_userException;
-
-  // The VM nesting at the moment where the exception was thrown.
-  int m_raiseNesting;
-  // The frame where the exception was thrown.
-  ActRec* m_raiseFrame;
-  // The offset within the frame where the exception was thrown.
-  // This value is updated when a fault is updated when exception
-  // chaining takes place. In this case the raise offset of the newly
-  // thrown exception is set to the offset of the previously thrown
-  // exception. The offset is also updated when the exception
-  // propagates outside its current frame.
-  Offset m_raiseOffset;
-  // The number of EHs that were already examined for this exception.
-  // This is used to ensure that the same exception handler is not
-  // run twice for the same exception. The unwinder may be entered
-  // multiple times for the same fault as a result of calling Unwind.
-  // The field is used to skip through the EHs that were already run.
-  int m_handledCount;
-};
 
 // Interpreter evaluation stack.
 struct Stack {
@@ -414,16 +383,16 @@ public:
   // for certain that decrementing a refcount is unnecessary.
   ALWAYS_INLINE
   void popX() {
-    assert(m_top != m_base);
-    assert(!isRefcountedType(m_top->m_type));
+    assertx(m_top != m_base);
+    assertx(!isRefcountedType(m_top->m_type));
     tvDebugTrash(m_top);
     m_top++;
   }
 
   ALWAYS_INLINE
   void popC() {
-    assert(m_top != m_base);
-    assert(cellIsPlausible(*m_top));
+    assertx(m_top != m_base);
+    assertx(cellIsPlausible(*m_top));
     tvDecRefGen(m_top);
     tvDebugTrash(m_top);
     m_top++;
@@ -431,8 +400,8 @@ public:
 
   ALWAYS_INLINE
   void popV() {
-    assert(m_top != m_base);
-    assert(refIsPlausible(*m_top));
+    assertx(m_top != m_base);
+    assertx(refIsPlausible(*m_top));
     tvDecRefRef(m_top);
     tvDebugTrash(m_top);
     m_top++;
@@ -440,16 +409,16 @@ public:
 
   ALWAYS_INLINE
   void popU() {
-    assert(m_top != m_base);
-    assert(m_top->m_type == KindOfUninit);
+    assertx(m_top != m_base);
+    assertx(m_top->m_type == KindOfUninit);
     tvDebugTrash(m_top);
     ++m_top;
   }
 
   ALWAYS_INLINE
   void popTV() {
-    assert(m_top != m_base);
-    assert(tvIsPlausible(*m_top));
+    assertx(m_top != m_base);
+    assertx(tvIsPlausible(*m_top));
     tvDecRefGen(m_top);
     tvDebugTrash(m_top);
     m_top++;
@@ -460,7 +429,7 @@ public:
   // followed by discardAR() or ret().
   ALWAYS_INLINE
   void popAR() {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     ActRec* ar = (ActRec*)m_top;
     if (ar->func()->cls() && ar->hasThis()) decRefObj(ar->getThis());
     if (ar->magicDispatch()) {
@@ -471,14 +440,14 @@ public:
 
   ALWAYS_INLINE
   void discardAR() {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     if (debug) {
       for (int i = 0; i < kNumActRecCells; ++i) {
         tvDebugTrash(m_top + i);
       }
     }
     m_top += kNumActRecCells;
-    assert((uintptr_t)m_top <= (uintptr_t)m_base);
+    assertx((uintptr_t)m_top <= (uintptr_t)m_base);
   }
 
   ALWAYS_INLINE
@@ -491,19 +460,19 @@ public:
       }
     }
     m_top += kNumActRecCells - 1;
-    assert((uintptr_t)m_top <= (uintptr_t)m_base);
+    assertx((uintptr_t)m_top <= (uintptr_t)m_base);
   }
 
   ALWAYS_INLINE
   void discard() {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     tvDebugTrash(m_top);
     m_top++;
   }
 
   ALWAYS_INLINE
   void ndiscard(size_t n) {
-    assert((uintptr_t)&m_top[n] <= (uintptr_t)m_base);
+    assertx((uintptr_t)&m_top[n] <= (uintptr_t)m_base);
     if (debug) {
       for (int i = 0; i < n; ++i) {
         tvDebugTrash(m_top + i);
@@ -513,10 +482,21 @@ public:
   }
 
   ALWAYS_INLINE
+  void trim(Cell* c) {
+    assertx(c <= m_base);
+    assertx(m_top <= c);
+    if (debug) {
+      while (m_top < c) tvDebugTrash(m_top++);
+    } else {
+      m_top = c;
+    }
+  }
+
+  ALWAYS_INLINE
   void dup() {
-    assert(m_top != m_base);
-    assert(m_top != m_elms);
-    assert(m_top->m_type != KindOfRef);
+    assertx(m_top != m_base);
+    assertx(m_top != m_elms);
+    assertx(!isRefType(m_top->m_type));
     Cell* fr = m_top;
     m_top--;
     Cell* to = m_top;
@@ -525,41 +505,35 @@ public:
 
   ALWAYS_INLINE
   void box() {
-    assert(m_top != m_base);
-    assert(m_top->m_type != KindOfRef);
-    tvBox(m_top);
-  }
-
-  ALWAYS_INLINE
-  void unbox() {
-    assert(m_top != m_base);
-    tvUnbox(m_top);
+    assertx(m_top != m_base);
+    assertx(!isRefType(m_top->m_type));
+    tvBox(*m_top);
   }
 
   ALWAYS_INLINE
   void pushUninit() {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
-    tvWriteUninit(m_top);
+    tvWriteUninit(*m_top);
   }
 
   ALWAYS_INLINE
   void pushNull() {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
-    tvWriteNull(m_top);
+    tvWriteNull(*m_top);
   }
 
   ALWAYS_INLINE
   void pushNullUninit() {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     m_top->m_data.num = 0;
     m_top->m_type = KindOfUninit;
   }
 
   template<DataType t, class T> void pushVal(T v) {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<t>(v);
   }
@@ -571,15 +545,15 @@ public:
   // already adjusted the refcount appropriately
   ALWAYS_INLINE
   void pushStringNoRc(StringData* s) {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfString>(s);
   }
 
   ALWAYS_INLINE
   void pushStaticString(const StringData* s) {
-    assert(s->isStatic()); // No need to call s->incRefCount().
-    assert(m_top != m_elms);
+    assertx(s->isStatic()); // No need to call s->incRefCount().
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfPersistentString>(s);
   }
@@ -588,96 +562,96 @@ public:
   // already adjusted the refcount appropriately
   ALWAYS_INLINE
   void pushArrayNoRc(ArrayData* a) {
-    assert(a->isPHPArray());
-    assert(m_top != m_elms);
+    assertx(a->isPHPArray());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfArray>(a);
   }
 
   ALWAYS_INLINE
   void pushVecNoRc(ArrayData* a) {
-    assert(a->isVecArray());
-    assert(m_top != m_elms);
+    assertx(a->isVecArray());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfVec>(a);
   }
 
   ALWAYS_INLINE
   void pushDictNoRc(ArrayData* a) {
-    assert(a->isDict());
-    assert(m_top != m_elms);
+    assertx(a->isDict());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfDict>(a);
   }
 
   ALWAYS_INLINE
   void pushKeysetNoRc(ArrayData* a) {
-    assert(a->isKeyset());
-    assert(m_top != m_elms);
+    assertx(a->isKeyset());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfKeyset>(a);
   }
 
   ALWAYS_INLINE
   void pushArray(ArrayData* a) {
-    assert(a);
+    assertx(a);
     pushArrayNoRc(a);
     a->incRefCount();
   }
 
   ALWAYS_INLINE
   void pushVec(ArrayData* a) {
-    assert(a);
+    assertx(a);
     pushVecNoRc(a);
     a->incRefCount();
   }
 
   ALWAYS_INLINE
   void pushDict(ArrayData* a) {
-    assert(a);
+    assertx(a);
     pushDictNoRc(a);
     a->incRefCount();
   }
 
   ALWAYS_INLINE
   void pushKeyset(ArrayData* a) {
-    assert(a);
+    assertx(a);
     pushKeysetNoRc(a);
     a->incRefCount();
   }
 
   ALWAYS_INLINE
   void pushStaticArray(const ArrayData* a) {
-    assert(a->isStatic()); // No need to call a->incRefCount().
-    assert(a->isPHPArray());
-    assert(m_top != m_elms);
+    assertx(a->isStatic()); // No need to call a->incRefCount().
+    assertx(a->isPHPArray());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfPersistentArray>(a);
   }
 
   ALWAYS_INLINE
   void pushStaticVec(const ArrayData* a) {
-    assert(a->isStatic()); // No need to call a->incRefCount().
-    assert(a->isVecArray());
-    assert(m_top != m_elms);
+    assertx(a->isStatic()); // No need to call a->incRefCount().
+    assertx(a->isVecArray());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfPersistentVec>(a);
   }
 
   ALWAYS_INLINE
   void pushStaticDict(const ArrayData* a) {
-    assert(a->isStatic()); // No need to call a->incRefCount().
-    assert(a->isDict());
-    assert(m_top != m_elms);
+    assertx(a->isStatic()); // No need to call a->incRefCount().
+    assertx(a->isDict());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfPersistentDict>(a);
   }
 
   ALWAYS_INLINE
   void pushStaticKeyset(const ArrayData* a) {
-    assert(a->isStatic()); // No need to call a->incRefCount().
-    assert(a->isKeyset());
-    assert(m_top != m_elms);
+    assertx(a->isStatic()); // No need to call a->incRefCount().
+    assertx(a->isKeyset());
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfPersistentKeyset>(a);
   }
@@ -686,7 +660,7 @@ public:
   // already adjusted the refcount appropriately
   ALWAYS_INLINE
   void pushObjectNoRc(ObjectData* o) {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     *m_top = make_tv<KindOfObject>(o);
   }
@@ -698,50 +672,69 @@ public:
   }
 
   ALWAYS_INLINE
+  void pushRecordNoRc(RecordData* r) {
+    assertx(m_top != m_elms);
+    m_top--;
+    *m_top = make_tv<KindOfRecord>(r);
+  }
+
+  ALWAYS_INLINE
+  void pushFunc(Func* f) {
+    m_top--;
+    *m_top = make_tv<KindOfFunc>(f);
+  }
+
+  ALWAYS_INLINE
+  void pushClsMethNoRc(ClsMethDataRef clsMeth) {
+    m_top--;
+    *m_top = make_tv<KindOfClsMeth>(clsMeth);
+  }
+
+  ALWAYS_INLINE
   void nalloc(size_t n) {
-    assert((uintptr_t)&m_top[-n] <= (uintptr_t)m_base);
+    assertx((uintptr_t)(m_top - n) <= (uintptr_t)m_base);
     m_top -= n;
   }
 
   ALWAYS_INLINE
   Cell* allocC() {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     return (Cell*)m_top;
   }
 
   ALWAYS_INLINE
   Ref* allocV() {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     return (Ref*)m_top;
   }
 
   ALWAYS_INLINE
   TypedValue* allocTV() {
-    assert(m_top != m_elms);
+    assertx(m_top != m_elms);
     m_top--;
     return m_top;
   }
 
   ALWAYS_INLINE
   ActRec* allocA() {
-    assert((uintptr_t)&m_top[-kNumActRecCells] >= (uintptr_t)m_elms);
-    assert(kNumActRecCells * sizeof(Cell) == sizeof(ActRec));
+    assertx((uintptr_t)(m_top - kNumActRecCells) >= (uintptr_t)m_elms);
+    assertx(kNumActRecCells * sizeof(Cell) == sizeof(ActRec));
     m_top -= kNumActRecCells;
     return (ActRec*)m_top;
   }
 
   ALWAYS_INLINE
   void allocI() {
-    assert(kNumIterCells * sizeof(Cell) == sizeof(Iter));
-    assert((uintptr_t)&m_top[-kNumIterCells] >= (uintptr_t)m_elms);
+    assertx(kNumIterCells * sizeof(Cell) == sizeof(Iter));
+    assertx((uintptr_t)(m_top - kNumIterCells) >= (uintptr_t)m_elms);
     m_top -= kNumIterCells;
   }
 
   ALWAYS_INLINE
   void allocClsRefSlots(size_t n) {
-    assert((uintptr_t)&m_top[-clsRefCountToCells(n)] >= (uintptr_t)m_elms);
+    assertx((uintptr_t)(m_top - clsRefCountToCells(n)) >= (uintptr_t)m_elms);
     m_top -= clsRefCountToCells(n);
     if (debug) {
       memset(m_top, kTrashClsRef, clsRefCountToCells(n) * sizeof(Cell));
@@ -750,8 +743,8 @@ public:
 
   ALWAYS_INLINE
   void replaceC(const Cell c) {
-    assert(m_top != m_base);
-    assert(m_top->m_type != KindOfRef);
+    assertx(m_top != m_base);
+    assertx(!isRefType(m_top->m_type));
     tvDecRefGen(m_top);
     *m_top = c;
   }
@@ -759,8 +752,8 @@ public:
   template <DataType DT>
   ALWAYS_INLINE
   void replaceC() {
-    assert(m_top != m_base);
-    assert(m_top->m_type != KindOfRef);
+    assertx(m_top != m_base);
+    assertx(!isRefType(m_top->m_type));
     tvDecRefGen(m_top);
     *m_top = make_tv<DT>();
   }
@@ -768,15 +761,15 @@ public:
   template <DataType DT, typename T>
   ALWAYS_INLINE
   void replaceC(T value) {
-    assert(m_top != m_base);
-    assert(m_top->m_type != KindOfRef);
+    assertx(m_top != m_base);
+    assertx(!isRefType(m_top->m_type));
     tvDecRefGen(m_top);
     *m_top = make_tv<DT>(value);
   }
 
   ALWAYS_INLINE
   void replaceTV(const TypedValue& tv) {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     tvDecRefGen(m_top);
     *m_top = tv;
   }
@@ -784,7 +777,7 @@ public:
   template <DataType DT>
   ALWAYS_INLINE
   void replaceTV() {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     tvDecRefGen(m_top);
     *m_top = make_tv<DT>();
   }
@@ -792,40 +785,47 @@ public:
   template <DataType DT, typename T>
   ALWAYS_INLINE
   void replaceTV(T value) {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     tvDecRefGen(m_top);
     *m_top = make_tv<DT>(value);
   }
 
   ALWAYS_INLINE
   Cell* topC() {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     return tvAssertCell(m_top);
   }
 
   ALWAYS_INLINE
   Ref* topV() {
-    assert(m_top != m_base);
-    assert(m_top->m_type == KindOfRef);
+    assertx(m_top != m_base);
+    assertx(isRefType(m_top->m_type));
     return (Ref*)m_top;
   }
 
   ALWAYS_INLINE
   TypedValue* topTV() {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     return m_top;
   }
 
   ALWAYS_INLINE
+  ActRec* indA(size_t ind) {
+    assertx(m_top != m_base);
+    assertx(count() > ind + kNumActRecCells);
+    return (ActRec*)&m_top[ind];
+  }
+
+  ALWAYS_INLINE
   Cell* indC(size_t ind) {
-    assert(m_top != m_base);
-    assert(m_top[ind].m_type != KindOfRef);
+    assertx(m_top != m_base);
+    assertx(!isRefType(m_top[ind].m_type));
     return tvAssertCell(&m_top[ind]);
   }
 
   ALWAYS_INLINE
   TypedValue* indTV(size_t ind) {
-    assert(m_top != m_base);
+    assertx(m_top != m_base);
     return &m_top[ind];
   }
 };
@@ -853,7 +853,7 @@ visitStackElems(const ActRec* const fp,
                 TVFun tvFun) {
   const TypedValue* const base = Stack::anyFrameStackBase(fp);
   auto cursor = stackTop;
-  assert(cursor <= base);
+  assertx(cursor <= base);
 
   if (auto fe = fp->m_func->findFPI(bcOffset)) {
     for (;;) {
@@ -871,7 +871,7 @@ visitStackElems(const ActRec* const fp,
         ar = arAtOffset(fakePrevFP, -fe->m_fpOff);
       }
 
-      assert(cursor <= reinterpret_cast<TypedValue*>(ar));
+      assertx(cursor <= reinterpret_cast<TypedValue*>(ar));
       while (cursor < reinterpret_cast<TypedValue*>(ar)) {
         tvFun(cursor++);
       }
@@ -894,12 +894,11 @@ void resetCoverageCounters();
 using InterpOneFunc = jit::TCA (*) (ActRec*, TypedValue*, Offset);
 extern InterpOneFunc interpOneEntryPoints[];
 
-bool doFCallArrayTC(PC pc, int32_t numArgs, void*);
-bool doFCall(ActRec* ar, PC& pc);
+bool doFCallUnpackTC(PC origpc, int32_t numArgs, void*);
+bool doFCall(ActRec* ar, uint32_t numArgs, bool unpack);
 jit::TCA dispatchBB();
 void pushFrameSlots(const Func* func, int nparams = 0);
 Array getDefinedVariables(const ActRec*);
-jit::TCA suspendStack(PC& pc);
 
 enum class StackArgsState { // tells prepareFuncEntry how much work to do
   // the stack may contain more arguments than the function expects
@@ -911,8 +910,7 @@ enum class StackArgsState { // tells prepareFuncEntry how much work to do
 void enterVMAtFunc(ActRec* enterFnAr, StackArgsState stk, VarEnv* varEnv);
 void enterVMAtCurPC();
 bool prepareArrayArgs(ActRec* ar, const Cell args, Stack& stack,
-                      int nregular, bool doCufRefParamChecks,
-                      TypedValue* retval);
+                      int nregular, TypedValue* retval, bool checkRefAnnot);
 
 ///////////////////////////////////////////////////////////////////////////////
 

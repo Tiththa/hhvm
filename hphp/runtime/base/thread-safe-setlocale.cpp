@@ -18,7 +18,7 @@
 #include <string.h>
 #include <math.h>
 #include "hphp/runtime/base/string-buffer.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/execution-context.h"
 
 /*
@@ -48,8 +48,8 @@
 
 namespace HPHP {
 
-IMPLEMENT_THREAD_LOCAL(ThreadSafeLocaleHandler, g_thread_safe_locale_handler);
-IMPLEMENT_THREAD_LOCAL(struct lconv, g_thread_safe_localeconv_data);
+RDS_LOCAL(ThreadSafeLocaleHandler, g_thread_safe_locale_handler);
+RDS_LOCAL(struct lconv, g_thread_safe_localeconv_data);
 
 static const locale_t s_null_locale = (locale_t) 0;
 

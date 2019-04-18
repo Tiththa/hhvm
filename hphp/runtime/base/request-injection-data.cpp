@@ -33,7 +33,7 @@
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/rds-header.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/thread-info.h"
+#include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
@@ -429,9 +429,6 @@ void RequestInjectionData::threadInit() {
                    std::to_string(RuntimeOption::RuntimeErrorReportingLevel)
                     .c_str(),
                    &m_errorReportingLevel);
-  IniSetting::Bind(IniSetting::CORE, IniSetting::PHP_INI_ALL,
-                   "track_errors", "0",
-                   &m_trackErrors);
   IniSetting::Bind(
     IniSetting::CORE,
     IniSetting::PHP_INI_ALL,
@@ -510,6 +507,15 @@ void RequestInjectionData::threadInit() {
       "brotli.compression_lgwin",
       std::to_string(RuntimeOption::BrotliCompressionLgWindowSize).c_str(),
       &m_brotliLgWindowSize);
+
+  IniSetting::Bind(IniSetting::CORE, IniSetting::PHP_INI_ALL,
+                   "zstd.compression", &m_zstdEnabled);
+  IniSetting::Bind(
+      IniSetting::CORE,
+      IniSetting::PHP_INI_ALL,
+      "zstd.compression_level",
+      std::to_string(RuntimeOption::ZstdCompressionLevel).c_str(),
+      &m_zstdLevel);
 
   // Assertions
   IniSetting::Bind(IniSetting::CORE, IniSetting::PHP_INI_ALL,
@@ -627,13 +633,18 @@ void RequestInjectionData::resetCPUTimer(int seconds /* = 0 */) {
 
 void RequestInjectionData::reset() {
   m_sflagsAndStkPtr->fetch_and(kSurpriseFlagStackMask);
+  m_hostOutOfMemory.store(false, std::memory_order_relaxed);
+  m_OOMAbort = false;
   m_coverage = RuntimeOption::RecordCodeCoverage;
+  m_jittingDisabled = false;
   m_debuggerAttached = false;
   m_debuggerIntr = false;
   m_debuggerStepIn = false;
   m_debuggerStepOut = StepOutState::None;
   m_debuggerNext = false;
-  m_suppressHackArrayCompatNotices = false;
+#define HC(Opt, ...) m_suppressHAC##Opt = false;
+  HAC_CHECK_OPTS
+#undef HC
   m_breakPointFilter.clear();
   m_flowFilter.clear();
   m_lineBreakPointFilter.clear();
@@ -650,18 +661,47 @@ void RequestInjectionData::updateJit() {
   m_jit = RuntimeOption::EvalJit &&
     !(RuntimeOption::EvalJitDisabledByHphpd && m_debuggerAttached) &&
     !m_coverage &&
-    isStandardRequest() &&
+    (rl_typeProfileLocals.isNull() || !isForcedToInterpret()) &&
     !getDebuggerForceIntr();
 }
 
 void RequestInjectionData::clearFlag(SurpriseFlag flag) {
-  assert(flag >= 1ull << 48);
+  assertx(flag >= 1ull << 48);
   m_sflagsAndStkPtr->fetch_and(~flag);
 }
 
 void RequestInjectionData::setFlag(SurpriseFlag flag) {
-  assert(flag >= 1ull << 48);
+  assertx(flag >= 1ull << 48);
   m_sflagsAndStkPtr->fetch_or(flag);
+}
+
+void RequestInjectionData::sendSignal(int signum) {
+  if (signum <= 0 || signum >= Process::kNSig) {
+    Logger::Warning("%d is not a valid signal", signum);
+    return;
+  }
+  const unsigned index = signum / 64;
+  const unsigned offset = signum % 64;
+  const uint64_t mask = 1ull << offset;
+  m_signalMask[index].fetch_or(mask, std::memory_order_release);
+  setFlag(SignaledFlag);
+}
+
+int RequestInjectionData::getAndClearNextPendingSignal() {
+  // We cannot look at the surprise flag because it may have already been
+  // cleared in handle_request_surprise().
+  for (unsigned i = 0; i < m_signalMask.size(); ++i) {
+    auto& chunk = m_signalMask[i];
+    if (auto value = chunk.load(std::memory_order_acquire)) {
+      unsigned index = folly::findFirstSet(value);
+      assertx(index);
+      --index;             // folly::findFirstSet() returns 1-64 instead of 0-63
+      // Clear the bit.
+      chunk.fetch_and(~(1ull << index), std::memory_order_relaxed);
+      return i * 64 + index;
+    }
+  }
+  return 0;                             // no pending signal
 }
 
 void RequestInjectionData::setMemoryLimit(folly::StringPiece limit) {
@@ -676,7 +716,7 @@ void RequestInjectionData::setMemoryLimit(folly::StringPiece limit) {
       newInt = std::numeric_limits<int64_t>::max();
     }
   }
-  MM().setMemoryLimit(newInt);
+  tl_heap->setMemoryLimit(newInt);
   m_maxMemoryNumeric = newInt;
 }
 

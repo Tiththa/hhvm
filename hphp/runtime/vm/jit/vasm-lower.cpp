@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -224,11 +224,17 @@ void lower_vcall(Vunit& unit, Inst& inst, Vlabel b, size_t i) {
 
     case DestType::SSA:
     case DestType::Byte:
-      assertx(dests.size() == 1);
+      assertx(dests.size() == 1 || dests.size() == 2);
       assertx(dests[0].isValid());
 
-      // Copy the single-register result to dests[0].
-      v << copy{rret(0), dests[0]};
+      if (dests.size() == 1) {
+        // Copy the single-register result to dests[0].
+        v << copy{rret(0), dests[0]};
+      } else {
+        assertx(dests[1].isValid());
+        // Copy the result pair to dests.
+        v << copy2{rret(0), rret(1), dests[0], dests[1]};
+      }
       break;
 
     case DestType::Dbl:
@@ -275,8 +281,8 @@ void lower(VLS& env, vinvoke& inst, Vlabel b, size_t i) {
   lower_vcall(env.unit, inst, b, i);
 }
 
-void lower(VLS& env, vcallarray& inst, Vlabel b, size_t i) {
-  // vcallarray can only appear at the end of a block.
+void lower(VLS& env, vcallunpack& inst, Vlabel b, size_t i) {
+  // vcallunpack can only appear at the end of a block.
   assertx(i == env.unit.blocks[b].code.size() - 1);
 
   lower_impl(env.unit, b, i, [&] (Vout& v) {
@@ -291,7 +297,7 @@ void lower(VLS& env, vcallarray& inst, Vlabel b, size_t i) {
 
     v << copyargs{env.unit.makeTuple(srcs),
                   env.unit.makeTuple(std::move(dsts))};
-    v << callarray{inst.target, args};
+    v << callunpack{inst.target, args};
     v << unwind{{inst.targets[0], inst.targets[1]}};
   });
 }
@@ -337,6 +343,24 @@ void lower(VLS& env, syncvmret& inst, Vlabel b, size_t i) {
       // We must not touch bits 63..32 as they contain the AUX data.
       lower_impl(env.unit, b, i, [&] (Vout& v) {
         v << copy{inst.data, rret_data()};
+        v << andq{v.cns(0xffffffff000000ff),
+                  inst.type, rret_type(), v.makeReg()};
+      });
+      break;
+  }
+}
+void lower(VLS& env, syncvmrettype& inst, Vlabel b, size_t i) {
+  switch (arch()) {
+    case Arch::X64: // fall through
+    case Arch::PPC64:
+      env.unit.blocks[b].code[i] = copy{inst.type, rret_type()};
+      break;
+    case Arch::ARM:
+      // For ARM64 we need to clear the bits 8..31 from the type value.
+      // That allows us to use the resulting register values in
+      // type comparisons without the need for truncation there.
+      // We must not touch bits 63..32 as they contain the AUX data.
+      lower_impl(env.unit, b, i, [&] (Vout& v) {
         v << andq{v.cns(0xffffffff000000ff),
                   inst.type, rret_type(), v.makeReg()};
       });

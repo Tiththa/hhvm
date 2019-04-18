@@ -2,13 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 open ClientEnv
 
 let compare_pos pos1 pos2 =
@@ -36,17 +35,32 @@ let map_patches_to_filename acc res =
   | None -> SMap.add fn [res] acc
 
 let write_string_to_file fn str =
-  let oc = open_out fn in
-  output_string oc str;
-  close_out oc
+  let oc = Out_channel.create fn in
+  Out_channel.output_string oc str;
+  Out_channel.close oc
 
 let write_patches_to_buffer buf original_content patch_list =
   let i = ref 0 in
+  let trim_leading_whitespace = ref false in
+  let len = String.length original_content in
+  let is_whitespace c =
+    match c with
+    | '\n' | ' ' | '\012' | '\r' | '\t' -> true
+    | _ -> false
+  in
   (* advances to requested character and adds the original content
      from the current position to that point to the buffer *)
   let add_original_content j =
+    while
+      !trim_leading_whitespace &&
+      !i < len &&
+      is_whitespace original_content.[!i]
+    do
+      i := !i + 1
+    done;
     if j <= !i then () else
-    let size = (j - !i + 1) in
+    let size = (j - !i) in
+    let size = min (-(!i) + len) size in
     let str_to_write = String.sub original_content !i size in
     Buffer.add_string buf str_to_write;
     i := !i + size
@@ -54,7 +68,8 @@ let write_patches_to_buffer buf original_content patch_list =
   List.iter patch_list begin fun res ->
     let pos = get_pos res in
     let char_start, char_end = Pos.info_raw pos in
-    add_original_content (char_start - 1);
+    add_original_content char_start;
+    trim_leading_whitespace := false;
     match res with
       | ServerRefactorTypes.Insert patch ->
           Buffer.add_string buf patch.ServerRefactorTypes.text
@@ -62,9 +77,13 @@ let write_patches_to_buffer buf original_content patch_list =
           Buffer.add_string buf patch.ServerRefactorTypes.text;
           i := char_end
       | ServerRefactorTypes.Remove _ ->
-          i := char_end
+          (* We only expect `Remove` to be used with HH_FIXMEs, in which case
+           * char_end will point to the last character. Consequently, we should
+           * increment it by 1 *)
+          i := char_end + 1;
+          trim_leading_whitespace := true
   end;
-  add_original_content (String.length original_content - 1)
+  add_original_content len
 
 let apply_patches_to_file fn patch_list =
   let old_content = Sys_utils.cat fn in
@@ -74,12 +93,13 @@ let apply_patches_to_file fn patch_list =
   let new_file_contents = Buffer.contents buf in
   write_string_to_file fn new_file_contents
 
-let input_prompt str =
-  print_string str;
-  flush stdout;
-  input_line stdin
+let list_to_file_map =
+  List.fold_left
+    ~f:map_patches_to_filename
+    ~init:SMap.empty
 
-let apply_patches file_map =
+let apply_patches patches =
+  let file_map = list_to_file_map patches in
   SMap.iter apply_patches_to_file file_map;
   print_endline
       ("Rewrote "^(string_of_int (SMap.cardinal file_map))^" files.")
@@ -106,19 +126,66 @@ let patch_to_json res =
       "replacement", Hh_json.JSON_String replacement;
   ]
 
-let print_patches_json file_map =
+let patches_to_json_string patches =
+  let file_map = list_to_file_map patches in
   let entries = SMap.fold begin fun fn patch_list acc ->
     Hh_json.JSON_Object [
         "filename", Hh_json.JSON_String fn;
         "patches",  Hh_json.JSON_Array (List.map patch_list patch_to_json);
     ] :: acc
   end file_map [] in
-  print_endline (Hh_json.json_to_string (Hh_json.JSON_Array entries))
+  Hh_json.json_to_string (Hh_json.JSON_Array entries)
 
-let go conn args mode before after =
+let print_patches_json patches =
+  print_endline (patches_to_json_string patches)
+
+let go_ide
+    (conn : unit -> ClientConnect.conn Lwt.t)
+    (args : client_check_env)
+    (filename : string)
+    (line : int)
+    (char : int)
+    (new_name : string)
+    : unit Lwt.t =
+  let%lwt patches = ClientConnect.rpc_with_retry conn @@
+    ServerCommandTypes.IDE_REFACTOR {
+      ServerCommandTypes.Ide_refactor_type.
+      filename;
+      line;
+      char;
+      new_name;
+    } in
+  let patches = match patches with
+  | Ok patches -> patches
+  | Error message -> failwith message
+  in
+  (if args.output_json
+  then print_patches_json patches
+  else apply_patches patches);
+  Lwt.return_unit
+
+let go
+    (conn : unit -> ClientConnect.conn Lwt.t)
+    (args : client_check_env)
+    (mode : string)
+    (before : string)
+    (after : string)
+    : unit Lwt.t =
     let command = match mode with
     | "Class" -> ServerRefactorTypes.ClassRename (before, after)
-    | "Function" -> ServerRefactorTypes.FunctionRename (before, after)
+    | "Function" ->
+      (*
+        We set these to `None` here because we don't want to add a deprecated
+          wrapper after the rename. Likewise for `MethodRename`
+      *)
+      let filename = None in
+      let definition = None in
+      ServerRefactorTypes.FunctionRename {
+        filename;
+        definition;
+        old_name = before;
+        new_name = after;
+      }
     | "Method" ->
       let befores = Str.split (Str.regexp "::") before in
       if (List.length befores) <> 2
@@ -138,15 +205,21 @@ let go conn args mode before after =
         failwith "Before and After classname must match"
       end
       else
-        ServerRefactorTypes.MethodRename
-          (before_class, before_method, after_method)
+        let filename = None in
+        let definition = None in
+        ServerRefactorTypes.MethodRename {
+          filename;
+          definition;
+          class_name = before_class;
+          old_name = before_method;
+          new_name = after_method;
+        }
     | _ ->
         failwith "Unexpected Mode" in
 
-    let patches =
-      ServerCommand.rpc conn @@ ServerCommandTypes.REFACTOR command in
-    let file_map = List.fold_left patches
-      ~f:map_patches_to_filename ~init:SMap.empty in
-    if args.output_json
-    then print_patches_json file_map
-    else apply_patches file_map
+    let%lwt patches =
+      ClientConnect.rpc_with_retry conn @@ ServerCommandTypes.REFACTOR command in
+    (if args.output_json
+    then print_patches_json patches
+    else apply_patches patches);
+    Lwt.return_unit

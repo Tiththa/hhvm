@@ -1,11 +1,14 @@
 <?php
 
+abstract final class GetRandomPortStatics {
+  public static $base = -1;
+}
+
 function get_random_port() {
-  static $base = -1;
-  if ($base == -1) {
-    $base = 12345 + (int)((int)(microtime(false) * 100) % 30000);
+  if (GetRandomPortStatics::$base == -1) {
+    GetRandomPortStatics::$base = 12345 + (int)((int)(microtime(false) * 100) % 30000);
   }
-  return ++$base;
+  return ++GetRandomPortStatics::$base;
 }
 
 function retry_bind_server() {
@@ -21,6 +24,9 @@ function retry_bind_server() {
   throw new Exception("Couldn't bind server");
 }
 
+
+<<__EntryPoint>>
+function main_tcp_transport_is_assumed() {
 list($port, $_, $server) = retry_bind_server();
 
 $stream = stream_socket_client('127.0.0.1:'.$port);
@@ -31,3 +37,4 @@ stream_socket_accept($server);
 var_dump(stream_get_meta_data($stream)['wrapper_type']);
 $stream = stream_socket_client('udp://127.0.0.1:'.$port);
 var_dump(stream_get_meta_data($stream)['wrapper_type']);
+}

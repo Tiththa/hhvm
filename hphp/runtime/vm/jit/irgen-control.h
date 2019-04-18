@@ -39,7 +39,9 @@ Block* getBlock(IRGS& env, Offset offset);
 /*
  * Helpers for unconditional and conditional jumps.
  */
+void surpriseCheck(IRGS&);
 void surpriseCheck(IRGS&, Offset);
+void surpriseCheckWithTarget(IRGS&, Offset);
 void jmpImpl(IRGS&, Offset);
 void implCondJmp(IRGS&, Offset taken, bool negate, SSATmp*);
 

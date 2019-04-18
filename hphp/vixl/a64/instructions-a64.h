@@ -54,6 +54,9 @@ const unsigned kSRegSizeInBytes = kSRegSize / 8;
 const unsigned kDRegSize = 64;
 const unsigned kDRegSizeLog2 = 6;
 const unsigned kDRegSizeInBytes = kDRegSize / 8;
+const unsigned kVRegSize = 128;
+const unsigned kVRegSizeLog2 = 7;
+const unsigned kVRegSizeInBytes = kDRegSize / 8;
 const int64_t kWRegMask = 0x00000000ffffffffL;
 const int64_t kXRegMask = 0xffffffffffffffffL;
 const int64_t kSRegMask = 0x00000000ffffffffL;
@@ -253,6 +256,10 @@ class Instruction {
            (Mask(MoveWideImmediateMask) == MOVK_w);
   }
 
+  inline bool IsNop() const {
+    return (Mask(SystemHintMask) == HINT) && (ImmHint() == NOP);
+  }
+
   // Indicate whether Rd can be the stack pointer or the zero register. This
   // does not check that the instruction actually has an Rd field.
   inline Reg31Mode RdMode() const {
@@ -312,11 +319,11 @@ class Instruction {
 
   // Find the target of this instruction. 'this' may be a branch or a
   // PC-relative addressing instruction.
-  Instruction* ImmPCOffsetTarget();
+  Instruction* ImmPCOffsetTarget(Instruction* from = nullptr);
 
   // Patch a PC-relative offset to refer to 'target'. 'this' may be a branch or
   // a PC-relative addressing instruction.
-  void SetImmPCOffsetTarget(Instruction* target);
+  void SetImmPCOffsetTarget(Instruction* target, Instruction* from = nullptr);
   // Patch a literal load instruction to load from 'source'.
   void SetImmLLiteral(Instruction* source);
 

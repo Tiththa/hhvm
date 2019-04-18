@@ -2,11 +2,12 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
+
+open Core_kernel
 
 type env = {
   ns_ns_uses: string SMap.t;
@@ -28,3 +29,6 @@ let empty popt = {
 
 let empty_with_default_popt =
   empty ParserOptions.default
+
+let is_global_namespace env =
+  Option.is_none env.ns_name

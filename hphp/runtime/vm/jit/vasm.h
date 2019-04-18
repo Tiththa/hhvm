@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -105,7 +105,8 @@ bool checkBlockEnd(const Vunit& v, Vlabel b);
 /*
  * Passes.
  */
-void allocateRegisters(Vunit&, const Abi&);
+void allocateRegistersWithXLS(Vunit&, const Abi&);
+void allocateRegistersWithGraphColor(Vunit&, const Abi&);
 void annotateSFUses(Vunit&);
 void fuseBranches(Vunit&);
 void optimizeCopies(Vunit&, const Abi&);
@@ -117,6 +118,7 @@ void removeTrivialNops(Vunit&);
 void reuseImmq(Vunit&);
 template<typename Folder> void foldImms(Vunit&);
 void simplify(Vunit&);
+void sfPeepholes(Vunit&, const Abi&);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -135,15 +137,18 @@ folly::Range<const Vlabel*> succs(const Vblock& block);
 jit::vector<Vlabel> sortBlocks(const Vunit& unit);
 
 /*
+ * Make block weights more consistent by enforcing that the weight of each block
+ * doesn't exceed the sums of the weights of its predecessors or its successors.
+ */
+void fixBlockWeights(Vunit& unit);
+
+/*
  * Order blocks for lowering to machine code.  May use different layout
  * algorithms depending on the TransKind of `unit'.
  *
- * The output is guaranteed to be partitioned by area relative to `text'.  This
- * is almost the same as partitioning by AreaIndex, except we may interleave,
- * e.g., Main and Cold blocks in the same partition if their actual code areas
- * in `text' are the same.
+ * The output is guaranteed to be partitioned by code area.
  */
-jit::vector<Vlabel> layoutBlocks(Vunit& unit, const Vtext& text);
+jit::vector<Vlabel> layoutBlocks(Vunit& unit);
 
 /*
  * Return a bitset, keyed by Vlabel, indicating which blocks are targets of
@@ -154,5 +159,13 @@ boost::dynamic_bitset<> backedgeTargets(const Vunit& unit,
 
 ///////////////////////////////////////////////////////////////////////////////
 }}
+
+namespace std {
+template<> struct hash<HPHP::jit::Vlabel> {
+  size_t operator()(HPHP::jit::Vlabel l) const { return (size_t)l; }
+};
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 #endif

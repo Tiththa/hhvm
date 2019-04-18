@@ -2,16 +2,21 @@
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Core_kernel
 open IdentifySymbolService
 open Option.Monad_infix
 open Typing_defs
+
+module SourceText = Full_fidelity_source_text
+module Syntax = Full_fidelity_positioned_syntax
+module SyntaxKind = Full_fidelity_syntax_kind
+module SyntaxTree = Full_fidelity_syntax_tree.WithSyntax(Full_fidelity_positioned_syntax)
+module Cls = Typing_classes_heap
 
 (* Element type, class name, element name. Class name refers to "origin" class,
  * we expect to find said element in AST/NAST of this class *)
@@ -25,25 +30,28 @@ and class_element_ =
 | Class_const
 | Typeconst
 
-let get_class_by_name opt x =
-  Naming_heap.TypeIdHeap.get x >>= fun (pos, _) ->
+let get_class_by_name x =
+  Naming_table.Types.get_pos x >>= fun (pos, _) ->
   let fn = FileInfo.get_pos_filename pos in
-  Parser_heap.find_class_in_file opt fn x
+  Ide_parser_cache.with_ide_cache @@ fun () ->
+    Parser_heap.find_class_in_file fn x
 
-let get_function_by_name opt x =
-  Naming_heap.FunPosHeap.get x >>= fun pos ->
+let get_function_by_name x =
+  Naming_table.Funs.get_pos x >>= fun pos ->
   let fn = FileInfo.get_pos_filename pos in
-  Parser_heap.find_fun_in_file opt fn x
+  Ide_parser_cache.with_ide_cache @@ fun () ->
+    Parser_heap.find_fun_in_file fn x
 
-let get_gconst_by_name opt x =
-  Naming_heap.ConstPosHeap.get x >>= fun pos ->
+let get_gconst_by_name x =
+  Naming_table.Consts.get_pos x >>= fun pos ->
   let fn = FileInfo.get_pos_filename pos in
-  Parser_heap.find_const_in_file opt fn x
+  Ide_parser_cache.with_ide_cache @@ fun () ->
+    Parser_heap.find_const_in_file fn x
 
 (* Span information is stored only in parsing AST *)
-let get_member_def opt (x : class_element) =
+let get_member_def (x : class_element) =
   let type_, member_origin, member_name = x in
-  get_class_by_name opt member_origin >>= fun c ->
+  get_class_by_name member_origin >>= fun c ->
   let member_origin = Utils.strip_ns member_origin in
   match type_ with
   | Constructor
@@ -58,7 +66,7 @@ let get_member_def opt (x : class_element) =
   | Property
   | Static_property ->
     let props = List.concat_map c.Ast.c_body begin function
-      | Ast.ClassVars (kinds, _, vars) ->
+      | Ast.ClassVars { Ast.cv_kinds = kinds; Ast.cv_names = vars; _ } ->
         List.map vars (fun var -> (kinds, var))
       | Ast.XhpAttr (_, var, _, _) -> [([], var)]
       | _ -> []
@@ -100,62 +108,100 @@ let get_local_var_def ast name p =
   Option.map def ~f:(FileOutline.summarize_local name)
 
 (* summarize a class or typedef carried with SymbolOccurrence.Class *)
-let summarize_class_typedef opt x =
-  Naming_heap.TypeIdHeap.get x >>= fun (pos, ct) ->
+let summarize_class_typedef x =
+  Naming_table.Types.get_pos x >>= fun (pos, ct) ->
     let fn = FileInfo.get_pos_filename pos in
     match ct with
-      | `Class -> (Parser_heap.find_class_in_file opt fn x >>=
+      | Naming_table.TClass -> (Parser_heap.find_class_in_file fn x >>=
                 fun c -> Some (FileOutline.summarize_class c ~no_children:true))
-      | `Typedef -> (Parser_heap.find_typedef_in_file opt fn x >>=
+      | Naming_table.TTypedef -> (Parser_heap.find_typedef_in_file fn x >>=
                 fun tdef -> Some (FileOutline.summarize_typedef tdef))
 
-let go tcopt ast result =
+let go ast result =
   match result.SymbolOccurrence.type_ with
     | SymbolOccurrence.Method (c_name, method_name) ->
       (* Classes on typing heap have all the methods from inheritance hierarchy
        * folded together, so we will correctly identify them even if method_name
        * is not defined directly in class c_name *)
-      Typing_lazy_heap.get_class tcopt c_name >>= fun class_ ->
+      Typing_lazy_heap.get_class c_name >>= fun class_ ->
       if method_name = Naming_special_names.Members.__construct then begin
-        match fst class_.tc_construct with
+        match fst (Cls.construct class_) with
           | Some m ->
-            get_member_def tcopt (Constructor, m.ce_origin, method_name)
+            get_member_def (Constructor, m.ce_origin, method_name)
           | None ->
-            get_class_by_name tcopt c_name >>= fun c ->
+            get_class_by_name c_name >>= fun c ->
             Some (FileOutline.summarize_class c ~no_children:true)
       end else begin
-        match SMap.get method_name class_.tc_methods with
-        | Some m -> get_member_def tcopt (Method, m.ce_origin, method_name)
+        match Cls.get_method class_ method_name with
+        | Some m -> get_member_def (Method, m.ce_origin, method_name)
         | None ->
-          SMap.get method_name class_.tc_smethods >>= fun m ->
-          get_member_def tcopt (Static_method, m.ce_origin, method_name)
+          Cls.get_smethod class_ method_name >>= fun m ->
+          get_member_def (Static_method, m.ce_origin, method_name)
       end
     | SymbolOccurrence.Property (c_name, property_name) ->
-      Typing_lazy_heap.get_class tcopt c_name >>= fun class_ ->
+      Typing_lazy_heap.get_class c_name >>= fun class_ ->
       let property_name = clean_member_name property_name in
-      begin match SMap.get property_name class_.tc_props with
-      | Some m -> get_member_def tcopt (Property, m.ce_origin, property_name)
+      begin match Cls.get_prop class_ property_name with
+      | Some m -> get_member_def (Property, m.ce_origin, property_name)
       | None ->
-        SMap.get ("$" ^ property_name) class_.tc_sprops >>= fun m ->
-        get_member_def tcopt
+        Cls.get_sprop class_ ("$" ^ property_name) >>= fun m ->
+        get_member_def
           (Static_property, m.ce_origin, property_name)
       end
     | SymbolOccurrence.ClassConst (c_name, const_name) ->
-      Typing_lazy_heap.get_class tcopt c_name >>= fun class_ ->
-      SMap.get const_name class_.tc_consts >>= fun m ->
-      get_member_def tcopt (Class_const, m.cc_origin, const_name)
+      Typing_lazy_heap.get_class c_name >>= fun class_ ->
+      Cls.get_const class_ const_name >>= fun m ->
+      get_member_def (Class_const, m.cc_origin, const_name)
     | SymbolOccurrence.Function ->
-      get_function_by_name tcopt result.SymbolOccurrence.name >>= fun f ->
+      get_function_by_name result.SymbolOccurrence.name >>= fun f ->
       Some (FileOutline.summarize_fun f)
     | SymbolOccurrence.GConst ->
-      get_gconst_by_name tcopt result.SymbolOccurrence.name >>= fun cst ->
+      get_gconst_by_name result.SymbolOccurrence.name >>= fun cst ->
       Some (FileOutline.summarize_gconst cst)
     | SymbolOccurrence.Class ->
-      summarize_class_typedef tcopt result.SymbolOccurrence.name
+      summarize_class_typedef result.SymbolOccurrence.name
     | SymbolOccurrence.Typeconst (c_name, typeconst_name) ->
-      Typing_lazy_heap.get_class tcopt c_name >>= fun class_ ->
-      SMap.get typeconst_name class_.tc_typeconsts >>= fun m ->
-      get_member_def tcopt (Typeconst, m.ttc_origin, typeconst_name)
+      Typing_lazy_heap.get_class c_name >>= fun class_ ->
+      Cls.get_typeconst class_ typeconst_name >>= fun m ->
+      get_member_def (Typeconst, m.ttc_origin, typeconst_name)
     | SymbolOccurrence.LocalVar ->
       get_local_var_def
         ast result.SymbolOccurrence.name result.SymbolOccurrence.pos
+
+let get_definition_cst_node_from_pos kind source_text pos =
+  let tree = if Ide_parser_cache.is_enabled () then
+    Ide_parser_cache.(with_ide_cache @@ fun () -> get_cst source_text)
+  else begin
+    let env = Full_fidelity_parser_env.default in
+    SyntaxTree.make ~env source_text
+  end in
+  let (line, start, _) = Pos.info_pos pos in
+  let offset = SourceText.position_to_offset source_text (line, start) in
+  let parents = Syntax.parentage (SyntaxTree.root tree) offset in
+  List.find parents ~f:begin fun syntax ->
+    match kind, Syntax.kind syntax with
+    | SymbolDefinition.Function, SyntaxKind.FunctionDeclaration
+    | SymbolDefinition.Class, SyntaxKind.ClassishDeclaration
+    | SymbolDefinition.Method, SyntaxKind.MethodishDeclaration
+    | SymbolDefinition.Property, SyntaxKind.PropertyDeclaration
+    | SymbolDefinition.Const, SyntaxKind.ConstDeclaration
+    | SymbolDefinition.Enum, SyntaxKind.EnumDeclaration
+    | SymbolDefinition.Interface, SyntaxKind.ClassishDeclaration
+    | SymbolDefinition.Trait, SyntaxKind.ClassishDeclaration
+    | SymbolDefinition.LocalVar, SyntaxKind.VariableExpression
+    | SymbolDefinition.Typeconst, SyntaxKind.TypeConstDeclaration
+    | SymbolDefinition.Param, SyntaxKind.ParameterDeclaration
+    | SymbolDefinition.Typedef, SyntaxKind.SimpleTypeSpecifier -> true
+    | _ -> false
+  end
+
+let get_definition_cst_node fallback_fn definition =
+  let open SymbolDefinition in
+  let source_text = if Pos.filename definition.pos = ServerIdeUtils.path
+    then
+      (* When the definition is in an IDE buffer with local changes, the filename
+         in the definition will be empty. *)
+      ServerCommandTypesUtils.source_tree_of_file_input fallback_fn
+    else SourceText.from_file (Pos.filename definition.pos)
+  in
+  get_definition_cst_node_from_pos definition.kind source_text definition.pos

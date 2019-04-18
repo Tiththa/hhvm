@@ -1,7 +1,10 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_1801() {
 $ite=new RecursiveDirectoryIterator(__DIR__.'/../../sample_dir/');
-$bytestotal=0;
+$bytestotal=0.0;
 $nbfiles=0;
 $files = array();
  // order changes per machine
@@ -12,7 +15,8 @@ foreach (new RecursiveIteratorIterator($ite) as $filename=>$cur) {
   $nbfiles++;
   $files[] = "$filename => $filesize\n";
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
 $bytestotal=number_format($bytestotal);
 echo "Total: $nbfiles files, $bytestotal bytes\n";
+}

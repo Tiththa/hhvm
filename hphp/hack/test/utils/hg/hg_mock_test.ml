@@ -1,18 +1,18 @@
-let base_rev = "789"
+let base_rev = 789
 let hg_rev = "abcdefg123"
 
 let fake_repo_path = "some/fake/dir"
 
 let test_mock_basic () =
   Hg.Mocking.current_working_copy_base_rev_returns (Future.of_value base_rev);
-  let result = Hg.current_working_copy_base_rev fake_repo_path |> Future.get in
-  Asserter.String_asserter.assert_equals base_rev result
+  let result = Hg.current_working_copy_base_rev fake_repo_path |> Future.get_exn ~timeout:30 in
+  Asserter.Int_asserter.assert_equals base_rev result
     "current_working_copy_base_rev_returns";
-  Hg.Mocking.closest_svn_ancestor_bind_value hg_rev (Future.of_value base_rev);
-  let result = Hg.get_closest_svn_ancestor hg_rev fake_repo_path
-    |> Future.get in
-  Asserter.String_asserter.assert_equals base_rev result
-    "Hg.Mocking.closest_svn_ancestor_bind_value";
+  Hg.Mocking.closest_global_ancestor_bind_value hg_rev (Future.of_value base_rev);
+  let result = Hg.get_closest_global_ancestor hg_rev fake_repo_path
+    |> Future.get_exn ~timeout:30 in
+  Asserter.Int_asserter.assert_equals base_rev result
+    "Hg.Mocking.closest_global_ancestor_bind_value";
   true
 
 let tests =

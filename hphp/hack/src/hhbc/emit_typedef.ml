@@ -2,31 +2,33 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
-open Core
+open Core_kernel
 
 let kind_to_type_info ~tparams ~namespace k =
   match k with
   | Ast.Alias h | Ast.NewType h ->
+    let nullable = match snd h with Ast.Hoption _ -> true | _ -> false in
     Emit_type_hint.(hint_to_type_info
-      ~kind:TypeDef ~skipawaitable:false ~nullable:false ~tparams ~namespace h)
+      ~kind:TypeDef ~skipawaitable:false ~nullable ~tparams ~namespace h)
 
 let kind_to_type_structure ~tparams ~namespace k =
   match k with
   | Ast.Alias h | Ast.NewType h ->
     Emit_type_constant.hint_to_type_constant ~is_typedef:true ~tparams
-      ~namespace h
+      ~namespace ~targ_map:SMap.empty h
 
 let emit_typedef : Ast.typedef -> Hhas_typedef.t =
   fun ast_typedef ->
   let namespace = ast_typedef.Ast.t_namespace in
-  let typedef_name, _ =
+  let typedef_name =
     Hhbc_id.Class.elaborate_id namespace ast_typedef.Ast.t_id in
+  let typedef_attributes =
+    Emit_attribute.from_asts namespace ast_typedef.Ast.t_user_attributes in
   let tparams = Emit_body.tparams_to_strings ast_typedef.Ast.t_tparams in
   let typedef_type_info =
     kind_to_type_info ~tparams ~namespace ast_typedef.Ast.t_kind in
@@ -35,6 +37,7 @@ let emit_typedef : Ast.typedef -> Hhas_typedef.t =
   in
   Hhas_typedef.make
     typedef_name
+    typedef_attributes
     typedef_type_info
     (Some typedef_type_structure)
 

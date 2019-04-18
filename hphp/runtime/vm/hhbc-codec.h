@@ -17,6 +17,7 @@
 #ifndef incl_HPHP_VM_HHBC_CODEC_H_
 #define incl_HPHP_VM_HHBC_CODEC_H_
 
+#include "hphp/runtime/base/repo-auth-type-codec.h"
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/util/either.h"
 
@@ -70,7 +71,7 @@ void encode_op(Op op, F write_byte) {
     write_byte(static_cast<uint8_t>(0xff));
     rawVal -= 0xff;
   }
-  assert(rawVal < 0xff);
+  assertx(rawVal < 0xff);
 
   write_byte(rawVal);
 }
@@ -119,6 +120,10 @@ template<class T> T decode_oa(PC& pc) {
   return decode_raw<T>(pc);
 }
 
+ALWAYS_INLINE Offset decode_ba(PC& pc) {
+  return decode_raw<Offset>(pc);
+}
+
 ALWAYS_INLINE uint32_t decode_iva(PC& pc) {
   auto const small = *pc;
   if (UNLIKELY(int8_t(small) < 0)) {
@@ -141,12 +146,12 @@ void encode_member_key(MemberKey mk, UnitEmitter& ue);
 template<typename L>
 void foreachSwitchTarget(PC pc, L func) {
   auto const op = decode_op(pc);
-  assert(isSwitch(op));
+  assertx(isSwitch(op));
   if (op == Op::Switch) {
     (void)decode_oa<SwitchKind>(pc); // skip bounded kind
     (void)decode_raw<int64_t>(pc); // skip base
   }
-  int32_t size = decode_raw<int32_t>(pc);
+  int32_t size = decode_iva(pc);
   for (int i = 0; i < size; ++i) {
     if (op == Op::SSwitch) decode_raw<Id>(pc);
     func(decode_raw<Offset>(pc));
@@ -156,8 +161,8 @@ void foreachSwitchTarget(PC pc, L func) {
 template<typename L>
 void foreachSSwitchString(PC pc, L func) {
   auto const UNUSED op = decode_op(pc);
-  assert(op == Op::SSwitch);
-  int32_t size = decode_raw<int32_t>(pc) - 1; // the last item is the default
+  assertx(op == Op::SSwitch);
+  int32_t size = decode_iva(pc) - 1; // the last item is the default
   for (int i = 0; i < size; ++i) {
     func(decode_raw<Id>(pc));
     decode_raw<Offset>(pc);
@@ -168,6 +173,20 @@ void foreachSSwitchString(PC pc, L func) {
 
 void encodeLocalRange(UnitEmitter&, const LocalRange&);
 LocalRange decodeLocalRange(const unsigned char*&);
+
+//////////////////////////////////////////////////////////////////////
+
+void encodeFCallArgsBase(UnitEmitter&, const FCallArgsBase&, const uint8_t*,
+                         bool hasAsyncEagerOffset);
+FCallArgs decodeFCallArgs(PC&);
+
+template<typename T>
+void encodeFCallArgs(UnitEmitter& ue, const FCallArgsBase& fca,
+                     const uint8_t* byRefs, bool hasAsyncEagerOffset,
+                     T emitAsyncEagerOffset) {
+  encodeFCallArgsBase(ue, fca, byRefs, hasAsyncEagerOffset);
+  if (hasAsyncEagerOffset) emitAsyncEagerOffset();
+}
 
 //////////////////////////////////////////////////////////////////////
 

@@ -3,16 +3,19 @@
 .strict 1;
 
 .main {
-  FPushFuncD 1 "var_dump"
-  FPushFuncD 2 "add"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   String "1"
-  FPassCE 0
   String "2"
-  FPassCE 1
-  FCall 2
-  FPassR 0
-  FCall 1
-  PopR
+  FPushFuncD 2 "add"
+  FCall <> 2 1 "" - "" ""
+  FPushFuncD 1 "var_dump"
+  FCall <> 1 1 "" - "" ""
+  PopC
   Int 1
   RetC
 }

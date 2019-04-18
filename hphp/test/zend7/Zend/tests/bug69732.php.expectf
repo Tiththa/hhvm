@@ -1,9 +1,0 @@
-
-Notice: %s
-
-Notice: %s
-
-Fatal error: %s
-Stack trace:
-#0 {main}
-  thrown in %s on line %d

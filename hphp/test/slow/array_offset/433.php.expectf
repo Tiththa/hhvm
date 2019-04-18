@@ -1,0 +1,17 @@
+int(9)
+array(0) {
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+int(5)
+int(1)
+
+Notice: Undefined index: 123 in %s/slow/array_offset/433.php on line %d
+string(0) ""
+string(1) "6"

@@ -90,16 +90,13 @@ $unexpected_values = array (
 $iterator = 1;
 foreach( $unexpected_values as $unexpected_value ) {
   echo "\n-- Iteration $iterator --";
-  var_dump( dir($directory, $unexpected_value) );
+  try { var_dump( dir($directory, $unexpected_value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $iterator++;
 }
 
 echo "Done";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = dirname(__FILE__);
 $directory = $file_path."/dir_variation2";
 
 rmdir($directory);
-?>

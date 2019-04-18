@@ -24,6 +24,7 @@
 #include "hphp/runtime/vm/jit/irgen-interpone.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
 #include "hphp/runtime/vm/jit/irgen-sprop-global.h"
+#include "hphp/runtime/vm/jit/irgen-types.h"
 
 namespace HPHP { namespace jit { namespace irgen {
 
@@ -44,7 +45,7 @@ void initProps(IRGS& env, const Class* cls) {
   ifThen(
     env,
     [&] (Block* taken) {
-      gen(env, CheckInitProps, taken, ClassData(cls));
+      gen(env, CheckRDSInitialized, taken, RDSHandleData { cls->propHandle() });
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
@@ -67,14 +68,21 @@ void initThrowable(IRGS& env, const Class* cls, SSATmp* throwable) {
       env,
       LdPropAddr,
       ByteOffsetData { (ptrdiff_t)rootCls->declPropOffset(idx) },
-      TInitNull.ptr(Ptr::Prop),
+      TUncounted.lval(Ptr::Prop),
       throwable
     );
   };
 
   // Load Exception::$traceOpts
-  auto const sprop = ldClsPropAddrKnown(
-    env, SystemLib::s_ExceptionClass, s_traceOpts.get());
+  auto const lookup = ldClsPropAddrKnown(
+    env,
+    SystemLib::s_ExceptionClass,
+    s_traceOpts.get(),
+    false
+  );
+  assertx(!lookup.tc->isCheckable());
+  auto const sprop = lookup.propPtr;
+  assertx(sprop);
 
   auto const trace = cond(
     env,
@@ -123,6 +131,7 @@ void initThrowable(IRGS& env, const Class* cls, SSATmp* throwable) {
   // $throwable->trace = $trace
   auto const traceIdx = rootCls->lookupDeclProp(s_trace.get());
   assertx(traceIdx != kInvalidSlot);
+  assertx(!rootCls->declPropTypeConstraint(traceIdx).isCheckable());
   gen(env, StMem, propAddr(traceIdx), trace);
 
   // Populate $throwable->{file,line}
@@ -133,8 +142,118 @@ void initThrowable(IRGS& env, const Class* cls, SSATmp* throwable) {
     auto const lineIdx = rootCls->lookupDeclProp(s_line.get());
     auto const unit = curFunc(env)->unit();
     auto const line = unit->getLineNumber(bcOff(env));
+    assertx(rootCls->declPropTypeConstraint(fileIdx).isString());
+    assertx(rootCls->declPropTypeConstraint(lineIdx).isInt());
     gen(env, StMem, propAddr(fileIdx), cns(env, unit->filepath()));
     gen(env, StMem, propAddr(lineIdx), cns(env, line));
+  }
+}
+
+void checkPropTypeRedefs(IRGS& env, const Class* cls) {
+  assertx(cls->maybeRedefinesPropTypes());
+  assertx(cls->parent());
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      gen(
+        env,
+        CheckRDSInitialized,
+        taken,
+        RDSHandleData { cls->checkedPropTypeRedefinesHandle() }
+      );
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      IRUnit::Hinter h(env.irb->unit(), Block::Hint::Unlikely);
+
+      auto const parent = cls->parent();
+      if (parent->maybeRedefinesPropTypes()) checkPropTypeRedefs(env, parent);
+      for (auto const& prop : cls->declProperties()) {
+        if (prop.attrs & AttrNoBadRedeclare) continue;
+        auto const slot = parent->lookupDeclProp(prop.name);
+        assertx(slot != kInvalidSlot);
+        gen(env, PropTypeRedefineCheck, cns(env, cls), cns(env, slot));
+      }
+
+      gen(
+        env,
+        MarkRDSInitialized,
+        RDSHandleData { cls->checkedPropTypeRedefinesHandle() }
+      );
+    }
+  );
+}
+
+void checkPropInitialValues(IRGS& env, const Class* cls) {
+  assertx(cls->needsPropInitialValueCheck());
+  assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
+
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      gen(
+        env,
+        CheckRDSInitialized,
+        taken,
+        RDSHandleData { cls->checkedPropInitialValuesHandle() }
+      );
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      IRUnit::Hinter h(env.irb->unit(), Block::Hint::Unlikely);
+
+      auto const& props = cls->declProperties();
+      for (Slot slot = 0; slot < props.size(); ++slot) {
+        auto const& prop = props[slot];
+        if (prop.attrs & AttrInitialSatisfiesTC) continue;
+        auto const& tc = prop.typeConstraint;
+        if (!tc.isCheckable()) continue;
+        const TypedValue& tv = cls->declPropInit()[slot];
+        if (tv.m_type == KindOfUninit) continue;
+        verifyPropType(
+          env,
+          cns(env, cls),
+          &tc,
+          slot,
+          cns(env, tv),
+          cns(env, makeStaticString(prop.name)),
+          false
+        );
+      }
+
+      gen(
+        env,
+        MarkRDSInitialized,
+        RDSHandleData { cls->checkedPropInitialValuesHandle() }
+      );
+    }
+  );
+}
+
+void initObjProps(IRGS& env, const Class* cls, SSATmp* obj) {
+  auto const nprops = cls->numDeclProperties();
+
+  if (nprops <= RuntimeOption::EvalHHIRInliningMaxInitObjProps &&
+      cls->pinitVec().size() == 0) {
+    if (cls->hasMemoSlots()) {
+      gen(env, InitObjMemoSlots, ClassData(cls), obj);
+    }
+    for (int i = 0; i < nprops; ++i) {
+      const TypedValue& tv = cls->declPropInit()[i];
+      auto const val = cns(env, tv);
+      auto const addr = gen(
+        env,
+        LdPropAddr,
+        ByteOffsetData { (ptrdiff_t)(cls->declPropOffset(i)) },
+        TLvalToPropGen,
+        obj
+      );
+      gen(env, StMem, addr, val);
+    }
+  } else {
+    gen(env, InitObjProps, ClassData(cls), obj);
   }
 }
 
@@ -142,15 +261,18 @@ void initThrowable(IRGS& env, const Class* cls, SSATmp* throwable) {
 
 }
 
-//////////////////////////////////////////////////////////////////////
-
 void initSProps(IRGS& env, const Class* cls) {
   cls->initSPropHandles();
   if (rds::isPersistentHandle(cls->sPropInitHandle())) return;
   ifThen(
     env,
     [&] (Block* taken) {
-      gen(env, CheckInitSProps, taken, ClassData(cls));
+      gen(
+        env,
+        CheckRDSInitialized,
+        taken,
+        RDSHandleData { cls->sPropInitHandle() }
+      );
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
@@ -159,12 +281,20 @@ void initSProps(IRGS& env, const Class* cls) {
   );
 }
 
+//////////////////////////////////////////////////////////////////////
+
 SSATmp* allocObjFast(IRGS& env, const Class* cls) {
   // Make sure our property init vectors are all set up.
-  const bool props = cls->pinitVec().size() > 0;
-  const bool sprops = cls->numStaticProperties() > 0;
-  assertx((props || sprops) == cls->needInitialization());
+  auto const props = cls->pinitVec().size() > 0;
+  auto const sprops = cls->numStaticProperties() > 0;
+  auto const redefine = cls->maybeRedefinesPropTypes();
+  auto const propVal = cls->needsPropInitialValueCheck();
+  assertx(
+    (props || sprops || redefine || propVal) == cls->needInitialization()
+  );
   if (cls->needInitialization()) {
+    if (redefine) checkPropTypeRedefs(env, cls);
+    if (propVal) checkPropInitialValues(env, cls);
     if (props) initProps(env, cls);
     if (sprops) initSProps(env, cls);
   }
@@ -185,16 +315,12 @@ SSATmp* allocObjFast(IRGS& env, const Class* cls) {
     obj = gen(env, NewInstanceRaw, ClassData(cls));
 
     // Initialize the properties.
-    gen(env, InitObjProps, ClassData(cls), obj);
+    initObjProps(env, cls, obj);
   }
 
   // Initialize Throwable.
   if (cls->needsInitThrowable()) {
     initThrowable(env, cls, obj);
-  }
-
-  if (RuntimeOption::EnableObjDestructCall && cls->getDtor()) {
-    gen(env, RegisterLiveObj, obj);
   }
 
   return obj;
@@ -239,7 +365,7 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
 
   SSATmp** args = (SSATmp**)alloca(sizeof(SSATmp*) * numParams);
   for (int32_t i = 0; i < numParams; ++i) {
-    args[numParams - i - 1] = popF(env);
+    args[numParams - i - 1] = popCU(env);
   }
 
   int32_t propId = 0;
@@ -253,22 +379,7 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
     );
   }
 
-  assertx(cls->numDeclProperties() == func->numStaticLocals() + numParams);
-
-  // Closure static variables are per instance, and need to start
-  // uninitialized.  After numParams use vars, the remaining instance
-  // properties hold any static locals.
-  for (int32_t numDeclProperties = cls->numDeclProperties();
-      propId < numDeclProperties;
-      ++propId) {
-    gen(
-      env,
-      StClosureArg,
-      ByteOffsetData { safe_cast<ptrdiff_t>(cls->declPropOffset(propId)) },
-      closure,
-      cns(env, TUninit)
-    );
-  }
+  assertx(cls->numDeclProperties() == numParams);
 
   push(env, closure);
 }
@@ -286,6 +397,15 @@ void emitNewMixedArray(IRGS& env, uint32_t capacity) {
     push(env, cns(env, staticEmptyArray()));
   } else {
     push(env, gen(env, NewMixedArray, cns(env, capacity)));
+  }
+}
+
+void emitNewDArray(IRGS& env, uint32_t capacity) {
+  assertx(!RuntimeOption::EvalHackArrDVArrs);
+  if (capacity == 0) {
+    push(env, cns(env, staticEmptyDArray()));
+  } else {
+    push(env, gen(env, NewDArray, cns(env, capacity)));
   }
 }
 
@@ -370,7 +490,14 @@ void emitNewVecArray(IRGS& env, uint32_t numArgs) {
   emitNewPackedLayoutArray(env, numArgs, AllocVecArray);
 }
 
-void emitNewStructArray(IRGS& env, const ImmVector& immVec) {
+void emitNewVArray(IRGS& env, uint32_t numArgs) {
+  assertx(!RuntimeOption::EvalHackArrDVArrs);
+  emitNewPackedLayoutArray(env, numArgs, AllocVArray);
+}
+
+namespace {
+
+void newStructImpl(IRGS& env, const ImmVector& immVec, Opcode op) {
   auto const numArgs = immVec.size();
   auto const ids = immVec.vec32();
 
@@ -382,8 +509,24 @@ void emitNewStructArray(IRGS& env, const ImmVector& immVec) {
     extra.keys[i] = curUnit(env)->lookupLitstrId(ids[i]);
   }
 
+  auto const structData = gen(env, op, extra, sp(env));
   discard(env, numArgs);
-  push(env, gen(env, NewStructArray, extra, sp(env)));
+  push(env, structData);
+}
+
+}
+
+void emitNewStructArray(IRGS& env, const ImmVector& immVec) {
+  newStructImpl(env, immVec, NewStructArray);
+}
+
+void emitNewStructDArray(IRGS& env, const ImmVector& immVec) {
+  assertx(!RuntimeOption::EvalHackArrDVArrs);
+  newStructImpl(env, immVec, NewStructDArray);
+}
+
+void emitNewStructDict(IRGS& env, const ImmVector& immVec) {
+  newStructImpl(env, immVec, NewStructDict);
 }
 
 void emitAddElemC(IRGS& env) {
@@ -425,14 +568,27 @@ void emitAddElemC(IRGS& env) {
 }
 
 void emitAddNewElemC(IRGS& env) {
-  if (!topC(env, BCSPRelOffset{1})->isA(TArr)) {
-    return interpOne(env, TArr, 2);
+  auto const arrType = topC(env, BCSPRelOffset{1})->type();
+  if (!arrType.subtypeOfAny(TArr, TKeyset, TVec)) {
+    return interpOne(env, *env.currentNormalizedInstruction);
   }
-
-  auto const val = popC(env);
+  auto const val = popC(env, DataTypeCountness);
   auto const arr = popC(env);
-  // The AddNewElem helper decrefs its args, so don't decref pop'ed values.
-  push(env, gen(env, AddNewElem, arr, val));
+  push(
+    env,
+    gen(
+      env,
+      [&]{
+        if (arr->isA(TArr))    return AddNewElem;
+        if (arr->isA(TKeyset)) return AddNewElemKeyset;
+        if (arr->isA(TVec))    return AddNewElemVec;
+        always_assert(false);
+      }(),
+      arr,
+      val
+    )
+  );
+  decRef(env, val);
 }
 
 void emitNewCol(IRGS& env, CollectionType type) {
@@ -448,199 +604,48 @@ void emitNewPair(IRGS& env) {
   push(env, gen(env, NewPair, c2, c1));
 }
 
+void emitNewRecord(IRGS& env, const StringData* name, const ImmVector& immVec) {
+  auto const cachedRec = gen(env, LdRecCached, cns(env, name));
+  auto const numArgs = immVec.size();
+  auto const ids = immVec.vec32();
+  NewStructData extra;
+  extra.offset = spOffBCFromIRSP(env);
+  extra.numKeys = numArgs;
+  extra.keys = new (env.unit.arena()) StringData*[numArgs];
+  for (auto i = size_t{0}; i < numArgs; ++i) {
+    extra.keys[i] = curUnit(env)->lookupLitstrId(ids[i]);
+  }
+  auto const recData = gen(env, NewRecord, extra, cachedRec, sp(env));
+  discard(env, numArgs);
+  push(env, recData);
+}
+
 void emitColFromArray(IRGS& env, CollectionType type) {
   assertx(type != CollectionType::Pair);
   auto const arr = popC(env);
+  if (UNLIKELY(!arr->isA(TVec) && !arr->isA(TDict))) {
+    PUNT(BadColType);
+  }
+  if (UNLIKELY(arr->isA(TVec) && type != CollectionType::Vector &&
+               type != CollectionType::ImmVector)) {
+      PUNT(ColTypeMismatch);
+  }
+  if (UNLIKELY(arr->isA(TDict) && (type == CollectionType::Vector ||
+               type == CollectionType::ImmVector))) {
+      PUNT(ColTypeMismatch);
+  }
   push(env, gen(env, NewColFromArray, NewColData{type}, arr));
 }
 
-void emitStaticLocInit(IRGS& env, int32_t locId, const StringData* name) {
-  auto const func = curFunc(env);
-  if (func->isPseudoMain()) PUNT(StaticLocInit);
-
-  auto const value = popC(env);
-
-  // Closures and generators from closures don't satisfy the "one static per
-  // source location" rule that the inline fastpath requires
-  auto const box = [&]{
-    if (func->isClosureBody()) {
-      assertx(func->isClosureBody());
-      assertx(!func->hasVariadicCaptureParam());
-      auto const obj = gen(
-        env, LdLoc, TObj, LocalId(func->numParams()), fp(env));
-
-      auto const theStatic = gen(env,
-                                 LdClosureStaticLoc,
-                                 StaticLocName { func, name },
-                                 obj);
-      ifThen(
-        env,
-        [&] (Block* taken) {
-          gen(env, CheckTypeMem, TBoxedCell, taken, theStatic);
-        },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          gen(env, StMem, theStatic, value);
-          gen(env, BoxPtr, theStatic);
-        }
-      );
-      return gen(env, LdMem, TBoxedCell, theStatic);
-    }
-
-    ifThen(
-      env,
-      [&] (Block* taken) {
-        gen(
-          env,
-          CheckStaticLoc,
-          StaticLocName { func, name },
-          taken
-        );
-      },
-      [&] {
-        hint(env, Block::Hint::Unlikely);
-        gen(
-          env,
-          InitStaticLoc,
-          StaticLocName { func, name },
-          value
-        );
-      }
-    );
-    return gen(env, LdStaticLoc, StaticLocName { func, name });
-  }();
-
-  gen(env, IncRef, box);
-  auto const oldValue = ldLoc(env, locId, nullptr, DataTypeSpecific);
-  stLocRaw(env, locId, fp(env), box);
-  decRef(env, oldValue);
-  // We don't need to decref value---it's a bytecode invariant that
-  // our Cell was not ref-counted.
-}
-
-void emitStaticLocCheck(IRGS& env, int32_t locId, const StringData* name) {
-  auto const func = curFunc(env);
-  if (func->isPseudoMain()) PUNT(StaticLocCheck);
-
-  auto bindLocal = [&] (SSATmp* box) {
-    gen(env, IncRef, box);
-    auto const oldValue = ldLoc(env, locId, nullptr, DataTypeGeneric);
-    stLocRaw(env, locId, fp(env), box);
-    decRef(env, oldValue);
-    return cns(env, true);
-  };
-
-  auto const inited = [&] {
-    if (func->isClosureBody()) {
-      auto const obj = gen(
-        env, LdLoc, TObj, LocalId(func->numParams()), fp(env));
-      auto const theStatic = gen(env,
-                                 LdClosureStaticLoc,
-                                 StaticLocName { func, name },
-                                 obj);
-      return cond(
-        env,
-        [&] (Block* taken) {
-          gen(env, CheckTypeMem, TBoxedCell, taken, theStatic);
-        },
-        [&] {
-          return bindLocal(gen(env, LdMem, TInitCell, theStatic));
-        },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          return cns(env, false);
-        }
-      );
-    }
-
-    return cond(
-      env,
-      [&] (Block* taken) {
-        gen(
-          env,
-          CheckStaticLoc,
-          StaticLocName { func, name },
-          taken
-        );
-      },
-      [&] {
-        // Next: the static local is already initialized
-        return bindLocal(gen(env, LdStaticLoc, StaticLocName { func, name }));
-      },
-      [&] { // Taken: need to initialize the static local
-        return cns(env, false);
-      }
-    );
-  }();
-
-  push(env, inited);
-}
-
-void emitStaticLocDef(IRGS& env, int32_t locId, const StringData* name) {
-  auto const func = curFunc(env);
-  if (func->isPseudoMain()) PUNT(StaticLocDef);
-
-  auto const value = popC(env);
-
-  auto const box = [&] {
-    if (func->isClosureBody()) {
-      auto const obj = gen(
-        env, LdLoc, TObj, LocalId(func->numParams()), fp(env));
-      auto const theStatic = gen(env,
-                                 LdClosureStaticLoc,
-                                 StaticLocName { func, name },
-                                 obj);
-      gen(env, StMem, theStatic, value);
-      auto const boxedStatic = gen(env, BoxPtr, theStatic);
-      return gen(env, LdMem, TBoxedInitCell, boxedStatic);
-    }
-
-    auto init = [&] {
-      gen(
-        env,
-        InitStaticLoc,
-        StaticLocName { func, name },
-        value
-      );
-    };
-
-    if (func->isMemoizeWrapper() && !func->numParams()) {
-      ifThenElse(
-        env,
-        [&] (Block* taken) {
-          gen(
-            env,
-            CheckStaticLoc,
-            StaticLocName { func, name },
-            taken
-          );
-        },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          auto oldBox = gen(env, LdStaticLoc, StaticLocName { func, name });
-          auto oldVal = gen(env, LdRef, TInitCell, oldBox);
-          init();
-          decRef(env, oldVal);
-        },
-        [&] {
-          init();
-        }
-      );
-    } else {
-      init();
-    }
-
-    return gen(
-      env,
-      LdStaticLoc,
-      StaticLocName { func, name }
-    );
-  }();
-
-  gen(env, IncRef, box);
-  auto const oldValue = ldLoc(env, locId, nullptr, DataTypeGeneric);
-  stLocRaw(env, locId, fp(env), box);
-  decRef(env, oldValue);
+void emitCheckReifiedGenericMismatch(IRGS& env) {
+  auto const cls = curClass(env);
+  if (!cls) {
+    // no static context class, so this will raise an error
+    interpOne(env, *env.currentNormalizedInstruction);
+    return;
+  }
+  auto const reified_generics = popC(env);
+  gen(env, CheckClsReifiedGenericMismatch, ClassData{cls}, reified_generics);
 }
 
 //////////////////////////////////////////////////////////////////////

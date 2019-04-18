@@ -1,4 +1,4 @@
-<?php
+<?hh // partial
 
 class APCIterator implements Iterator{
 
@@ -206,7 +206,7 @@ class APCIterator implements Iterator{
   private function init() {
     $this->info = apc_cache_info()['cache_list'];
     // Order defined by ksort
-    ksort($this->info);
+    ksort(&$this->info);
     $this->initialized = true;
     $this->index = -1;
     $this->next();

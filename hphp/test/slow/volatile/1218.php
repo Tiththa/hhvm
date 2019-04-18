@@ -2,8 +2,7 @@
 
 function foo() {
   if (!interface_exists('MyInterface')) {
-    interface MyInterface{
-}
+    include '1218.inc';
 ;
     echo 'no';
   }
@@ -11,5 +10,9 @@ function foo() {
     echo 'yes';
   }
 }
+
+<<__EntryPoint>>
+function main_1218() {
 foo();
 foo();
+}

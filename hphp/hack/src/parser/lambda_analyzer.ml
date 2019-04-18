@@ -2,18 +2,19 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-module List = Core_list
-module Token = Full_fidelity_editable_token
-module Syntax = Full_fidelity_editable_syntax
+
+open Core_kernel
+
+module SourceText = Full_fidelity_source_text
+module Syntax = Full_fidelity_editable_positioned_syntax
+module Token = Syntax.Token
+module TokenKind = Full_fidelity_token_kind
 module SyntaxKind = Full_fidelity_syntax_kind
-module Utils = Full_fidelity_syntax_utilities.WithSyntax(Syntax)
 open Syntax
-open Utils
 
 (*
  We have a lambda in hand, and the chain of parents in its parse tree.
@@ -62,12 +63,15 @@ work correctly. String identity on locals doesn't really work here.
 *)
 
 let fold_no_lambdas folder acc node =
-  let predicate node =
-    match kind node with
-    | SyntaxKind.LambdaExpression
-    | SyntaxKind.AnonymousFunction -> false
-    | _ -> true in
-  fold_where folder predicate acc node
+  let rec aux acc node =
+    if is_lambda_expression node || is_anonymous_function node
+    then
+      acc
+    else
+      let acc = folder acc node in
+      List.fold_left ~f:aux ~init:acc (Syntax.children node)
+  in
+  aux acc node
 
 let token_to_string node =
   match syntax node with
@@ -81,99 +85,119 @@ let param_name node =
     }; _ } -> token_to_string parameter_name
   | _ -> None
 
+let use_name node =
+  match syntax node with
+  | ListItem { list_item = ({ syntax = Token _; _ } as list_item); _ } ->
+    token_to_string list_item
+  | _ -> None
+
+let rec get_params_list node =
+  match syntax node with
+  | FunctionDeclaration { function_declaration_header; _ } ->
+    get_params_list function_declaration_header
+  | FunctionDeclarationHeader { function_parameter_list; _ } ->
+    function_parameter_list
+  | LambdaExpression { lambda_signature; _ } ->
+    get_params_list lambda_signature
+  | LambdaSignature { lambda_parameters; _ } ->
+    lambda_parameters
+  | AnonymousFunction { anonymous_parameters; _ } ->
+    anonymous_parameters
+  | MethodishDeclaration { methodish_function_decl_header; _ } ->
+    get_params_list methodish_function_decl_header
+  | _ -> make_missing SourceText.empty 0
+
 let get_params node =
-  let rec aux node =
-    match syntax node with
-    | FunctionDeclaration { function_declaration_header; _ } ->
-      aux function_declaration_header
-    | FunctionDeclarationHeader { function_parameter_list; _ } ->
-      function_parameter_list
-    | LambdaExpression { lambda_signature; _ } ->
-      aux lambda_signature
-    | LambdaSignature { lambda_parameters; _ } ->
-      lambda_parameters
-    | AnonymousFunction { anonymous_parameters; _ } ->
-      anonymous_parameters
-    | _ -> make_missing() in
-  let param_list = aux node in
+  let param_list = get_params_list node in
   let param_list = syntax_node_to_list param_list in
   let param_list = List.filter_map param_list ~f:param_name in
   SSet.of_list param_list
-
-let all_params parents =
-  let folder acc node =
-    SSet.union acc (get_params node) in
-  List.fold_left parents ~f:folder ~init:SSet.empty
 
 let get_body node =
   match syntax node with
   | FunctionDeclaration { function_body; _ } -> function_body
   | LambdaExpression { lambda_body; _ } -> lambda_body
   | AnonymousFunction { anonymous_body; _ } -> anonymous_body
-  | _ -> make_missing()
+  | MethodishDeclaration { methodish_function_body; _ } -> methodish_function_body
+  | _ -> make_missing SourceText.empty 0
 
 (* TODO: This does not consider situations like "${x}" as the use of a local.*)
 let add_local acc node =
   match syntax node with
-  | VariableExpression { variable_expression =
-      { syntax = Token { EditableToken.text; _}; _ } } ->
-    SSet.add text acc
+  | Token ({ Token.kind = TokenKind.Variable; _; } as token) ->
+    SSet.add (Token.text token) acc
   | _ -> acc
+
+(**
+ * Returns a set of all local variables and parameters in a body
+ * Excluded variables and parameters in lambdas
+ * Locals are stripped of their initial `$`
+ * Excludes `$this`
+ *)
+let all_locals node =
+  fold_no_lambdas add_local SSet.empty node
+  |> SSet.remove "$this"
+
+let outer_from_use use_clause =
+  match syntax use_clause with
+  | AnonymousFunctionUseClause { anonymous_use_variables; _; } ->
+    let use_list = syntax_node_to_list anonymous_use_variables in
+    let use_list = List.filter_map use_list ~f:use_name in
+    SSet.of_list use_list
+  | _ -> SSet.empty
+
+let use_clause_variables node =
+  match syntax node with
+  | AnonymousFunction { anonymous_use; _ } -> outer_from_use anonymous_use
+  | _ -> SSet.empty
 
 let local_variables acc node =
   let params = get_params node in
   let body = get_body node in
   let locals = fold_no_lambdas add_local params body in
+  let used_vars = use_clause_variables node in
+  let acc = SSet.union acc used_vars in
   SSet.union acc locals
 
-(*
-Second problem: what variables appear inside a lambda, including nested lambdas,
-which are *not* parameters of any lambda?
-*)
+let filter_parents parents =
+  (* We want all the parents that are relevant to computing outer variables.
+  Since outer variables are indicated in a "use" clause of an anonymous
+  function, we can stop looking when we encounter one.  Otherwise, we just
+  filter out anything that is not a lambda, function or method.
+  *)
+  let rec aux acc parents =
+    match parents with
+    | [] -> acc
+    | h :: t -> begin
+      match syntax h with
+      | FunctionDeclaration _
+      | MethodishDeclaration _
+      | AnonymousFunction _ -> h :: acc
+      | LambdaExpression _ -> aux (h :: acc) t
+      | _ -> aux acc t end in
+  List.rev (aux [] parents)
 
-let used_non_params node =
-  let folder acc node parents =
-    (* Note that the parent chain here only goes up to the originally-passed-in
-    node; it does not include the parents of *that* node. Typically the node
-    will be a lambda. We want to examine all children of that lambda, looking
-    for local variables which are not parameters of the current lambda. If
-    there are local variables which are *closed-over parameters of an outer
-    lambda*, that's great; we don't want to exclude them. *)
-    match syntax node with
-    | VariableExpression { variable_expression =
-        { syntax = Token { EditableToken.text; _}; _ } } ->
-      (* TODO: This is very expensive and inefficient. Basically on every
-      encounter of a local variable we reconstruct the set of parameters
-      in scope from this parent chain. A more efficient approach would be
-      to have a scope-aware folder which, instead of passing in a list
-      of parents, passes in a set of parameters. *)
-      let params = all_params parents in
-      if SSet.mem text params then
-        acc (* It's a parameter *)
-      else
-        SSet.add text acc (* Not any parameter. Maybe an outer variable. *)
-    | _ -> acc in
-  parented_fold_post folder SSet.empty node
+let compute_outer_variables parents node =
+  match syntax node with
+  | AnonymousFunction { anonymous_use; _ } -> outer_from_use anonymous_use
+  | _ ->
+    let parents = filter_parents parents in
+    List.fold_left parents ~f:local_variables ~init:SSet.empty
 
-let outer_variables parents lambda =
-  let all_outer = List.fold_left parents ~f:local_variables ~init:SSet.empty in
-  let all_used = used_non_params lambda in
-  (* We now know all the local variables created outside the lambda, and we
-     know all the variables that are used that are not any of the lambda's
-     parameters, or child lambda's parameters.
-     The set of outer variables of the lambda is the intersection.  *)
-  let outer = SSet.inter all_outer all_used in
-  SSet.elements outer
-  (* Note that we are guaranteed that the list is sorted. *)
-
-let partition_used_locals parents params body =
-  let all_used = fold_no_lambdas add_local SSet.empty body in
-  let all_used = SSet.remove "$this" all_used in
-  let decls = syntax_node_to_list params in
-  let all_params = List.filter_map decls ~f:param_name in
-  let all_params = SSet.of_list all_params in
-  let used_params = SSet.inter all_used all_params in
-  let all_outer = List.fold_left parents ~f:local_variables ~init:SSet.empty in
-  let used_outer = SSet.inter all_used all_outer in
-  let inner = SSet.diff all_used (SSet.union used_params used_outer) in
-  (inner, used_outer, used_params)
+let partition_used_locals parents node =
+  (* Set of function parameters *)
+  let params = get_params_list node
+  |> syntax_node_to_list
+  |> List.filter_map ~f:param_name in
+  let param_set = SSet.of_list params in
+  (* Set of all variables referenced in the body except for $this *)
+  let all_used = fold_no_lambdas add_local SSet.empty (get_body node)
+  |> SSet.remove "$this" in
+  let all_outer = compute_outer_variables parents node in
+  let used_outer =
+    SSet.diff (SSet.inter all_used all_outer) param_set in
+  let inner = SSet.diff all_used (SSet.union param_set used_outer) in
+  let inner_strings = SSet.to_string inner in
+  let used_outer_strings = SSet.to_string used_outer in
+  let _ = inner_strings, used_outer_strings in
+  (inner, used_outer, params)

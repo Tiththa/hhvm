@@ -8,7 +8,7 @@ function sort_using_locale( $locale, $test_array )
     $coll = ut_coll_create( $locale );
 
     // Sort array.
-    ut_coll_sort_with_sort_keys( $coll, $test_array );
+    ut_coll_sort_with_sort_keys( $coll, &$test_array );
 
     // And return the sorted array.
     return dump( $test_array ) . "\n";
@@ -32,4 +32,3 @@ function ut_main()
 
 require_once( 'ut_common.inc' );
 ut_run();
-?>

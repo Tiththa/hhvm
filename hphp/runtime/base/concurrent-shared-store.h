@@ -78,23 +78,23 @@ struct StoreValue {
     tagged_data.store(v, std::memory_order_release);
   }
   APCKind getKind() const {
-    assert(data().left());
-    assert(data().left()->kind() == kind);
+    assertx(data().left());
+    assertx(data().left()->kind() == kind);
     return kind;
   }
   Variant toLocal() const {
-    return data().left()->toLocal(getKind());
+    return data().left()->toLocal();
   }
   void set(APCHandle* v, int64_t ttl);
   bool expired() const;
 
   int32_t getSerializedSize() const {
-    assert(data().right() != nullptr);
+    assertx(data().right() != nullptr);
     return abs(dataSize);
   }
 
   bool isSerializedObj() const {
-    assert(data().right() != nullptr);
+    assertx(data().right() != nullptr);
     return dataSize < 0;
   }
 
@@ -153,12 +153,15 @@ struct EntryInfo {
     SerializedObject,
     UncountedVec,
     UncountedDict,
+    UncountedShape,
     UncountedKeyset,
     SerializedVec,
     SerializedDict,
+    SerializedShape,
     SerializedKeyset,
     APCVec,
     APCDict,
+    APCShape,
     APCKeyset,
   };
 
@@ -271,6 +274,12 @@ struct ConcurrentTableSharedStore {
   bool exists(const String& key);
 
   /*
+   * Returns the size of an entry if it exists. Sets `found` to true if it
+   * exists and false if not.
+   */
+  int64_t size(const String& key, bool& found);
+
+  /*
    * Remove the specified key, if it exists in the table.
    *
    * Returns: false if the key was not in the table, true if the key was in the
@@ -307,6 +316,11 @@ struct ConcurrentTableSharedStore {
     KeyAndMeta
   };
   void dump(std::ostream& out, DumpMode dumpMode);
+  /**
+   * Dump up to count keys that begin with the given prefix. This is a subset
+   * of what the dump `KeyAndValue` command would do.
+   */
+  void dumpPrefix(std::ostream& out, const std::string &prefix, uint32_t count);
 
   /*
    * Dump random key and entry size to output stream
@@ -336,7 +350,7 @@ private:
   }
 
   static StringData* getStringData(const char* s) {
-    assert(reinterpret_cast<intptr_t>(s) < 0);
+    assertx(reinterpret_cast<intptr_t>(s) < 0);
     return reinterpret_cast<StringData*>(-reinterpret_cast<intptr_t>(s));
   }
 
@@ -347,18 +361,18 @@ private:
 private:
   struct CharHashCompare {
     bool equal(const char* s1, const char* s2) const {
-      assert(s1 && s2);
+      assertx(s1 && s2);
       // tbb implementation call equal with the second pointer being the
       // value in the table and thus not a StringData*. We are asserting
       // to make sure that is the case
-      assert(!isTaggedStringData(s2));
+      assertx(!isTaggedStringData(s2));
       if (isTaggedStringData(s1)) {
         s1 = getStringData(s1)->data();
       }
       return strcmp(s1, s2) == 0;
     }
     size_t hash(const char* s) const {
-      assert(s);
+      assertx(s);
       return isTaggedStringData(s) ? getStringData(s)->hash() :
              StringData::hash(s, strlen(s));
     }
@@ -367,13 +381,13 @@ private:
 private:
   template<typename Key, typename T, typename HashCompare>
   struct APCMap :
-      tbb::concurrent_hash_map<Key,T,HashCompare,HugeAllocator<char>> {
+      tbb::concurrent_hash_map<Key,T,HashCompare,APCAllocator<char>> {
     // Append a random entry to 'entries'. The map must be non-empty and not
     // concurrently accessed. Returns false if this operation is not supported.
     bool getRandomAPCEntry(std::vector<EntryInfo>& entries);
 
     using node = typename tbb::concurrent_hash_map<Key,T,HashCompare,
-                                                   HugeAllocator<char>>::node;
+                                                   APCAllocator<char>>::node;
     static_assert(sizeof(node) == 64, "Node should be cache-line sized");
   };
 

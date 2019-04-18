@@ -1,0 +1,8 @@
+Linearization for class \A:
+[\A]
+Linearization for class \T:
+[\T(copy_private_members), \A<mixed>(synthesized)]
+Linearization for class \B:
+[\B, \T(copy_private_members), \A<int>, \A<mixed>(synthesized)]
+Linearization for class \C:
+[\C, \B, \T, \A<int>, \A<mixed>(synthesized)]

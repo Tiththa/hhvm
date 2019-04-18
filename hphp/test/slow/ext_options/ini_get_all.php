@@ -1,11 +1,14 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_ini_get_all() {
 $all_detailed = ini_get_all();
 var_dump($all_detailed['hphp.compiler_version']['access']);
 var_dump($all_detailed['allow_url_fopen']);
 var_dump($all_detailed['arg_separator.output']);
 
-$all_short = ini_get_all(null, false);
+$all_short = ini_get_all('', false);
 var_dump($all_short['allow_url_fopen']);
 var_dump($all_short['arg_separator.output']);
 
@@ -19,3 +22,4 @@ var_dump(array(
 ));
 
 ini_get_all("THIS_EXTENSION_SHOULD_NOT_EXIST");
+}

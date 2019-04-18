@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /**
  * Useful to handle errors occurred in static methods when there's no object
@@ -99,6 +99,6 @@ function idn_to_unicode(string $domain,
                         int $options = 0,
                         int $variant = 0,
                         mixed &$info = null): mixed {
-  return idn_to_utf8($domain, $options, $variant, $info);
+  return idn_to_utf8($domain, $options, $variant, &$info);
 }
 

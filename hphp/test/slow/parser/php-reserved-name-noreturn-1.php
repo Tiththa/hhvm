@@ -1,5 +1,8 @@
 <?php
-if (false) {
-  class Noreturn {}
-}
+
+
+
+
+class Noreturn {}
+
 echo "Done\n";

@@ -77,9 +77,8 @@ $values =  array (
 $counter = 1;
 for($index = 0; $index < count($values); $index ++) {
   echo "-- Iteration $counter --\n";
-  var_dump( stripos($values[$index], $values[$index], $values[$index]) );
+  try { var_dump( stripos($values[$index], $values[$index], $values[$index]) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $counter ++;
 }
 
 echo "*** Done ***";
-?>

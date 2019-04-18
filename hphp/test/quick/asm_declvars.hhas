@@ -3,11 +3,13 @@
 #
 
 .main {
-  FPushFuncD 1 "main"
+  NullUninit
+  NullUninit
+  NullUninit
   Int 12
-  FPassC 0
-  FCall 1
-  PopR
+  FPushFuncD 1 "main"
+  FCall <> 1 1 "" - "" ""
+  PopC
   Null
   RetC
 }

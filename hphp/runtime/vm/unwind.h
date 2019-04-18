@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/base/type-object.h"
 #include "hphp/runtime/vm/class.h"
+#include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/trace.h"
 
@@ -29,9 +30,10 @@ namespace HPHP {
 //////////////////////////////////////////////////////////////////////
 
 /*
- * Unwind the PHP exception on the top of the fault stack.
+ * Find a catch exception handler for a given raise location if the handler was
+ * found or InvalidAbsoluteOffset.
  */
-void unwindPhp();
+Offset findCatchHandler(const Func* func, Offset raiseOffset);
 
 /*
  * Unwind the PHP exception.
@@ -45,7 +47,7 @@ void unwindCpp(Exception* cppException);
 
 /*
  * Unwind the frame for a builtin.  Currently only used when switching modes
- * for hphpd_break, fb_enable_code_coverage, and xdebug_start_code_coverage.
+ * for hphpd_break, and fb_enable_code_coverage.
  */
 void unwindBuiltinFrame();
 
@@ -62,15 +64,17 @@ void unwindBuiltinFrame();
  */
 template<class Action> void exception_handler(Action action);
 
-//////////////////////////////////////////////////////////////////////
-
 /*
- * This exception is thrown when executing an Unwind bytecode, which
- * will reraise the current fault and resume propagating it.
+ * top and prev must implement Throwable. Walk the chain of top's previous
+ * pointers, finding the first unset one. If there is a cycle in either top or
+ * prev's previous chains, do nothing. Otherwise, add prev to the end of top's
+ * previous chain.
+ *
+ * Either way, this function takes ownership of one existing reference to prev.
  */
-struct VMPrepareUnwind : BaseException {
-  const char* what() const noexcept override { return "VMPrepareUnwind"; }
-};
+void chainFaultObjects(ObjectData* top, ObjectData* prev);
+
+//////////////////////////////////////////////////////////////////////
 
 /*
  * Thrown when we need to "switch modes" by re-starting the current VM
@@ -79,14 +83,6 @@ struct VMPrepareUnwind : BaseException {
  */
 struct VMSwitchMode : BaseException {
   const char* what() const noexcept override { return "VMSwitchMode"; }
-};
-
-/*
- * Similar to VMSwitchMode, but when we were in the middle of a
- * suspendStack operation.
- */
-struct VMSuspendStack : BaseException {
-  const char* what() const noexcept override { return "VMSuspendStack"; }
 };
 
 /*

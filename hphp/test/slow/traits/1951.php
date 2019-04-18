@@ -12,5 +12,3 @@ class MyHelloWorld{
 }
 $o = new MyHelloWorld();
 $o->falaOi();
-?>
-

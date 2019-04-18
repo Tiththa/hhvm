@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -16,6 +16,7 @@
 
 #include "hphp/runtime/vm/jit/vasm-print.h"
 
+#include <sstream>
 #include <type_traits>
 
 #include "hphp/runtime/base/stats.h"
@@ -145,6 +146,10 @@ struct FormatVisitor {
   }
   void imm(Vflags /*fl*/) {}
 
+  void imm(Reason r) {
+    str << sep() << show(r);
+  }
+
   void imm(RegSet x) { print(x); }
   void imm(ComparisonPred x) {
     str << sep();
@@ -228,6 +233,31 @@ std::string show(Vreg r) {
   return str.str();
 }
 
+std::string show(const VregSet& s) {
+  std::ostringstream str;
+  auto comma = false;
+  str << '{';
+  s.forEach(
+    [&] (Vreg r) {
+      if (comma) str << ", ";
+      comma = true;
+      str << show(r);
+    }
+  );
+  str << '}';
+  return str.str();
+}
+
+std::string show(const VregList& l) {
+  using namespace folly::gen;
+  return folly::sformat(
+    "[{}]",
+    from(l)
+    | map([] (Vreg r) { return show(r); })
+    | unsplit<std::string>(", ")
+  );
+}
+
 std::string show(Vptr p) {
   std::string str;
   switch(arch()) {
@@ -236,11 +266,11 @@ std::string show(Vptr p) {
       // [%fs + %base + disp + %index * scale]
       str = "[";
       auto prefix = false;
-      if (p.seg == Vptr::FS) {
+      if (p.seg == Segment::FS) {
         str += "%fs";
         prefix = true;
       }
-      if (p.seg == Vptr::GS) {
+      if (p.seg == Segment::GS) {
         str += "%gs";
         prefix = true;
       }

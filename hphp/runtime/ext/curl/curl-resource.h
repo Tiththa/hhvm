@@ -2,6 +2,7 @@
 #define incl_HPHP_CURL_RESOURCE_H
 
 #include "hphp/runtime/base/file.h"
+#include "hphp/runtime/base/req-optional.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/curl/curl-pool.h"
@@ -16,7 +17,7 @@ namespace HPHP {
 
 
 struct CurlResource : SweepableResourceData {
-  using ExceptionType = folly::Optional<boost::variant<Object,Exception*>>;
+  using ExceptionType = req::Optional<boost::variant<Object,Exception*>>;
 
   struct WriteHandler {
     int                method{0};
@@ -58,11 +59,7 @@ struct CurlResource : SweepableResourceData {
   ~CurlResource() { close(); }
 
   void closeForSweep();
-  void close() {
-    closeForSweep();
-    m_opts.clear();
-    m_to_free.reset();
-  }
+  void close();
   void reseat();
   void reset();
 
@@ -146,10 +143,13 @@ struct CurlResource : SweepableResourceData {
   ReadHandler  m_read;
   Variant      m_progress_callback;
 
+  bool m_in_callback{false};
+  bool m_in_exec{false};
   bool m_emptyPost;
   bool m_safeUpload;
   CurlHandlePoolPtr m_connPool;
   PooledCurlHandle* m_pooledHandle;
+  friend struct CurlMultiResource;
 };
 
 /////////////////////////////////////////////////////////////////////////////

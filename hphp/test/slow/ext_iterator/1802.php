@@ -1,5 +1,8 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_1802() {
 $path = __DIR__."/../../sample_dir/";
 $files = array();
  // order changes per machine
@@ -11,5 +14,6 @@ foreach (new RecursiveIteratorIterator(
     $files[] = $file."\n";
   }
 }
-asort($files);
+asort(&$files);
 var_dump(array_values($files));
+}

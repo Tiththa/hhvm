@@ -96,10 +96,9 @@ $inputs = array(
 $iterator = 1;
 foreach($inputs as $key =>$value) {
   echo "\n--$key--\n";
-  var_dump( iconv_strlen($value, $encoding));
+  try { var_dump( iconv_strlen($value, $encoding)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $iterator++;
 };
 
 fclose($fp);
-?>
-===DONE===
+echo "===DONE===\n";

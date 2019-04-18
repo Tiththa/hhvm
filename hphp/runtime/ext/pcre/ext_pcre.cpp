@@ -24,8 +24,9 @@
 #include "hphp/runtime/ext/mbstring/ext_mbstring.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/string/ext_string.h"
+#include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/request-local.h"
+#include "hphp/runtime/base/rds-local.h"
 
 namespace HPHP {
 
@@ -33,9 +34,13 @@ namespace HPHP {
 
 static int s_pcre_has_jit = 0;
 
-Variant HHVM_FUNCTION(preg_grep, const String& pattern, const Array& input,
+Variant HHVM_FUNCTION(preg_grep, const String& pattern, const Variant& input,
                                  int flags /* = 0 */) {
-  return preg_grep(pattern, input, flags);
+  if (!isContainer(input)) {
+    raise_warning("input to preg_grep must be an array or collection");
+    return init_null();
+  }
+  return preg_grep(pattern, input.toArray(), flags);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -95,12 +100,12 @@ static Variant preg_replace_callback_array_impl(
   auto key = 0;
   auto total_replacement_count = 0;
   for (ArrayIter s_iter(subjects); s_iter; ++s_iter) {
-    assert(s_iter.second().isString());
+    assertx(s_iter.second().isString());
     auto subj = s_iter.second();
     for (ArrayIter pc_iter(patterns_and_callbacks.toArray());
                            pc_iter; ++pc_iter) {
       Variant pattern(pc_iter.first());
-      assert(pattern.isString());
+      assertx(pattern.isString());
       Variant callback(pc_iter.second());
       subj = HHVM_FN(preg_replace_callback)(pattern, callback, subj, limit,
                                             count);
@@ -114,7 +119,7 @@ static Variant preg_replace_callback_array_impl(
         total_replacement_count += count.toInt64();
       }
     }
-    ret.add(key++, subj);
+    ret.set(key++, subj);
   }
 
   // If count was passed in as an explicit reference, we will assign it to our
@@ -155,7 +160,7 @@ Variant HHVM_FUNCTION(preg_replace_callback_array,
 
   if (subject.isString()) {
     Array subject_arr = Array::Create();
-    subject_arr.add(0, subject.toString());
+    subject_arr.set(0, subject.toString());
     Variant ret = preg_replace_callback_array_impl(
       patterns_and_callbacks, subject_arr, limit, count
     );
@@ -257,8 +262,9 @@ String HHVM_FUNCTION(sql_regcase, const String& str) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-extern IMPLEMENT_THREAD_LOCAL(PCREglobals, tl_pcre_globals);
+// The extern symbol would resolve at link time to the same RDS_LOCAL
+// as defined in hphp/runtime/base/preg.cpp
+extern RDS_LOCAL(PCREglobals, tl_pcre_globals);
 
 struct PcreExtension final : Extension {
   PcreExtension() : Extension("pcre", NO_EXTENSION_VERSION_YET) {}
@@ -276,6 +282,9 @@ struct PcreExtension final : Extension {
     HHVM_RC_INT_SAME(PREG_PATTERN_ORDER);
     HHVM_RC_INT_SAME(PREG_SET_ORDER);
     HHVM_RC_INT_SAME(PREG_OFFSET_CAPTURE);
+    HHVM_RC_INT_SAME(PREG_FB_HACK_ARRAYS);
+    HHVM_RC_INT_SAME(PREG_FB__PRIVATE__HSL_IMPL);
+    HHVM_RC_INT(PREG_HACK_ARR, PREG_FB_HACK_ARRAYS); // legacy
 
     HHVM_RC_INT_SAME(PREG_SPLIT_NO_EMPTY);
     HHVM_RC_INT_SAME(PREG_SPLIT_DELIM_CAPTURE);

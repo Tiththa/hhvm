@@ -1,11 +1,10 @@
-<?php
+<?hh
 
 class Foo { }
 
-function run($a) {
-  $b =& $a;
-
+function run(&$b) {
   return $b;
 }
 
-var_dump(run(new Foo()));
+$a = new Foo();
+var_dump(run(&$a));

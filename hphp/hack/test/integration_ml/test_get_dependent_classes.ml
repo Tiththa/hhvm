@@ -2,13 +2,13 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
+ *
  *
  *)
 
-open Core
+open Hh_core
 
 module Test = Integration_test_base
 
@@ -40,10 +40,16 @@ let () =
 
   Test.assert_no_errors env;
 
+  let get_classes path =
+    match Naming_table.get_file_info env.ServerEnv.naming_table path with
+    | None -> SSet.empty
+    | Some info -> SSet.of_list @@ List.map info.FileInfo.classes snd
+  in
+
   let dependent_classes = Decl_redecl_service.get_dependent_classes
     None
     ~bucket_size:1
-    env.ServerEnv.files_info
+    get_classes
     (SSet.of_list ["\\C"; "\\H"; "\\J"; "\\:M";])
   in
 

@@ -125,13 +125,17 @@ static bool endsUnitAtSrcKey(const Block* block, SrcKey sk) {
     case JmpSSwitchDest:
     case JmpSwitchDest:
     case RaiseError:
+    case RaiseParamRefMismatchForFunc:
     case ThrowOutOfBounds:
     case ThrowInvalidArrayKey:
     case ThrowInvalidOperation:
     case ThrowArithmeticError:
     case ThrowDivisionByZeroError:
+    case ThrowDivisionByZeroException:
+    case ThrowLateInitPropError:
     case VerifyParamFailHard:
     case VerifyRetFailHard:
+    case VerifyPropFailHard:
     case Unreachable:
     case EndBlock:
     case FatalMissingThis:
@@ -140,11 +144,14 @@ static bool endsUnitAtSrcKey(const Block* block, SrcKey sk) {
     // The RetCtrl is generally ending a bytecode instruction, with the
     // exception being in an Await bytecode instruction, where we consider the
     // end of the bytecode instruction to be the non-suspending path.
-    case RetCtrl:
-    case AsyncRetCtrl:
-    case AsyncRetFast:
-    case AsyncSwitchFast:
-      return inst.marker().sk().op() != Op::Await;
+    case RetCtrl: {
+      auto const op = inst.marker().sk().op();
+      return op != Op::Await && op != Op::AwaitAll;
+    }
+
+    case AsyncFuncRet:
+    case AsyncFuncRetSlow:
+      return true;
 
     // A ReqBindJmp ends a unit and it jumps to the next instruction to
     // execute.

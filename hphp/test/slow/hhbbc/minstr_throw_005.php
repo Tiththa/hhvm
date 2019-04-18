@@ -8,7 +8,7 @@ class X implements ArrayAccess {
 }
 
 function foo() {
-  $x[0] = new X;
+  $x = [0 => new X];
   try {
     $x[0]['asd'] = 2;
   } catch (Exception $e) {
@@ -17,4 +17,8 @@ function foo() {
     var_dump($x);
   }
 }
+
+<<__EntryPoint>>
+function main_minstr_throw_005() {
 foo();
+}

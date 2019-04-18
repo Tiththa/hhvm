@@ -25,50 +25,50 @@ namespace HPHP {
 //////////////////////////////////////////////////////////////////////
 
 inline bool isContainer(const Cell c) {
-  assert(cellIsPlausible(c));
+  assertx(cellIsPlausible(c));
   return isArrayLikeType(c.m_type) ||
          (c.m_type == KindOfObject && c.m_data.pobj->isCollection());
 }
 
 inline bool isContainer(const Variant& v) {
-  return isContainer(*v.asCell());
+  return isContainer(*v.toCell());
 }
 
 inline bool isContainerOrNull(const Cell c) {
-  assert(cellIsPlausible(c));
+  assertx(cellIsPlausible(c));
   return isNullType(c.m_type) || isArrayLikeType(c.m_type) ||
          (c.m_type == KindOfObject && c.m_data.pobj->isCollection());
 }
 
 inline bool isContainerOrNull(const Variant& v) {
-  return isContainerOrNull(*v.asCell());
+  return isContainerOrNull(*v.toCell());
 }
 
 inline bool isMutableContainer(const Cell c) {
-  assert(cellIsPlausible(c));
+  assertx(cellIsPlausible(c));
   return isArrayLikeType(c.m_type) ||
          (c.m_type == KindOfObject && c.m_data.pobj->isMutableCollection());
 }
 
 inline bool isMutableContainer(const Variant& v) {
-  return isMutableContainer(*v.asCell());
+  return isMutableContainer(*v.toCell());
 }
 
 inline size_t getContainerSize(const Cell c) {
-  assert(isContainer(c));
+  assertx(isContainer(c));
   if (isArrayLikeType(c.m_type)) {
     return c.m_data.parr->size();
   }
-  assert(c.m_type == KindOfObject && c.m_data.pobj->isCollection());
+  assertx(c.m_type == KindOfObject && c.m_data.pobj->isCollection());
   return collections::getSize(c.m_data.pobj);
 }
 
 inline size_t getContainerSize(const Variant& v) {
-  return getContainerSize(*v.asCell());
+  return getContainerSize(*v.toCell());
 }
 
 inline bool isPackedContainer(const Cell c) {
-  assert(isContainer(c));
+  assertx(isContainer(c));
   if (isArrayLikeType(c.m_type)) {
     return c.m_data.parr->hasPackedLayout();
   }
@@ -78,7 +78,7 @@ inline bool isPackedContainer(const Cell c) {
 
 ALWAYS_INLINE
 const Cell container_as_cell(const Variant& container) {
-  const auto& cellContainer = *container.asCell();
+  const auto& cellContainer = *container.toCell();
   if (UNLIKELY(!isContainer(cellContainer))) {
     SystemLib::throwInvalidArgumentExceptionObject(
       "Parameter must be a container (array or collection)");
@@ -88,6 +88,41 @@ const Cell container_as_cell(const Variant& container) {
 
 //////////////////////////////////////////////////////////////////////
 
+/*
+ * clsmeth compact container helpers.
+ */
+inline bool isClsMethCompactContainer(const Cell c) {
+ return isContainer(c) || isClsMethType(c.m_type);
+}
+
+inline bool isClsMethCompactContainer(const Variant& v) {
+ return isClsMethCompactContainer(*v.toCell());
+}
+
+inline size_t getClsMethCompactContainerSize(const Cell c) {
+ return isClsMethType(c.m_type) ? 2 : getContainerSize(c);
+}
+
+inline size_t getClsMethCompactContainerSize(const Variant& v) {
+ return getClsMethCompactContainerSize(*v.toCell());
+}
+
+inline Cell* castClsmethToContainerInplace(Cell* c) {
+  if (isClsMethType(c->m_type)) {
+    if (RuntimeOption::EvalHackArrDVArrs) {
+      tvCastToVecInPlace(c);
+    } else {
+      tvCastToVArrayInPlace(c);
+    }
+  }
+  return c;
+}
+
+inline Cell* castClsmethToContainerInplace(VRefParam ref) {
+  return castClsmethToContainerInplace(const_cast<Cell*>(ref->toCell()));
+}
+
+//////////////////////////////////////////////////////////////////////
 }
 
 #endif

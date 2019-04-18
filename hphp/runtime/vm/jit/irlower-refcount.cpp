@@ -26,6 +26,7 @@
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/stats.h"
 
+#include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/arg-group.h"
@@ -33,10 +34,11 @@
 #include "hphp/runtime/vm/jit/call-spec.h"
 #include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
+#include "hphp/runtime/vm/jit/decref-profile.h"
 #include "hphp/runtime/vm/jit/extra-data.h"
+#include "hphp/runtime/vm/jit/incref-profile.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
-#include "hphp/runtime/vm/jit/profile-decref.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/target-profile.h"
@@ -63,16 +65,20 @@ namespace {
 ///////////////////////////////////////////////////////////////////////////////
 
 template<class Then>
-void ifNonPersistent(Vout& v, Type ty, Vloc loc, Then then) {
+void ifNonPersistent(Vout& v, Vout& vtaken, Type ty, Vloc loc, Then then) {
+  always_assert(
+    !one_bit_refcount &&
+    "ifNonPersistent is too coarse to be used in one-bit refcount mode"
+  );
+
   if (!ty.maybe(TPersistent)) {
     then(v); // non-persistent check below will always succeed
     return;
   }
 
-  auto const sf = v.makeReg();
-  v << cmplim{0, loc.reg()[FAST_REFCOUNT_OFFSET], sf};
+  auto const sf = emitCmpRefCount(v, 0, loc.reg());
   static_assert(UncountedValue < 0 && StaticValue < 0, "");
-  ifThen(v, CC_GE, sf, then);
+  unlikelyIfThen(v, vtaken, CC_GE, sf, then);
 }
 
 template<class Then>
@@ -83,13 +89,13 @@ void ifRefCountedType(Vout& v, Vout& vtaken, Type ty, Vloc loc, Then then) {
     return;
   }
   auto const sf = v.makeReg();
-  auto cond = CC_NLE;
+  ConditionCode cond;
   if (ty <= TCtx) {
     v << testqi{ActRec::kHasClassBit, loc.reg(0), sf};
     cond = CC_E;
   } else {
-    assert(ty <= TGen);
-    emitCmpTVType(v, sf, KindOfRefCountThreshold, loc.reg(1));
+    assertx(ty <= TGen);
+    cond = emitIsTVTypeRefCounted(v, sf, loc.reg(1));
   }
   unlikelyIfThen(v, vtaken, cond, sf, then);
 }
@@ -97,31 +103,44 @@ void ifRefCountedType(Vout& v, Vout& vtaken, Type ty, Vloc loc, Then then) {
 template<class Then>
 void ifRefCountedNonPersistent(Vout& v, Type ty, Vloc loc, Then then) {
   ifRefCountedType(v, v, ty, loc, [&] (Vout& v) {
-    ifNonPersistent(v, ty, loc, then);
+    ifNonPersistent(v, v, ty, loc, then);
   });
 }
 
-///////////////////////////////////////////////////////////////////////////////
+template<typename T>
+Vreg incrAmount(Vout& v, const TargetProfile<T>& profile) {
+  if (!profile.profiling()) return Vreg{};
+  auto const sf = v.makeReg();
+  auto const offset = profile.handle() + offsetof(T, total);
+  v << cmpwim{-1, rvmtl()[offset], sf};
+  auto const r1 = v.makeReg();
+  v << setcc{CC_NE, sf, r1};
+  auto const r2 = v.makeReg();
+  v << movzbw{r1, r2};
+  return r2;
+}
 
+template<typename T>
+void incrementProfile(Vout& v, const TargetProfile<T>& profile,
+                      Vreg incr, size_t offset) {
+  if (profile.profiling()) {
+    v << addwm{incr, rvmtl()[profile.handle() + offset],
+        v.makeReg()};
+  }
+}
+
+inline bool useAddrForCountedCheck() {
+  return addr_encodes_persistency && !one_bit_refcount &&
+    RuntimeOption::EvalJitPGOUseAddrCountedCheck;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-struct IncRefProfile {
-  std::string toString() const {
-    return folly::sformat("tryinc: {:4}", tryinc);
-  }
+}
 
-  static void reduce(IncRefProfile& a, const IncRefProfile& b) {
-    a.tryinc += b.tryinc;
-  }
+static auto const s_IncRef = makeStaticString("IncRefProfile");
 
-  /*
-   * The number of times this IncRef made it at least as far as the static
-   * check (meaning it was given a refcounted DataType).
-   */
-  uint16_t tryinc;
-};
+///////////////////////////////////////////////////////////////////////////////
 
 void cgIncRef(IRLS& env, const IRInstruction* inst) {
   // This is redundant with a check in ifRefCountedNonPersistent, but we check
@@ -132,67 +151,112 @@ void cgIncRef(IRLS& env, const IRInstruction* inst) {
   auto const loc = srcLoc(env, inst, 0);
   auto& v = vmain(env);
 
-  if (ty.maybe(TCctx)) {
-    always_assert(ty <= TCtx && ty.maybe(TObj));
-    auto const sf = v.makeReg();
-    v << testqi{ActRec::kHasClassBit, loc.reg(), sf};
-    ifThen(v, CC_Z, sf, [&] (Vout& v) { emitIncRef(v, loc.reg()); });
-    return;
-  }
+  auto const profile = TargetProfile<IncRefProfile>(env.unit.context(),
+                                                    inst->marker(),
+                                                    s_IncRef);
 
-  folly::Optional<rds::Handle> profHandle;
-  auto vtaken = &v;
+  auto const incr = incrAmount(v, profile);
+  incrementProfile(v, profile, incr, offsetof(IncRefProfile, total));
+
+  bool unlikelyCounted = false;
+  bool unlikelyIncrement = false;
 
   // We profile generic IncRefs to see which ones are unlikely to see
   // refcounted values.
-  if (RuntimeOption::EvalHHIROutlineGenericIncDecRef &&
-      !ty.isKnownDataType()) {
-    auto const profileKey = makeStaticString(
-      folly::to<std::string>("IncRefProfile-", ty.toString())
-    );
-    auto const profile = TargetProfile<IncRefProfile> {
-      env.unit.context(), inst->marker(), profileKey
-    };
-
-    if (profile.profiling()) {
-      profHandle = profile.handle();
-    } else if (profile.optimizing()) {
-      auto const data = profile.data(IncRefProfile::reduce);
-      if (data.tryinc == 0) {
+  if (RuntimeOption::EvalHHIROutlineGenericIncDecRef && profile.optimizing()) {
+    auto const data = profile.data();
+    if (data.total > 0) {
+      if (data.percent(data.refcounted) <
+          RuntimeOption::EvalJitPGOUnlikelyIncRefCountedPercent
+          && !(ty <= TGen && ty.isKnownDataType())) {
+        unlikelyCounted = true;
+        FTRACE(3, "irlower-inc-dec: Emitting cold counted check for {}, {}\n",
+               data, *inst);
+      }
+      if (data.percent(data.incremented) <
+          RuntimeOption::EvalJitPGOUnlikelyIncRefIncrementPercent) {
+        unlikelyIncrement = true;
         FTRACE(3, "irlower-inc-dec: Emitting cold IncRef for {}, {}\n",
                data, *inst);
-        vtaken = &vcold(env);
       }
     }
   }
 
-  ifRefCountedType(v, *vtaken, ty, loc, [&] (Vout& v) {
-    if (profHandle) {
-      v << incwm{rvmtl()[*profHandle + offsetof(IncRefProfile, tryinc)],
-                 v.makeReg()};
+  if (ty.maybe(TCctx)) {
+    always_assert(ty <= TCtx && ty.maybe(TObj));
+    auto const sf = v.makeReg();
+    v << testqi{ActRec::kHasClassBit, loc.reg(), sf};
+    ifThen(v, vcold(env), CC_Z, sf,
+           [&] (Vout& v) {
+             incrementProfile(v, profile, incr,
+                              offsetof(IncRefProfile, incremented));
+             emitIncRef(v, loc.reg(), TRAP_REASON);
+           },
+           unlikelyIncrement);
+    return;
+  }
+
+  if (useAddrForCountedCheck() &&
+      !unlikelyCounted && unlikelyIncrement &&
+      ty <= (TCounted | TPersistent) && ty.maybe(TPersistent)) {
+    assertx(profile.optimizing());
+    // We know the value is a pointer to a HeapObject
+    auto const addr = loc.reg();
+    // Look at upper bits of the pointer to decide if it is counted.
+    auto const sf = v.makeReg();
+    v << shrqi{(int)kUncountedMaxShift, addr, v.makeReg(), sf};
+    unlikelyIfThen(v, vcold(env), CC_NZ, sf,
+                   [&] (Vout& v) {
+                     emitIncRef(v, loc.reg(), TRAP_REASON);
+                   });
+    FTRACE(1, "irlower-inc: checking addr for incref {}\n", *inst);
+    return;
+  }
+
+  auto& vtaken = unlikelyCounted ? vcold(env) : v;
+  ifRefCountedType(
+    v, vtaken, ty, loc,
+    [&] (Vout& v) {
+      incrementProfile(v, profile, incr, offsetof(IncRefProfile, refcounted));
+
+      if (one_bit_refcount) {
+        if (unconditional_one_bit_incref && !ty.maybe(TPersistent)) {
+          incrementProfile(v, profile, incr,
+                           offsetof(IncRefProfile, incremented));
+          emitIncRef(v, loc.reg(), TRAP_REASON);
+        } else {
+          // if (m_count == OneReference) m_count = MultiReference;
+          // This combines the persistence check and an attempt to
+          // reduce memory traffic, depending on why we ended up in
+          // this branch.
+          auto const sf = emitCmpRefCount(v, OneReference, loc.reg());
+          ifThen(
+            v, vcold(env), CC_E, sf,
+            [&](Vout& v) {
+              incrementProfile(v, profile, incr,
+                               offsetof(IncRefProfile, incremented));
+              emitIncRef(v, loc.reg(), TRAP_REASON);
+            },
+            unlikelyIncrement);
+        }
+        return;
+      }
+
+      auto& vtaken = unlikelyIncrement ? vcold(env) : v;
+      ifNonPersistent(
+        v, vtaken, ty, loc,
+        [&] (Vout& v) {
+          incrementProfile(v, profile, incr,
+                           offsetof(IncRefProfile, incremented));
+          emitIncRef(v, loc.reg(), TRAP_REASON);
+        }
+      );
     }
-    ifNonPersistent(v, ty, loc, [&] (Vout& v) {
-      emitIncRef(v, loc.reg());
-    });
-  });
+  );
 }
 
 
 namespace {
-
-const StringData* decRefProfileKey(const IRInstruction* inst) {
-  return makeStaticString(folly::to<std::string>(
-                            "DecRefProfile-",
-                            opcodeName(inst->op()), '-',
-                            inst->extra<DecRef>()->locId));
-}
-
-TargetProfile<DecRefProfile> decRefProfile(const IRLS& env,
-                                           const IRInstruction* inst) {
-  auto const profileKey = decRefProfileKey(inst);
-  return TargetProfile<DecRefProfile>(env.unit.context(), inst->marker(),
-                                      profileKey);
-}
 
 /*
  * For Optimize translations, this function returns the percentage of the time
@@ -205,7 +269,7 @@ float decRefDestroyedPercent(Vout& v, IRLS& /*env*/,
                              const TargetProfile<DecRefProfile>& profile) {
   if (!profile.optimizing()) return 0.0;
 
-  auto const data = profile.data(DecRefProfile::reduce);
+  auto const data = profile.data();
 
   if (data.percent(data.destroyed()) == 0) {
     emitIncStat(v, Stats::TC_DecRef_Profiled_0);
@@ -220,6 +284,8 @@ CallSpec getDtorCallSpec(DataType type) {
   switch (type) {
     case KindOfString:
       return CallSpec::method(&StringData::release);
+    case KindOfShape:
+      return CallSpec::direct(MixedArray::Release);
     case KindOfArray:
       return CallSpec::method(&ArrayData::release);
     case KindOfVec:
@@ -229,15 +295,15 @@ CallSpec getDtorCallSpec(DataType type) {
     case KindOfKeyset:
       return CallSpec::direct(SetArray::Release);
     case KindOfObject:
-      return CallSpec::method(
-        RuntimeOption::EnableObjDestructCall
-          ? &ObjectData::release
-          : &ObjectData::releaseNoObjDestructCheck
-      );
+      return CallSpec::method(&ObjectData::release);
     case KindOfResource:
       return CallSpec::method(&ResourceHdr::release);
     case KindOfRef:
       return CallSpec::method(&RefData::release);
+    case KindOfClsMeth:
+      return CallSpec::direct(ClsMethDataRef::Release);
+    case KindOfRecord:
+      return CallSpec::method(&RecordData::release);
     DT_UNCOUNTED_CASE:
       break;
   }
@@ -259,9 +325,7 @@ CallSpec makeDtorCall(Type ty, Vloc loc, ArgGroup& args) {
 
     // These conditions must match the ones which cause us to call
     // cls->instanceDtor() in ObjectData::release().
-    if ((cls->attrs() & AttrNoOverride) &&
-        !cls->getDtor() &&
-        cls->instanceDtor()) {
+    if ((cls->attrs() & AttrNoOverride) && cls->instanceDtor()) {
       args.immPtr(cls);
       return CallSpec::direct(cls->instanceDtor().get());
     }
@@ -273,35 +337,32 @@ CallSpec makeDtorCall(Type ty, Vloc loc, ArgGroup& args) {
 
 void implDecRefProf(Vout& v, IRLS& env,
                     const IRInstruction* inst, Type ty,
-                    const TargetProfile<DecRefProfile>& profile) {
+                    const TargetProfile<DecRefProfile>& profile,
+                    Vreg incr) {
   auto const base = srcLoc(env, inst, 0).reg(0);
 
   auto const destroy = [&] (Vout& v) {
-    v << incwm{rvmtl()[profile.handle() + offsetof(DecRefProfile, released)],
-               v.makeReg()};
+    incrementProfile(v, profile, incr, offsetof(DecRefProfile, released));
     auto args = argGroup(env, inst).reg(base);
     auto const dtor = makeDtorCall(ty, srcLoc(env, inst, 0), args);
     cgCallHelper(v, env, dtor, kVoidDest, SyncOptions::Sync, args);
   };
 
-  v << incwm{rvmtl()[profile.handle() + offsetof(DecRefProfile, refcounted)],
-      v.makeReg()};
+  incrementProfile(v, profile, incr, offsetof(DecRefProfile, refcounted));
 
   if (!ty.maybe(TPersistent)) {
-    auto const sf = emitDecRef(v, base);
+    auto const sf = emitDecRef(v, base, TRAP_REASON);
     ifThenElse(v, vcold(env), CC_E, sf,
                destroy,
                [&] (Vout& v) {
-                 v << incwm{rvmtl()[profile.handle() +
-                                    offsetof(DecRefProfile, decremented)],
-                            v.makeReg()};
+                 incrementProfile(v, profile, incr,
+                                  offsetof(DecRefProfile, decremented));
                },
                true /* unlikelyDestroy */);
     return;
   }
 
-  auto const sf = v.makeReg();
-  v << cmplim{1, base[FAST_REFCOUNT_OFFSET], sf};
+  auto const sf = emitCmpRefCount(v, OneReference, base);
   ifThenElse(
     v, vcold(env), CC_E, sf,
     destroy,
@@ -309,10 +370,9 @@ void implDecRefProf(Vout& v, IRLS& env,
       // If it's not static, actually reduce the reference count.  This does
       // another branch using the same status flags from the cmplim above.
       ifThen(v, CC_NL, sf, [&] (Vout& v) {
-          v << incwm{
-            rvmtl()[profile.handle() + offsetof(DecRefProfile, decremented)],
-            v.makeReg()};
-          emitDecRef(v, base);
+          incrementProfile(v, profile, incr,
+                           offsetof(DecRefProfile, decremented));
+          emitDecRef(v, base, TRAP_REASON);
         },
         tag_from_string("decref-is-static"));
     },
@@ -323,21 +383,28 @@ void implDecRefProf(Vout& v, IRLS& env,
 
 /*
  * This function emits a DecRef optimized for the case where the value will be
- * destroyed / release.
+ * destroyed/released.
  */
 template<class Destroy>
 void emitDecRefOptDestroy(Vout& v, Vout& vcold, Vreg data,
                           Destroy destroy, bool unlikelyPersist,
                           bool unlikelySurvive) {
-  auto const sf = v.makeReg();
-  v << cmplim{1, data[FAST_REFCOUNT_OFFSET], sf};
+  auto const sf = emitCmpRefCount(v, OneReference, data);
+
+  if (one_bit_refcount) {
+    ifThen(v, CC_E, sf, destroy, tag_from_string("decref-is-one"));
+    return;
+  }
+
   ifThenElse(
     v, vcold, CC_NE, sf,
     [&] (Vout& v) {
       // If it's not static, actually reduce the reference count.  This does
       // another branch using the same status flags from the cmplim above.
-      ifThen(v, vcold, CC_NL, sf, [&] (Vout& v) { emitDecRef(v, data); },
-             unlikelySurvive, tag_from_string("decref-is-static"));
+      ifThen(v, vcold, CC_NL, sf,
+             [&] (Vout& v) { emitDecRef(v, data, TRAP_REASON); },
+             unlikelySurvive, tag_from_string("decref-is-static")
+      );
     },
     destroy,
     unlikelyPersist && unlikelySurvive,
@@ -353,8 +420,16 @@ template<class Destroy>
 void emitDecRefOptSurvive(Vout& v, Vout& vcold, Vreg data,
                           Destroy destroy, bool unlikelyDestroy,
                           bool unlikelyPersist) {
-  auto const sf = v.makeReg();
-  v << cmplim{1, data[FAST_REFCOUNT_OFFSET], sf};
+  auto const sf = emitCmpRefCount(v, OneReference, data);
+
+  if (one_bit_refcount) {
+    ifThen(
+      v, vcold, CC_E, sf, destroy, unlikelyDestroy,
+      tag_from_string("decref-is-one")
+    );
+    return;
+  }
+
   ifThenElse(
     v, vcold, CC_LE, sf,
     [&] (Vout& v) {
@@ -364,7 +439,7 @@ void emitDecRefOptSurvive(Vout& v, Vout& vcold, Vreg data,
              tag_from_string("decref-is-static"));
     },
     [&] (Vout& v) {
-      emitDecRef(v, data);
+      emitDecRef(v, data, TRAP_REASON);
     },
     unlikelyDestroy && unlikelyPersist,
     tag_from_string("decref-is-one")
@@ -379,8 +454,16 @@ template<class Destroy>
 void emitDecRefOptPersist(Vout& v, Vout& vcold, Vreg data,
                           Destroy destroy, bool unlikelyDestroy,
                           bool unlikelySurvive) {
-  auto const sf = v.makeReg();
-  v << cmplim{1, data[FAST_REFCOUNT_OFFSET], sf};
+  auto const sf = emitCmpRefCount(v, OneReference, data);
+
+  if (one_bit_refcount) {
+    ifThen(
+      v, vcold, CC_E, sf, destroy, unlikelyDestroy,
+      tag_from_string("decref-is-one")
+    );
+    return;
+  }
+
   ifThen(
     v, vcold, CC_GE, sf,
     [&] (Vout& v) {
@@ -390,7 +473,7 @@ void emitDecRefOptPersist(Vout& v, Vout& vcold, Vreg data,
       ifThenElse(v, vcold, CC_E, sf,
                  destroy,
                  [&] (Vout& v) {
-                   emitDecRef(v, data);
+                   emitDecRef(v, data, TRAP_REASON);
                  },
                  unlikelyDestroy,
                  tag_from_string("decref-is-one"));
@@ -409,7 +492,7 @@ template<class Destroy>
 void emitDecRefOpt(Vout& v, Vout& vcold, Vreg base,
                    const TargetProfile<DecRefProfile>& profile,
                    Destroy destroy) {
-  const auto data = profile.data(DecRefProfile::reduce);
+  const auto data = profile.data();
   const auto persistPct = data.percent(data.persistent());
   const auto destroyPct = data.percent(data.destroyed());
   const auto survivePct = data.percent(data.survived());
@@ -461,7 +544,7 @@ void implDecRef(Vout& v, IRLS& env,
       RuntimeOption::EvalJitPGOUnlikelyDecRefReleasePercent;
     auto const unlikelyDestroy = destroyedPct < unlikelyReleasePct;
 
-    auto const sf = emitDecRef(v, base);
+    auto const sf = emitDecRef(v, base, TRAP_REASON);
     ifThen(v, vcold(env), CC_E, sf, destroy, unlikelyDestroy);
     return;
   }
@@ -469,7 +552,8 @@ void implDecRef(Vout& v, IRLS& env,
   if (profile.optimizing()) {
     emitDecRefOpt(v, vcold(env), base, profile, destroy);
   } else {
-    emitDecRefWork(v, vcold(env), base, destroy, true /* unlikelyDestroy */);
+    emitDecRefWork(v, vcold(env), base, destroy, true /* unlikelyDestroy */,
+                   TRAP_REASON);
   }
 }
 
@@ -546,6 +630,8 @@ void emitDecRefTypeStat(Vout& v, IRLS& env, const IRInstruction* inst) {
  *
  */
 void cgDecRef(IRLS& env, const IRInstruction *inst) {
+  if (noop_decref) return;
+
   // This is redundant with a check in ifRefCounted, but we check anyway to
   // avoid emitting profiling code in this case.
   auto const ty = inst->src(0)->type();
@@ -555,17 +641,17 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
 
   emitDecRefTypeStat(v, env, inst);
 
-  const auto profile = decRefProfile(env, inst);
+  const auto profile = decRefProfile(env.unit.context(), inst);
 
   if (Trace::moduleEnabled(Trace::irlower, 3) && profile.optimizing()) {
     FTRACE(3, "irlower-refcount: DecRefProfile<{}, {}>: {}\n",
            inst->marker().show(), decRefProfileKey(inst)->data(),
-           profile.data(DecRefProfile::reduce));
+           profile.data());
   }
 
+  auto const incr = incrAmount(v, profile);
   if (profile.profiling()) {
-    v << incwm{rvmtl()[profile.handle() + offsetof(DecRefProfile, total)],
-               v.makeReg()};
+    incrementProfile(v, profile, incr, offsetof(DecRefProfile, total));
   }
 
   auto impl = [&] (Vout& v, Type t) {
@@ -573,7 +659,7 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
   };
 
   auto implProf = [&] (Vout& v, Type t) {
-    implDecRefProf(v, env, inst, t, profile);
+    implDecRefProf(v, env, inst, t, profile, incr);
   };
 
   if (ty.maybe(TCctx)) {
@@ -592,7 +678,7 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
   if (RuntimeOption::EvalHHIROutlineGenericIncDecRef &&
       profile.optimizing() &&
       !ty.isKnownDataType()) {
-    auto const data = profile.data(DecRefProfile::reduce);
+    auto const data = profile.data();
     auto const unlikelyCountedPct =
       RuntimeOption::EvalJitPGOUnlikelyDecRefCountedPercent;
     if (data.percent(data.refcounted) < unlikelyCountedPct) {
@@ -605,9 +691,9 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
       auto const type = srcLoc(env, inst, 0).reg(1);
 
       auto const sf = v.makeReg();
-      emitCmpTVType(v, sf, KindOfRefCountThreshold, type);
+      auto const cc = emitIsTVTypeRefCounted(v, sf, type);
 
-      unlikelyIfThen(v, vcold(env), CC_NLE, sf, [&] (Vout& v) {
+      unlikelyIfThen(v, vcold(env), cc, sf, [&] (Vout& v) {
         auto const stub = tc::ustubs().decRefGeneric;
         v << copy2{data, type, rarg(0), rarg(1)};
         v << callfaststub{stub, makeFixup(inst->marker()), arg_regs(2)};
@@ -621,6 +707,26 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
         implProf(v, ty);
       });
   } else {
+    if (useAddrForCountedCheck() &&
+        profile.optimizing() &&
+        ty <= (TCounted | TPersistent) && ty.maybe(TPersistent)) {
+      // Need to check countedness, and we do it by looking at the pointer.
+      auto const data = profile.data();
+      auto const unlikelyDecrement = data.total > 0 &&
+        data.percent(data.survived() + data.destroyed()) <
+        RuntimeOption::EvalJitPGOUnlikelyDecRefDecrementPercent;
+      // if actually counted, we need to touch the cache line anyway.
+      if (unlikelyDecrement) {
+        auto sf = v.makeReg();
+        auto const addr = srcLoc(env, inst, 0).reg();
+        v << shrqi{(int)kUncountedMaxShift, addr, v.makeReg(), sf};
+        unlikelyIfThen(v, vcold(env), CC_NZ, sf,
+                       [&] (Vout& v) {
+                         impl(v, ty & TCounted);
+                       });
+        return;
+      }
+    }
     ifRefCountedType(v, v, ty, srcLoc(env, inst, 0), [&] (Vout& v) {
         impl(v, ty);
       });
@@ -628,16 +734,59 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
 }
 
 void cgDecRefNZ(IRLS& env, const IRInstruction* inst) {
-  auto& v = vmain(env);
+  if (one_bit_refcount) {
+    // Nothing to do here.
+    return;
+  }
+
+  // Redundant, but might save profiling code.
   auto const ty = inst->src(0)->type();
+  if (!ty.maybe(TCounted)) return;
+
+  auto const loc = srcLoc(env, inst, 0);
+  auto& v = vmain(env);
+
+  auto const profile = decRefProfile(env.unit.context(), inst);
+
+  auto const incr = incrAmount(v, profile);
+
+  incrementProfile(v, profile, incr, offsetof(DecRefProfile, total));
+
+  bool unlikelyCounted = false;
+  bool unlikelyDecrement = false;
+  if (RuntimeOption::EvalHHIROutlineGenericIncDecRef && profile.optimizing()) {
+    auto const data = profile.data();
+    if (data.total > 0) {
+      if (data.percent(data.refcounted) <
+          RuntimeOption::EvalJitPGOUnlikelyDecRefCountedPercent
+          && !(ty <= TGen && ty.isKnownDataType())) {
+        unlikelyCounted = true;
+        FTRACE(3, "irlower-inc-dec: Emitting cold counted check for {}, {}\n",
+               data, *inst);
+      }
+      if (data.percent(data.decremented) <
+          RuntimeOption::EvalJitPGOUnlikelyDecRefDecrementPercent) {
+        unlikelyDecrement = true;
+        FTRACE(3, "irlower-inc-dec: Emitting cold DecRef for {}, {}\n",
+               data, *inst);
+      }
+    }
+  }
 
   if (ty.maybe(TCctx)) {
     always_assert(ty <= TCtx);
     if (ty.maybe(TObj)) {
-      auto const loc = srcLoc(env, inst, 0);
       auto const sf = v.makeReg();
       v << testqi{ActRec::kHasClassBit, loc.reg(), sf};
-      ifThen(v, CC_Z, sf, [&] (Vout& v) { emitDecRef(v, loc.reg()); });
+      ifThen(
+        v, vcold(env), CC_Z, sf,
+        [&] (Vout& v) {
+          incrementProfile(v, profile, incr,
+                           offsetof(DecRefProfile, decremented));
+          emitDecRef(v, loc.reg(), TRAP_REASON);
+        },
+        unlikelyDecrement
+      );
     }
     return;
   }
@@ -645,21 +794,46 @@ void cgDecRefNZ(IRLS& env, const IRInstruction* inst) {
   emitIncStat(v, Stats::TC_DecRef_NZ);
   emitDecRefTypeStat(v, env, inst);
 
-  auto const src = srcLoc(env, inst, 0);
+  if (useAddrForCountedCheck() &&
+      !unlikelyCounted && unlikelyDecrement &&
+      ty <= (TCounted | TPersistent) && ty.maybe(TPersistent)) {
+    assertx(profile.optimizing());
+    auto sf = v.makeReg();
+    v << shrqi{(int)kUncountedMaxShift, loc.reg(), v.makeReg(), sf};
+    unlikelyIfThen(v, vcold(env), CC_NZ, sf,
+                   [&] (Vout& v) {
+                     emitDecRef(v, loc.reg(), TRAP_REASON);
+                   });
+    return;
+  }
 
-  ifRefCountedNonPersistent(v, ty, src, [&] (Vout& v) {
-    emitDecRef(v, src.reg());
-  });
+  auto& vtaken = unlikelyCounted ? vcold(env) : v;
+  ifRefCountedType(
+    v, vtaken, ty, loc,
+    [&] (Vout& v) {
+      incrementProfile(v, profile, incr, offsetof(DecRefProfile, refcounted));
+      auto& vtaken = unlikelyDecrement ? vcold(env) : v;
+      ifNonPersistent(
+        v, vtaken, ty, loc,
+        [&](Vout& v) {
+          incrementProfile(v, profile, incr,
+                           offsetof(DecRefProfile, decremented));
+          emitDecRef(v, loc.reg(), TRAP_REASON);
+        }
+      );
+    }
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 void cgDbgAssertRefCount(IRLS& env, const IRInstruction* inst) {
+  auto const reason = inst->extra<AssertReason>()->reason;
   auto const src = srcLoc(env, inst, 0);
   auto& v = vmain(env);
 
   ifRefCountedType(v, v, inst->src(0)->type(), src, [&] (Vout& v) {
-    emitAssertRefCount(v, src.reg());
+    emitAssertRefCount(v, src.reg(), reason);
   });
 }
 

@@ -8,9 +8,12 @@
   DefCls 2
   DefCls 3
   DefCls 4
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
   True
   RetC
 }
@@ -60,16 +63,13 @@
 .class [interface] IDunno2 { .default_ctor; }
 
 .class Derived extends Base implements(IDunno IDunno2) {
-  .method [public no_injection] 86ctor() {
-    Null
-    RetC
-  }
-
   .method [public] some_junk {
     This
+    NullUninit
+    NullUninit
     FPushObjMethodD 0 "prot_method" NullThrows
-    FCall 0
-    PopR
+    FCall <> 0 1 "" - "" ""
+    PopC
 
     Null
     RetC
@@ -89,11 +89,6 @@
 }
 
 .class WithProps {
-  .method [public] 86ctor {
-    Null
-    RetC
-  }
-
   .property [public] funk;
 
   .method [public] print_funk {
@@ -102,7 +97,7 @@
     PopC
 
     This
-    BaseC 0
+    BaseC 0 Warn
     QueryM 1 CGet PL:$name
     String "\n"
     Concat
@@ -116,7 +111,7 @@
 
   .method [public] print_defaulted {
     This
-    BaseC 0
+    BaseC 0 Warn
     QueryM 1 CGet PT:"defaulted"
     String "\n"
     Concat
@@ -124,7 +119,7 @@
     PopC
 
     This
-    BaseC 0
+    BaseC 0 Warn
     QueryM 1 CGet PT:"badstring"
     String "bad string\"\"\"has triple quotes"
     Eq
@@ -139,9 +134,13 @@
 }
 
 .function prop_test {
-  FPushCtorD 0 "WithProps"
-  FCall 0
-  PopR
+  NewObjD "WithProps"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $obj
   PopC
 
@@ -152,14 +151,18 @@
   PopC
 
   CGetL $obj
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "print_funk" NullThrows
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   CGetL $obj
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "print_defaulted" NullThrows
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   True
   RetC
@@ -168,50 +171,71 @@
 .function main {
   .numclsrefslots 1;
 
-  FPushCtorD 0 "Base"
-  FCall 0
-  PopR
+  NewObjD "Base"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $base
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  String "printing this string"
   String "print_it"
   String "Base"
   ClsRefGetC 0
   FPushClsMethod 1 0
-  String "printing this string"
-  FPassC 0
-  FCall 1
-  PopR
+  FCall <> 1 1 "" - "" ""
+  PopC
 
-  FPushCtorD 0 "Derived"
-  FCall 0
-  PopR
+  NewObjD "Derived"
+  Dup
+  NullUninit
+  NullUninit
+  FPushCtor 0
+  FCall <> 0 1 "" - "" ""
+  PopC
   SetL $derived
   PopC
 
   CGetL $derived
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "some_junk" NullThrows
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   CGetL $base
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "overriden" NullThrows
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   CGetL $derived
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "overriden" NullThrows
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   CGetL $derived
+  NullUninit
+  NullUninit
   FPushObjMethodD 0 "abs_method" NullThrows
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "prop_test"
-  FCall 0
-  PopR
+  FCall <> 0 1 "" - "" ""
+  PopC
 
   Int 1
   RetC

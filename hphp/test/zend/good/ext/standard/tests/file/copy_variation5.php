@@ -9,7 +9,7 @@
 */
 
 echo "*** Test copy() function: checking case sensitivity in creation of destination file names ***\n";
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $src_file_name = $file_path."/copy_variation5.tmp";
 $file_handle = fopen($src_file_name, "w");
 fwrite( $file_handle, str_repeat(b"Hello2World...\n", 100) );
@@ -63,9 +63,5 @@ foreach($dest_files as $dest_file) {
 }
 
 echo "*** Done ***\n";
-?>
-
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 unlink(dirname(__FILE__)."/copy_variation5.tmp");
-?>

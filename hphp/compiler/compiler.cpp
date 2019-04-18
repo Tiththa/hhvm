@@ -17,14 +17,10 @@
 #include "hphp/compiler/compiler.h"
 
 #include "hphp/compiler/analysis/analysis_result.h"
-#include "hphp/compiler/analysis/code_error.h"
 #include "hphp/compiler/analysis/emitter.h"
-#include "hphp/compiler/analysis/symbol_table.h"
 #include "hphp/compiler/builtin_symbols.h"
-#include "hphp/compiler/json.h"
 #include "hphp/compiler/option.h"
 #include "hphp/compiler/package.h"
-#include "hphp/compiler/parser/parser.h"
 
 #include "hphp/hhbbc/hhbbc.h"
 #include "hphp/runtime/base/config.h"
@@ -32,7 +28,10 @@
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/program-functions.h"
+#include "hphp/runtime/base/rds-local.h"
+#include "hphp/runtime/vm/extern-compiler.h"
 #include "hphp/runtime/vm/repo.h"
+#include "hphp/runtime/version.h"
 #include "hphp/system/systemlib.h"
 
 #include "hphp/util/async-func.h"
@@ -45,6 +44,9 @@
 #include "hphp/util/process-exec.h"
 #include "hphp/util/text-util.h"
 #include "hphp/util/timer.h"
+#ifndef _MSC_VER
+#include "hphp/util/light-process.h"
+#endif
 
 #include "hphp/hhvm/process-init.h"
 
@@ -95,6 +97,7 @@ struct CompilerOptions {
   std::vector<std::string> ffiles;
   std::vector<std::string> cfiles;
   std::vector<std::string> cmodules;
+  std::vector<std::string> hhjsDirs;
   bool parseOnDemand;
   std::string program;
   std::string programArgs;
@@ -106,7 +109,6 @@ struct CompilerOptions {
   bool force;
   int optimizeLevel;
   std::string filecache;
-  bool dump;
   bool coredump;
   bool nofork;
 };
@@ -140,7 +142,6 @@ private:
 int prepareOptions(CompilerOptions &po, int argc, char **argv);
 void createOutputDirectory(CompilerOptions &po);
 int process(const CompilerOptions &po);
-int lintTarget(const CompilerOptions &po);
 int phpTarget(const CompilerOptions &po, AnalysisResultPtr ar);
 void hhbcTargetInit(const CompilerOptions &po, AnalysisResultPtr ar);
 int hhbcTarget(const CompilerOptions &po, AnalysisResultPtr&& ar,
@@ -155,6 +156,8 @@ void pcre_init();
 int compiler_main(int argc, char **argv) {
   try {
     CompilerOptions po;
+    rds::local::init();
+    SCOPE_EXIT { rds::local::fini(); };
 
     int ret = prepareOptions(po, argc, argv);
     if (ret == 1) return 0; // --help
@@ -189,9 +192,9 @@ int compiler_main(int argc, char **argv) {
       Logger::Info("all files saved in %s ...", po.outputDir.c_str());
     }
     return ret;
-  } catch (Exception &e) {
+  } catch (Exception& e) {
     Logger::Error("Exception: %s\n", e.getMessage().c_str());
-  } catch (std::exception &e) {
+  } catch (std::exception& e) {
     Logger::Error("std::exception: %s\n", e.what());
   } catch (...) {
     Logger::Error("(unknown exception was thrown)\n");
@@ -209,17 +212,13 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
     ("help", "display this message")
     ("version", "display version number")
     ("target,t", value<std::string>(&po.target)->default_value("run"),
-     "lint | "
-     "php | "
      "hhbc | "
+     "cache | "
      "filecache | "
      "run (default)")
     ("format,f", value<std::string>(&po.format),
-     "lint: (none); \n"
-     "php: trimmed (default) | inlined | pickled |"
-     " <any combination of them by any separator>; \n"
-     "hhbc: binary (default) | text; \n"
-     "run: cluster (default) | file")
+     "hhbc: binary (default) | hhas | text | exe; \n"
+     "run: binary (default) | hhas | text | exe")
     ("input-dir", value<std::string>(&po.inputDir), "input directory")
     ("program", value<std::string>(&po.program)->default_value("program"),
      "final program name to use")
@@ -264,6 +263,8 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
      "extra static files forced to include without exclusion checking")
     ("cmodule", value<std::vector<std::string>>(&po.cmodules)->composing(),
      "extra directories for static files without exclusion checking")
+    ("hhjs-dir", value<std::vector<std::string>>(&po.hhjsDirs)->composing(),
+     "directory containing JS to compile using HHJS")
     ("parse-on-demand", value<bool>(&po.parseOnDemand)->default_value(true),
      "whether to parse files that are not specified from command line")
     ("branch", value<std::string>(&po.branch), "SVN branch")
@@ -301,9 +302,6 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
     ("file-cache",
      value<std::string>(&po.filecache),
      "if specified, generate a static file cache with this file name")
-    ("dump",
-     value<bool>(&po.dump)->default_value(false),
-     "dump the program graph")
     ("coredump",
      value<bool>(&po.coredump)->default_value(false),
      "turn on coredump")
@@ -377,11 +375,10 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
     return 1;
   }
 
-  if (po.target != "run"
-      && po.target != "lint"
-      && po.target != "php"
-      && po.target != "hhbc"
-      && po.target != "filecache") {
+  if (po.target != "run" &&
+      po.target != "hhbc" &&
+      po.target != "cache" &&
+      po.target != "filecache") {
     Logger::Error("Error in command line: target '%s' is not supported.",
                   po.target.c_str());
     // desc[ription] is the --help output
@@ -405,37 +402,60 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
     Logger::LogLevel = Logger::LogInfo;
   }
 
-  MemoryManager::TlsWrapper::getCheck();
+  tl_heap.getCheck();
   IniSetting::Map ini = IniSetting::Map::object;
   Hdf config;
-  for (auto& file : po.config) {
+  for (auto const& file : po.config) {
     Config::ParseConfigFile(file, ini, config);
   }
-  for (unsigned int i = 0; i < po.iniStrings.size(); i++) {
-    Config::ParseIniString(po.iniStrings[i].c_str(), ini);
+  for (auto const& iniString : po.iniStrings) {
+    Config::ParseIniString(iniString, ini);
   }
-  for (unsigned int i = 0; i < po.confStrings.size(); i++) {
-    Config::ParseHdfString(po.confStrings[i].c_str(), config);
+  for (auto const& confString : po.confStrings) {
+    Config::ParseHdfString(confString, config);
   }
   Hdf runtime = config["Runtime"];
+  if (config.exists("EnableHipHopSyntax")) {
+    // lots of RuntimeOptions depend on Eval.EnableHipHopSyntax, so we
+    // need to make sure it gets set correctly.
+    runtime["Eval.EnableHipHopSyntax"].set(
+      config["EnableHipHopSyntax"].configGet());
+  }
   // The configuration command line strings were already processed above
   // Don't process them again.
+  //
+  // Note that some options depends on RepoAuthoritative, we thus set/unset them
+  // here. If we reach this code, we are invoking hhvm --hphp, which is
+  // supposed to be in repo mode only. But we are restoring it to false since
+  // we need compile_systemlib_string to actually parse the file instead of
+  // trying to load it from repo (which is the case when RepoAuthoritative is
+  // true).
+  RuntimeOption::RepoAuthoritative = true;
+  // We don't want debug info in repo builds, since we don't support attaching
+  // a debugger in repo authoritative mode, but we want the default for debug
+  // info to be true so that it's present in sandboxes. Override that default
+  // here, since we only get here when building for repo authoritative mode.
+  RuntimeOption::RepoDebugInfo = false;
+  // Default RepoLocalMode to off so we build systemlib from source.
+  // This can be overridden when running lots of repo builds (eg
+  // test/run) for better performance.
+  RuntimeOption::RepoLocalMode = "--";
+  RuntimeOption::RepoJournal = "memory";
   RuntimeOption::Load(ini, runtime);
   Option::Load(ini, config);
+  RuntimeOption::RepoAuthoritative = false;
   RuntimeOption::EvalJit = false;
 
   initialize_repo();
 
   std::vector<std::string> badnodes;
   config.lint(badnodes);
-  for (unsigned int i = 0; i < badnodes.size(); i++) {
-    Logger::Error("Possible bad config node: %s", badnodes[i].c_str());
+  for (auto const& badnode : badnodes) {
+    Logger::Error("Possible bad config node: %s", badnode.c_str());
   }
 
   // we need to initialize pcre cache table very early
   pcre_init();
-
-  if (po.dump) Option::DumpAst = true;
 
   if (po.inputDir.empty()) {
     po.inputDir = '.';
@@ -448,54 +468,41 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
   Option::RootDirectory = po.configDir;
   Option::IncludeSearchPaths = po.includePaths;
 
-  for (unsigned int i = 0; i < po.excludeDirs.size(); i++) {
-    Option::PackageExcludeDirs.insert
-      (FileUtil::normalizeDir(po.excludeDirs[i]));
+  for (auto const& dir : po.excludeDirs) {
+    Option::PackageExcludeDirs.insert(FileUtil::normalizeDir(dir));
   }
-  for (unsigned int i = 0; i < po.excludeFiles.size(); i++) {
-    Option::PackageExcludeFiles.insert(po.excludeFiles[i]);
+  for (auto const& file : po.excludeFiles) {
+    Option::PackageExcludeFiles.insert(file);
   }
-  for (unsigned int i = 0; i < po.excludePatterns.size(); i++) {
-    Option::PackageExcludePatterns.insert
-      (format_pattern(po.excludePatterns[i], true));
+  for (auto const& pattern : po.excludePatterns) {
+    Option::PackageExcludePatterns.insert(
+      format_pattern(pattern, true /* prefixSlash */));
   }
-  for (unsigned int i = 0; i < po.excludeStaticDirs.size(); i++) {
-    Option::PackageExcludeStaticDirs.insert
-      (FileUtil::normalizeDir(po.excludeStaticDirs[i]));
+  for (auto const& dir : po.excludeStaticDirs) {
+    Option::PackageExcludeStaticDirs.insert(FileUtil::normalizeDir(dir));
   }
-  for (unsigned int i = 0; i < po.excludeStaticFiles.size(); i++) {
-    Option::PackageExcludeStaticFiles.insert(po.excludeStaticFiles[i]);
+  for (auto const& file : po.excludeStaticFiles) {
+    Option::PackageExcludeStaticFiles.insert(file);
   }
-  for (unsigned int i = 0; i < po.excludeStaticPatterns.size(); i++) {
-    Option::PackageExcludeStaticPatterns.insert
-      (format_pattern(po.excludeStaticPatterns[i], true));
+  for (auto const& pattern : po.excludeStaticPatterns) {
+    Option::PackageExcludeStaticPatterns.insert(
+      format_pattern(pattern, true /* prefixSlash */));
   }
 
   Option::ProgramName = po.program;
 
-  if (po.format.empty()) {
-    if (po.target == "php") {
-      po.format = "trimmed";
-    } else if (po.target == "run") {
-      po.format = "binary";
-    } else if (po.target == "hhbc") {
-      po.format = "binary";
-    }
+  if (po.format.empty() && (po.target == "run" || po.target == "hhbc")) {
+    po.format = "binary";
   }
 
   if (po.optimizeLevel == -1) {
     po.optimizeLevel = RuntimeOption::EvalDisableHphpcOpts ? 0 : 1;
   }
 
-  // we always do pre/post opt no matter the opt level
-  Option::PreOptimization = !RuntimeOption::EvalDisableHphpcOpts;
   if (po.optimizeLevel == 0) {
     // --optimize-level=0 is equivalent to --opts=none
     Option::ParseTimeOpts = false;
   }
-
-  HHBBC::options.DisallowDynamicVarEnvFuncs =
-    (RuntimeOption::DisallowDynamicVarEnvFuncs == HackStrictOption::ON);
 
   return 0;
 }
@@ -503,6 +510,13 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
 ///////////////////////////////////////////////////////////////////////////////
 
 int process(const CompilerOptions &po) {
+#ifndef _MSC_VER
+  LightProcess::Initialize(RuntimeOption::LightProcessFilePrefix,
+                           RuntimeOption::LightProcessCount,
+                           RuntimeOption::EvalRecordSubprocessTimes,
+                           {});
+#endif
+
   if (po.coredump) {
 #ifdef _MSC_VER
 /**
@@ -528,11 +542,6 @@ int process(const CompilerOptions &po) {
 #endif
   }
 
-  // lint doesn't need analysis
-  if (po.target == "lint") {
-    return lintTarget(po);
-  }
-
   register_process_init();
 
   Timer timer(Timer::WallTime);
@@ -552,74 +561,57 @@ int process(const CompilerOptions &po) {
     }
   };
 
-  bool isPickledPHP = (po.target == "php" && po.format == "pickled");
-  if (!isPickledPHP) {
-    bool wp = Option::WholeProgram;
-    Option::WholeProgram = false;
-    BuiltinSymbols::s_systemAr = ar;
-    hphp_process_init();
-    processInitRan = true;
-    BuiltinSymbols::s_systemAr.reset();
-    Option::WholeProgram = wp;
-    if (po.target == "hhbc" && !Option::WholeProgram) {
-      // We're trying to produce the same bytecode as runtime parsing.
-      // There's nothing to do.
-    } else {
-      if (!BuiltinSymbols::Load(ar)) {
-        return false;
-      }
-    }
-  } else {
-    hphp_process_init();
-    processInitRan = true;
-  }
+  bool wp = Option::WholeProgram;
+  Option::WholeProgram = false;
+  BuiltinSymbols::s_systemAr = ar;
+  hphp_process_init();
+  processInitRan = true;
+  BuiltinSymbols::s_systemAr.reset();
+  Option::WholeProgram = wp;
+
+  LitstrTable::init();
+  LitstrTable::get().setWriting();
 
   {
     Timer timer2(Timer::WallTime, "parsing inputs");
-    if (!po.inputs.empty() && isPickledPHP) {
-      for (unsigned int i = 0; i < po.inputs.size(); i++) {
-        package.addSourceFile(po.inputs[i].c_str());
-      }
+    if (po.target == "cache") package.cache_only();
+    ar->setPackage(&package);
+    ar->setParseOnDemand(po.parseOnDemand);
+    if (!po.parseOnDemand) {
+      ar->setParseOnDemandDirs(Option::ParseOnDemandDirs);
+    }
+    if (po.modules.empty() && po.fmodules.empty() && po.hhjsDirs.empty() &&
+        po.ffiles.empty() && po.inputs.empty() && po.inputList.empty()) {
+      package.addAllFiles(false);
     } else {
-      ar->setPackage(&package);
-      ar->setParseOnDemand(po.parseOnDemand);
-      if (!po.parseOnDemand) {
-        ar->setParseOnDemandDirs(Option::ParseOnDemandDirs);
+      for (auto const& module : po.modules) {
+        package.addDirectory(module, false /*force*/);
       }
-      if (po.modules.empty() && po.fmodules.empty() &&
-          po.ffiles.empty() && po.inputs.empty() && po.inputList.empty()) {
-        package.addAllFiles(false);
-      } else {
-        for (unsigned int i = 0; i < po.modules.size(); i++) {
-          package.addDirectory(po.modules[i], false);
-        }
-        for (unsigned int i = 0; i < po.fmodules.size(); i++) {
-          package.addDirectory(po.fmodules[i], true);
-        }
-        for (unsigned int i = 0; i < po.ffiles.size(); i++) {
-          package.addSourceFile(po.ffiles[i].c_str());
-        }
-        for (unsigned int i = 0; i < po.cmodules.size(); i++) {
-          package.addStaticDirectory(po.cmodules[i].c_str());
-        }
-        for (unsigned int i = 0; i < po.cfiles.size(); i++) {
-          package.addStaticFile(po.cfiles[i].c_str());
-        }
-        for (unsigned int i = 0; i < po.inputs.size(); i++) {
-          package.addSourceFile(po.inputs[i].c_str());
-        }
-        if (!po.inputList.empty()) {
-          package.addInputList(po.inputList.c_str());
-        }
+      for (auto const& fmodule : po.fmodules) {
+        package.addDirectory(fmodule, true /*force*/);
+      }
+      for (auto const& hhjsDir : po.hhjsDirs) {
+        package.addHHJSDirectory(hhjsDir, false);
+      }
+      for (auto const& ffile : po.ffiles) {
+        package.addSourceFile(ffile);
+      }
+      for (auto const& cmodule : po.cmodules) {
+        package.addStaticDirectory(cmodule);
+      }
+      for (auto const& cfile : po.cfiles) {
+        package.addStaticFile(cfile);
+      }
+      for (auto const& input : po.inputs) {
+        package.addSourceFile(input);
+      }
+      if (!po.inputList.empty()) {
+        package.addInputList(po.inputList);
       }
     }
     if (po.target != "filecache") {
       if (!package.parse(!po.force)) {
         return 1;
-      }
-      if (Option::WholeProgram) {
-        Timer timer3(Timer::WallTime, "analyzeProgram");
-        ar->analyzeProgram();
       }
     }
   }
@@ -630,15 +622,7 @@ int process(const CompilerOptions &po) {
     fileCacheThread.start();
   }
 
-  if (Option::DumpAst) {
-    ar->dump();
-  }
-
   ar->setFinish([&po,&timer,&package](AnalysisResultPtr res) {
-      if (Option::DumpAst) {
-        res->dump();
-      }
-
       // saving stats
       if (po.genStats) {
         int seconds = timer.getMicroSeconds() / 1000000;
@@ -651,14 +635,12 @@ int process(const CompilerOptions &po) {
     });
 
   int ret = 0;
-  if (po.target == "php") {
-    ret = phpTarget(po, ar);
-  } else if (po.target == "hhbc") {
+  if (po.target == "hhbc") {
     ret = hhbcTarget(po, std::move(ar), fileCacheThread);
   } else if (po.target == "run") {
     ret = runTargetCheck(po, std::move(ar), fileCacheThread);
-  } else if (po.target == "filecache") {
-    // do nothing
+  } else if (po.target == "filecache" || po.target == "cache") {
+    ar->finish();
   } else {
     Logger::Error("Unknown target: %s", po.target.c_str());
     return 1;
@@ -667,96 +649,6 @@ int process(const CompilerOptions &po) {
   if (!po.filecache.empty()) {
     fileCacheThread.waitForEnd();
   }
-  return ret;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-int lintTarget(const CompilerOptions &po) {
-  int ret = 0;
-  for (unsigned int i = 0; i < po.inputs.size(); i++) {
-    std::string filename = po.inputDir + "/" + po.inputs[i];
-    try {
-      Scanner scanner(filename, Option::GetScannerType());
-      Compiler::Parser parser(scanner, filename.c_str(),
-                              std::make_shared<AnalysisResult>());
-      if (!parser.parse()) {
-        Logger::Error("Unable to parse file %s: %s", filename.c_str(),
-                      parser.getMessage().c_str());
-        ret = 1;
-      } else {
-        Logger::Info("%s parsed successfully...", filename.c_str());
-      }
-    } catch (FileOpenException &e) {
-      Logger::Error("%s", e.getMessage().c_str());
-      ret = 1;
-    }
-  }
-  return ret;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-static void
-wholeProgramPasses(const CompilerOptions& /*po*/, AnalysisResultPtr ar) {
-  if (Option::PreOptimization) {
-    Timer timer(Timer::WallTime, "pre-optimizing");
-    ar->preOptimize();
-  }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-int phpTarget(const CompilerOptions &po, AnalysisResultPtr ar) {
-  int ret = 0;
-
-  // format
-  int formatCount = 0;
-  if (po.format.find("pickled") != std::string::npos) {
-    Option::GeneratePickledPHP = true;
-    formatCount++;
-  }
-  if (po.format.find("inlined") != std::string::npos) {
-    Option::GenerateInlinedPHP = true;
-    formatCount++;
-  }
-  if (po.format.find("trimmed") != std::string::npos) {
-    Option::GenerateTrimmedPHP = true;
-    formatCount++;
-  }
-  if (formatCount == 0) {
-    Logger::Error("Unknown format for PHP target: %s", po.format.c_str());
-    return 1;
-  }
-
-  // generate
-  ar->setOutputPath(po.outputDir);
-  if (Option::GeneratePickledPHP) {
-    Logger::Info("creating pickled PHP files...");
-    std::string outputDir = po.outputDir;
-    if (formatCount > 1) outputDir += "/pickled";
-    mkdir(outputDir.c_str(), 0777);
-    ar->outputAllPHP(CodeGenerator::PickledPHP);
-  }
-  if (Option::GenerateInlinedPHP) {
-    Logger::Info("creating inlined PHP files...");
-    std::string outputDir = po.outputDir;
-    if (formatCount > 1) outputDir += "/inlined";
-    mkdir(outputDir.c_str(), 0777);
-    if (!ar->outputAllPHP(CodeGenerator::InlinedPHP)) {
-      ret = -1;
-    }
-  }
-  if (Option::GenerateTrimmedPHP) {
-    Logger::Info("creating trimmed PHP files...");
-    std::string outputDir = po.outputDir;
-    if (formatCount > 1) outputDir += "/trimmed";
-    mkdir(outputDir.c_str(), 0777);
-    if (!ar->outputAllPHP(CodeGenerator::TrimmedPHP)) {
-      ret = -1;
-    }
-  }
-
   return ret;
 }
 
@@ -774,15 +666,12 @@ void hhbcTargetInit(const CompilerOptions &po, AnalysisResultPtr ar) {
     RuntimeOption::RepoCentralPath += ".hhbc";
   }
   unlink(RuntimeOption::RepoCentralPath.c_str());
-  RuntimeOption::RepoLocalMode = "--";
-  RuntimeOption::RepoDebugInfo = Option::RepoDebugInfo;
-  RuntimeOption::RepoJournal = "memory";
-  if (HHBBC::options.HardReturnTypeHints) {
-    RuntimeOption::EvalCheckReturnTypeHints = 3;
-  }
 
-  // Turn off commits, because we don't want systemlib to get included
-  RuntimeOption::RepoCommit = false;
+  if (RuntimeOption::RepoLocalMode != "rw") {
+    // No point writing to the central repo, because we're going to
+    // remove it before writing the final repo.
+    RuntimeOption::RepoCommit = false;
+  }
 }
 
 int hhbcTarget(const CompilerOptions &po, AnalysisResultPtr&& ar,
@@ -793,6 +682,11 @@ int hhbcTarget(const CompilerOptions &po, AnalysisResultPtr&& ar,
   if (po.format.find("text") != std::string::npos) {
     Option::GenerateTextHHBC = true;
     type = "creating text HHBC files";
+    formatCount++;
+  }
+  if (po.format.find("hhas") != std::string::npos) {
+    Option::GenerateHhasHHBC = true;
+    type = "creating hhas HHBC files";
     formatCount++;
   }
   if (po.format.find("binary") != std::string::npos) {
@@ -811,16 +705,21 @@ int hhbcTarget(const CompilerOptions &po, AnalysisResultPtr&& ar,
     return 1;
   }
 
+  Repo::shutdown();
+  RuntimeOption::RepoLocalMode = "--";
+  unlink(RuntimeOption::RepoCentralPath.c_str());
   /* without this, emitClass allows classes with interfaces to be
      hoistable */
   SystemLib::s_inited = true;
   RuntimeOption::RepoCommit = true;
+  Repo::get();
 
-  if (po.optimizeLevel > 0) {
-    ret = 0;
-    wholeProgramPasses(po, ar);
-    ar->analyzeProgramFinal();
-  }
+  // the function is only invoked in hhvm --hphp, which is supposed to be in
+  // repo mode only. we are not setting it earlier in `compiler_main` since we
+  // want systemlib to be built without repo-auth == true, or otherwise,
+  // `compile_systemlib_string` will try to load systemlib from repo, while we
+  // are building it.
+  RuntimeOption::RepoAuthoritative = true;
 
   Timer timer(Timer::WallTime, type);
   // NOTE: Repo errors are ignored!
@@ -861,12 +760,6 @@ int runTargetCheck(const CompilerOptions &po, AnalysisResultPtr&& ar,
                    AsyncFileCacheSaver &fcThread) {
   // generate code
   if (hhbcTarget(po, std::move(ar), fcThread)) {
-    return 1;
-  }
-
-  // check error
-  if (Compiler::HasError() && !po.force) {
-    Compiler::DumpErrors(ar);
     return 1;
   }
 

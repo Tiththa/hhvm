@@ -1,7 +1,10 @@
 <?php
 
+
 // For simple cases, see php5_pcntl_003.php
 
+<<__EntryPoint>>
+function main_sigprocmask_edge_cases() {
 print("Correct usage, two args\n");
 var_dump(pcntl_sigprocmask(SIG_BLOCK, [SIGHUP]));
 
@@ -13,5 +16,6 @@ var_dump(pcntl_sigprocmask(SIG_SETMASK, [1337]));
 
 print("Invalid byref arg\n");
 $oldset = new stdClass();
-var_dump(pcntl_sigprocmask(SIG_SETMASK, [SIGHUP], $oldset));
+var_dump(pcntl_sigprocmask(SIG_SETMASK, [SIGHUP], &$oldset));
 var_dump(is_array($oldset));
+}

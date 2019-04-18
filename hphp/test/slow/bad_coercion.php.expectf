@@ -1,0 +1,9 @@
+bool(false)
+bool(false)
+
+Warning: is_nan() expects parameter 1 to be double, string given in %s on line %d
+
+Warning: is_nan() expects parameter 1 to be double, string given in %s on line %d
+bool(false)
+
+Warning: is_nan() expects parameter 1 to be double, string given in %s on line %d

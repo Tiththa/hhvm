@@ -64,7 +64,7 @@ struct ServerWorker
    * Called when thread enters and exits.
    */
   void onThreadEnter() override {
-    assert(this->m_context);
+    assertx(this->m_context);
     m_handler = this->m_context->createRequestHandler();
     m_requestsTimedOutOnQueue =
       ServiceData::createTimeSeries("requests_timed_out_on_queue",
@@ -72,7 +72,7 @@ struct ServerWorker
   }
 
   void onThreadExit() override {
-    assert(this->m_context);
+    assertx(this->m_context);
     m_handler.reset();
   }
 
@@ -91,7 +91,7 @@ protected:
 
     // rpc threads keep things live between requests, but other
     // requests should not have allocated anything yet.
-    assertx(vmStack().isAllocated() || MM().empty());
+    assertx(vmStack().isAllocated() || tl_heap->empty());
 
     SCOPE_EXIT { m_handler->teardownRequest(transport); };
 
@@ -114,13 +114,13 @@ protected:
         transport->onSendEnd();
         return;
       }
-    } catch (Exception &e) {
+    } catch (Exception& e) {
       if (Server::StackTraceOnError) {
         errorMsg = e.what();
       } else {
         errorMsg = e.getMessage();
       }
-    } catch (std::exception &e) {
+    } catch (std::exception& e) {
       errorMsg = e.what();
     } catch (...) {
       errorMsg = "(unknown exception)";

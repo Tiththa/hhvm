@@ -24,5 +24,3 @@ $o = new MyHelloWorld();
 $o->setWorld(' World!');
 $o->sayHelloWorld();
 
-?>
-

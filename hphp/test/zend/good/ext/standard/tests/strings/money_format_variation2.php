@@ -85,12 +85,10 @@ $format = '%14#8.2i';
 
 foreach($numbers as $number) {
   echo "-- Iteration $count --\n";
-  echo gettype(money_format($format, $number))."\n";
+  try { echo gettype(money_format($format, $number))."\n"; } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $count ++;
 }
 
 // close the file handle
 fclose($file_handle);
-
-?>
-===Done===
+echo "===Done===";

@@ -1,16 +1,17 @@
-<?php
+<?hh
 
 class blah {
+
+  private static $breakerX = 0;
   private function breaker() {
-    static $x = 0;
-    return $x++ == 0 ? array() : null;
+    return self::$breakerX++ == 0 ? array() : null;
   }
 
   public function foo() {
     $x = 0;
     $y = 0;
 
-    if (($top_var_ref =& $this->breaker()) === NULL) {
+    if ($this->breaker() === NULL) {
       echo "hi\n";
     }
     echo "ok\n";

@@ -1,12 +1,15 @@
 <?php
 
+
+<<__EntryPoint>>
+function main_arsort() {
 $fruits = array(
   "d" => "lemon",
   "a" => "orange",
   "b" => "banana",
   "c" => "apple"
 );
-arsort($fruits);
+arsort(&$fruits);
 var_dump($fruits);
 
 
@@ -16,7 +19,7 @@ $fruits = array(
   "b" => "banana",
   "c" => "apple"
 );
-ksort($fruits);
+ksort(&$fruits);
 var_dump($fruits);
 
 
@@ -26,5 +29,6 @@ $fruits = array(
   "b" => "banana",
   "c" => "apple"
 );
-krsort($fruits);
+krsort(&$fruits);
 var_dump($fruits);
+}

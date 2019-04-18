@@ -18,17 +18,17 @@
 #ifndef incl_HPHP_MYSQL_COMMON_H_
 #define incl_HPHP_MYSQL_COMMON_H_
 
-#include <folly/Optional.h>
-
-#include <memory>
-#include <vector>
+#include "hphp/runtime/base/req-list.h"
+#include "hphp/runtime/base/req-optional.h"
+#include "hphp/runtime/base/req-vector.h"
+#include "hphp/runtime/base/request-event-handler.h"
+#include "hphp/runtime/ext/extension.h"
 
 #include "mysql.h"
 
-#include "hphp/runtime/base/req-containers.h"
-#include "hphp/runtime/base/request-event-handler.h"
-#include "hphp/runtime/ext/extension.h"
+#ifdef ENABLE_ASYNC_MYSQL
 #include "squangle/mysql_client/SSLOptionsProviderBase.h"
+#endif
 
 #ifdef PHP_MYSQL_UNIX_SOCK_ADDR
 #ifdef MYSQL_UNIX_ADDR
@@ -39,6 +39,10 @@
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+#if MYSQL_VERSION_ID >= 80004
+using my_bool = bool;
+#endif
 
 struct MySQLUtil {
   enum TimeoutType { ConnectTimeout, ReadTimeout, WriteTimeout };
@@ -229,7 +233,7 @@ public:
 
 struct MySQLResource : SweepableResourceData {
   explicit MySQLResource(std::shared_ptr<MySQL> mysql) : m_mysql(mysql) {
-    assert(mysql);
+    assertx(mysql);
   }
 
   CLASSNAME_IS("mysql link")
@@ -351,7 +355,7 @@ protected:
   MYSQL_ROW m_current_async_row;
   bool m_localized; // whether all the rows have been localized
   req::vector<MySQLFieldInfo> m_fields;
-  folly::Optional<req::list<req::vector<Variant>>> m_rows;
+  req::Optional<req::list<req::vector<Variant>>> m_rows;
   req::list<req::vector<Variant>>::const_iterator m_current_row;
   int64_t m_current_field;
   bool m_row_ready; // set to false after seekRow, true after fetchRow
@@ -362,8 +366,10 @@ protected:
 
 ///////////////////////////////////////////////////////////////////////////////
 
+using RefVector = req::vector<req::ptr<RefData>>;
+
 struct MySQLStmtVariables {
-  explicit MySQLStmtVariables(const Array& arr);
+  explicit MySQLStmtVariables(RefVector&& refs);
   ~MySQLStmtVariables();
 
   bool init_params(MYSQL_STMT *stmt, const String& types);
@@ -372,7 +378,7 @@ struct MySQLStmtVariables {
   void update_result();
 
 private:
-  Array                   m_arr;
+  RefVector              m_arr;
   req::vector<Variant>   m_value_arr;
   MYSQL_BIND             *m_vars;
   my_bool                *m_null;
@@ -399,8 +405,8 @@ struct MySQLStmt : public SweepableResourceData {
   Variant affected_rows();
   Variant attr_get(int64_t attr);
   Variant attr_set(int64_t attr, int64_t value);
-  Variant bind_param(const String& types, const Array& vars);
-  Variant bind_result(const Array& vars);
+  Variant bind_param(const String& types, RefVector&& vars);
+  Variant bind_result(RefVector&& vars);
   Variant data_seek(int64_t offset);
   Variant get_errno();
   Variant get_error();
@@ -451,9 +457,12 @@ Variant php_mysql_do_connect_on_link(
     bool async,
     int connect_timeout_ms,
     int query_timeout_ms,
-    const Array* conn_attrs = nullptr,
-    std::shared_ptr<facebook::common::mysql_client::SSLOptionsProviderBase>
-        ssl_opts = nullptr);
+    const Array* conn_attrs = nullptr
+#ifdef ENABLE_ASYNC_MYSQL
+    , std::shared_ptr<facebook::common::mysql_client::SSLOptionsProviderBase>
+        ssl_opts = nullptr
+#endif
+);
 
 Variant php_mysql_do_connect(
     const String& server,

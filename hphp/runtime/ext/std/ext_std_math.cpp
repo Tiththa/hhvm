@@ -48,7 +48,7 @@ Variant HHVM_FUNCTION(min,
                       const Variant& value,
                       const Array& args /* = null_array */) {
   if (args.empty()) {
-    const auto& cell_value = *value.asCell();
+    const auto& cell_value = *value.toCell();
     if (UNLIKELY(!isContainer(cell_value))) {
       if (RuntimeOption::MinMaxAllowDegenerate == HackStrictOption::WARN) {
         raise_warning("min(): This will return the value instead of null, "
@@ -97,7 +97,7 @@ Variant HHVM_FUNCTION(max,
                       const Variant& value,
                       const Array& args /* = null_array */) {
   if (args.empty()) {
-    const auto& cell_value = *value.asCell();
+    const auto& cell_value = *value.toCell();
     if (UNLIKELY(!isContainer(cell_value))) {
       if (RuntimeOption::MinMaxAllowDegenerate == HackStrictOption::WARN) {
         raise_warning("max(): This will return the value instead of null, "
@@ -287,6 +287,8 @@ static MaybeDataType convert_for_pow(const Variant& val,
       dval = val.toDouble();
       return KindOfDouble;
 
+    case KindOfFunc:
+    case KindOfClass:
     case KindOfPersistentString:
     case KindOfString: {
       auto dt = val.toNumeric(ival, dval, true);
@@ -303,10 +305,14 @@ static MaybeDataType convert_for_pow(const Variant& val,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
+    case KindOfPersistentShape:
+    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
+    case KindOfClsMeth:
       // Not reachable since HHVM_FN(pow) deals with these base cases first.
     case KindOfRef:
+    case KindOfRecord:
       break;
   }
 
@@ -347,7 +353,8 @@ Variant HHVM_FUNCTION(pow, const Variant& base, const Variant& exp) {
   }
 
   auto const castableToNumber = [] (const ObjectData* obj) {
-    return obj->getAttribute(ObjectData::CallToImpl) && !obj->isCollection();
+    return !obj->isCollection() &&
+           obj->getVMClass()->rtAttribute(Class::CallToImpl);
   };
 
   // We'll have already raised a notice in convert_for_pow
@@ -400,20 +407,23 @@ int64_t HHVM_FUNCTION(getrandmax) { return RAND_MAX;}
 
 // Note that MSVC's rand is actually thread-safe to begin with
 // so no changes are actually needed to make it so.
+// For APPLE and MSFT configurations the rand() would be kept as thread local
+// For Linux the RadomBuf structure is beeing moved to RDS
 #ifdef __APPLE__
 static bool s_rand_is_seeded = false;
 #elif defined(_MSC_VER)
-static __thread bool s_rand_is_seeded = false;
+static __thread bool s_rand_is_seeded = false; // For now keep as thread local
 #else
 struct RandomBuf {
   random_data data;
   char        buf[128];
   enum {
-    Uninit = 0, ThreadInit, RequestInit
-  }           state;
+    Uninit = 0,
+    RequestInit
+  } state;
 };
 
-static __thread RandomBuf s_state;
+RDS_LOCAL(RandomBuf, rl_state);
 #endif
 
 static void randinit(uint32_t seed) {
@@ -424,12 +434,12 @@ static void randinit(uint32_t seed) {
   s_rand_is_seeded = true;
   srand(seed);
 #else
-  if (s_state.state == RandomBuf::Uninit) {
-    initstate_r(seed, s_state.buf, sizeof s_state.buf, &s_state.data);
+  if (rl_state->state == RandomBuf::Uninit) {
+    initstate_r(seed, rl_state->buf, sizeof rl_state->buf, &rl_state->data);
   } else {
-    srandom_r(seed, &s_state.data);
+    srandom_r(seed, &rl_state->data);
   }
-  s_state.state = RandomBuf::RequestInit;
+  rl_state->state = RandomBuf::RequestInit;
 #endif
 }
 
@@ -451,7 +461,7 @@ int64_t HHVM_FUNCTION(rand,
 #if defined(__APPLE__) || defined(_MSC_VER)
   if (!s_rand_is_seeded) {
 #else
-  if (s_state.state != RandomBuf::RequestInit) {
+  if (rl_state->state != RandomBuf::RequestInit) {
 #endif
     randinit(math_generate_seed());
   }
@@ -463,7 +473,7 @@ int64_t HHVM_FUNCTION(rand,
   number = rand();
 #else
   int32_t numberIn;
-  random_r(&s_state.data, &numberIn);
+  random_r(&rl_state->data, &numberIn);
   number = numberIn;
 #endif
   int64_t int_max = max.isNull() ? RAND_MAX : max.toInt64();
@@ -510,8 +520,8 @@ Variant HHVM_FUNCTION(intdiv, int64_t numerator, int64_t divisor) {
 
 void StandardExtension::requestInitMath() {
 #if !defined(__APPLE__) && !defined(_MSC_VER)
-  if (s_state.state == RandomBuf::RequestInit) {
-    s_state.state = RandomBuf::ThreadInit;
+  if (rl_state->state == RandomBuf::RequestInit) {
+    rl_state->state = RandomBuf::Uninit;
   }
 #endif
 }

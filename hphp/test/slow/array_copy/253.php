@@ -2,11 +2,15 @@
 
 function h4() {
   $x = array(1,2,3,4);
-  end($x);
-  next($x);
+  end(&$x);
+  next(&$x);
   $y = $x;
   unset($y[2]);
-  var_dump(current($x));
-  var_dump(current($y));
+  var_dump(current(&$x));
+  var_dump(current(&$y));
 }
+
+<<__EntryPoint>>
+function main_253() {
 h4();
+}

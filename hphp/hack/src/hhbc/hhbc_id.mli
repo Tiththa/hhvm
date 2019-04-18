@@ -2,9 +2,8 @@
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
 *)
 
@@ -25,21 +24,20 @@ module Class : sig
   (* Given a namespace environment and a possibly-qualified identifier,
    * determine the HHAS representation of the identifier, with
    * namespace qualification but no initial backslash, and XHP
-   * mangling. Also return the unqualified form as a string *)
-  val elaborate_id : Namespace_env.env -> Ast.id -> t * string option
+   * mangling. *)
+  val elaborate_id : Namespace_env.env -> Ast.id -> t
 end
 
 module Function : sig
   type t
-  (* See hphp/compiler/parser.cpp *)
-  val builtins_in_hh : string list
   (* For use only in assembler. Quotes have been removed already *)
   val from_raw_string : string -> t
   (* For use only at final stage of emitting assembler *)
   val to_raw_string : t -> string
   (* Used to add suffixes for memoized functions *)
   val add_suffix : t -> string -> t
-  val elaborate_id : Namespace_env.env -> Ast.id -> t * string option
+  val elaborate_id : Namespace_env.env -> Ast.id -> t
+  val elaborate_id_with_builtins : Namespace_env.env -> Ast.id -> t
 end
 
 module Prop : sig
@@ -65,5 +63,5 @@ module Const : sig
   (* As used in `define('name')` and the assembler *)
   val from_raw_string : string -> t
   val to_raw_string : t -> string
-  val elaborate_id : Namespace_env.env -> Ast.id -> t * string option * bool
+  val elaborate_id : Namespace_env.env -> Ast.id -> t
 end

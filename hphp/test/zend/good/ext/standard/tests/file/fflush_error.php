@@ -5,11 +5,11 @@
 */
 
 echo "*** Testing error conditions ***\n";
-$file_path = dirname(__FILE__);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 // zero argument
 echo "-- Testing fflush(): with zero argument --\n";
-var_dump( fflush() );
+try { var_dump( fflush() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 // more than expected no. of args
 echo "-- Testing fflush(): with more than expected number of arguments --\n";
@@ -19,7 +19,7 @@ $file_handle = fopen($filename, "w");
 if($file_handle == false)
   exit("Error:failed to open file $filename");
    
-var_dump( fflush($file_handle, $file_handle) );
+try { var_dump( fflush($file_handle, $file_handle) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 fclose($file_handle);
 
 // test invalid arguments : non-resources
@@ -36,13 +36,9 @@ $invalid_args = array (
 /* loop to test fflush() with different invalid type of args */
 for($loop_counter = 1; $loop_counter <= count($invalid_args); $loop_counter++) {
   echo "-- Iteration $loop_counter --\n";
-  var_dump( fflush($invalid_args[$loop_counter - 1]) );
+  try { var_dump( fflush($invalid_args[$loop_counter - 1]) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 }
 echo "\n*** Done ***";
-?>
-
-<?php error_reporting(0); ?>
-<?php
-$file_path = dirname(__FILE__);
+error_reporting(0);
+$file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 unlink("$file_path/fflush_error.tmp");
-?>

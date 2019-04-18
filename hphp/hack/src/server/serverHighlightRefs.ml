@@ -2,32 +2,32 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Core
+open Hh_core
 
 let get_target symbol =
   let open SymbolOccurrence in
+  let module Types = ServerCommandTypes.Find_refs in
   let open FindRefsService in
   match symbol.type_ with
   | SymbolOccurrence.Class -> Some (IClass symbol.name)
   | SymbolOccurrence.Function -> Some (IFunction symbol.name)
   | SymbolOccurrence.Method (class_name, member_name) ->
       Some (IMember (Subclasses_of class_name,
-        FindRefsService.Method member_name))
+        Types.Method member_name))
   | SymbolOccurrence.Property (class_name, member_name) ->
       Some (IMember (Subclasses_of class_name,
-        FindRefsService.Property member_name))
+        Types.Property member_name))
   | SymbolOccurrence.ClassConst (class_name, member_name) ->
       Some (IMember (Subclasses_of class_name,
-        FindRefsService.Class_const member_name))
+        Types.Class_const member_name))
   | SymbolOccurrence.Typeconst  (class_name, member_name) ->
       Some (IMember (Subclasses_of class_name,
-        FindRefsService.Typeconst member_name))
+        Types.Typeconst member_name))
   | SymbolOccurrence.GConst -> Some (IGConst symbol.name)
   | _ -> None
 

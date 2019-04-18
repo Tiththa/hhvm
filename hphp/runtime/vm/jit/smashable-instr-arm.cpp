@@ -46,22 +46,16 @@ TCA emitSmashableMovq(CodeBlock& cb, CGMeta& meta, uint64_t imm,
 
   vixl::MacroAssembler a { cb };
   vixl::Label imm_data;
-  vixl::Label after_data;
 
-  auto const start = cb.frontier();
-  meta.smashableLocations.insert(start);
+  auto const the_start = cb.frontier();
+  meta.smashableLocations.insert(the_start);
 
-  a.    Ldr  (x2a(d), &imm_data);
-  a.    B    (&after_data);
-
-  // Emit the immediate into the instruction stream.
+  poolLiteral(cb, meta, (uint64_t)imm, 64, true);
   a.    bind (&imm_data);
-  a.    dc64 (imm);
-  a.    bind (&after_data);
+  a.    Ldr  (x2a(d), &imm_data);
 
-  __builtin___clear_cache(reinterpret_cast<char*>(start),
-                          reinterpret_cast<char*>(cb.frontier()));
-  return start;
+  cb.sync(the_start);
+  return the_start;
 }
 
 TCA emitSmashableCmpq(CodeBlock& /*cb*/, CGMeta& /*meta*/, int32_t /*imm*/,
@@ -70,102 +64,134 @@ TCA emitSmashableCmpq(CodeBlock& /*cb*/, CGMeta& /*meta*/, int32_t /*imm*/,
   not_implemented();
 }
 
+// SmashableCalls don't embed the target at the end, because the
+// BLR must be the last instruction of the sequence.
 TCA emitSmashableCall(CodeBlock& cb, CGMeta& meta, TCA target) {
   align(cb, &meta, Alignment::SmashCall, AlignContext::Live);
 
   vixl::MacroAssembler a { cb };
-  vixl::Label target_data;
-  vixl::Label after_data;
 
-  auto const start = cb.frontier();
-  meta.smashableLocations.insert(start);
+  auto const the_start = cb.frontier();
+  meta.smashableLocations.insert(the_start);
 
-  // Jump over the data
-  a.    B    (&after_data);
+  assertx((makeTarget32(target) & 3) == 0);
+  addVeneer(meta, the_start, target);
+  vixl::Label veneer_addr;
+  a.bind(&veneer_addr);
+  a.bl(&veneer_addr);
 
-  // Emit the call target into the instruction stream.
-  a.    bind (&target_data);
-  a.    dc64 (target);
-  a.    bind (&after_data);
-
-  // Load the target address and call it
-  a.    Ldr  (rAsm, &target_data);
-  a.    Blr  (rAsm);
-
-  __builtin___clear_cache(reinterpret_cast<char*>(start),
-                          reinterpret_cast<char*>(cb.frontier()));
-  return start;
+  cb.sync(the_start);
+  return the_start;
 }
 
 TCA emitSmashableJmp(CodeBlock& cb, CGMeta& meta, TCA target) {
   align(cb, &meta, Alignment::SmashJmp, AlignContext::Live);
 
   vixl::MacroAssembler a { cb };
-  vixl::Label target_data;
 
-  auto const start = cb.frontier();
-  meta.smashableLocations.insert(start);
+  auto const the_start = cb.frontier();
+  meta.smashableLocations.insert(the_start);
 
-  a.    Ldr  (rAsm, &target_data);
-  a.    Br   (rAsm);
+  assertx((makeTarget32(target) & 3) == 0);
+  addVeneer(meta, the_start, target);
+  vixl::Label veneer_addr;
+  a.bind(&veneer_addr);
+  a.b(&veneer_addr);
 
-  // Emit the jmp target into the instruction stream.
-  a.    bind (&target_data);
-  a.    dc64 (target);
-
-  __builtin___clear_cache(reinterpret_cast<char*>(start),
-                          reinterpret_cast<char*>(cb.frontier()));
-  return start;
+  cb.sync(the_start);
+  return the_start;
 }
 
-// While a b.cc can be overwritten on ARM, if the cc and the target
-// are both changed then the behavior can cause old cc to jump to new
-// target or new cc to jump to old target. Therefore we'll keep
-// the branch as an indirect branch to a target stored in the
-// instruction stream. This way we can at least guarantee that old cc
-// won't jump to new target. We can still have an issue where new cc
-// jumps to old target, but that old target is *likely* a stub.
 TCA emitSmashableJcc(CodeBlock& cb, CGMeta& meta, TCA target,
                      ConditionCode cc) {
   align(cb, &meta, Alignment::SmashJcc, AlignContext::Live);
 
   vixl::MacroAssembler a { cb };
-  vixl::Label target_data;
-  vixl::Label after_data;
 
-  auto const start = cb.frontier();
-  meta.smashableLocations.insert(start);
+  auto const the_start = cb.frontier();
+  meta.smashableLocations.insert(the_start);
 
-  // Emit the conditional branch
-  a.    B    (&after_data, InvertCondition(arm::convertCC(cc)));
+  assertx((makeTarget32(target) & 3) == 0);
+  addVeneer(meta, the_start, target);
+  vixl::Label veneer_addr;
+  a.bind(&veneer_addr);
+  a.b(&veneer_addr, arm::convertCC(cc));
 
-  // Emit the smashable jump
-  a.    Ldr  (rAsm, &target_data);
-  a.    Br   (rAsm);
-
-  // Emit the jmp target into the instruction stream.
-  a.    bind (&target_data);
-  a.    dc64 (target);
-
-  a.    bind (&after_data);
-
-  __builtin___clear_cache(reinterpret_cast<char*>(start),
-                          reinterpret_cast<char*>(cb.frontier()));
-  return start;
+  cb.sync(the_start);
+  return the_start;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template<typename T>
-static void smashInstr(TCA inst, T target, size_t sz) {
-  *reinterpret_cast<T*>(inst + sz - 8) = target;
-  auto const end = reinterpret_cast<char*>(inst + sz);
-  auto const begin = end - 8;
-  __builtin___clear_cache(begin, end);
+namespace {
+// The vasm instruction after a smashable may have had nops inserted before it.
+// In that case the branch jumping over its immediate will point after the nop
+// sequence rather than immediately after the smashable.  This helper is used
+// to check the branch is pointing to an appropriate address.
+//
+// Returns true if target points to inst or a chain of Nops leading to inst.
+// Otherwise it returns false.
+bool targetsInst(vixl::Instruction* target, vixl::Instruction* inst) {
+  while (target != inst && inst->IsNop()) {
+    inst = inst->NextInstruction();
+  }
+  return target == inst;
+}
 }
 
+bool possiblySmashableMovq(TCA inst) {
+  using namespace vixl;
+  Instruction* ldr = Instruction::Cast(inst);
+  return (ldr->IsLoadLiteral() &&
+          ldr->Mask(LoadLiteralMask) == LDR_x_lit);
+}
+
+bool isVeneer(vixl::Instruction* ldr) {
+  using namespace vixl;
+
+  auto const br = ldr->NextInstruction();
+  auto const rd = ldr->Rd();
+
+  return (ldr->IsLoadLiteral() &&
+          ldr->Mask(LoadLiteralMask) == LDR_w_lit &&
+          br->Mask(UnconditionalBranchToRegisterMask) == BR &&
+          br->Rn() == rd);
+}
+
+bool possiblySmashableCall(TCA inst) {
+  using namespace vixl;
+
+  auto const bl = Instruction::Cast(inst);
+
+  return (bl->Mask(UnconditionalBranchMask) == BL &&
+          isVeneer(bl->ImmPCOffsetTarget()));
+}
+
+bool possiblySmashableJmp(TCA inst) {
+  using namespace vixl;
+
+  auto const b = Instruction::Cast(inst);
+
+  return (b->Mask(UnconditionalBranchMask) == B &&
+          isVeneer(b->ImmPCOffsetTarget()));
+}
+
+bool possiblySmashableJcc(TCA inst) {
+  using namespace vixl;
+
+  auto const b = Instruction::Cast(inst);
+
+  return b->IsCondBranchImm() && isVeneer(b->ImmPCOffsetTarget());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 void smashMovq(TCA inst, uint64_t target) {
-  smashInstr(inst, target, smashableMovqLen());
+  using namespace vixl;
+  assertx(possiblySmashableMovq(inst));
+
+  Instruction* ldr = Instruction::Cast(inst);
+  patchTarget64(ldr->LiteralAddress(), reinterpret_cast<TCA>(target));
 }
 
 void smashCmpq(TCA /*inst*/, uint32_t /*target*/) {
@@ -173,10 +199,43 @@ void smashCmpq(TCA /*inst*/, uint32_t /*target*/) {
 }
 
 void smashCall(TCA inst, TCA target) {
-  smashInstr(inst, target, (1 * 4) + 8);
+  using namespace vixl;
+
+  if (!possiblySmashableCall(inst)) {
+    // In repo authoritative mode only, the optimization performed at the end of
+    // this function may have turned a smashable jmp into a direct one, for
+    // which possiblySmashableJmp returns false.
+    assertx(RuntimeOption::RepoAuthoritative);
+    return;
+  }
+
+  auto const bl = Instruction::Cast(inst);
+  auto const ldr = bl->ImmPCOffsetTarget();
+  patchTarget32(ldr->LiteralAddress(), target);
+
+  // If the target can be reached through a direct call, then patch the original
+  // call.  Notice that this optimization prevents a debugger guard from being
+  // installed later, so we only perform it in repo authoritative mode.
+  int64_t offset = target - inst;
+  if (RuntimeOption::RepoAuthoritative && is_int28(offset)) {
+    CodeBlock cb;
+    uint32_t newInst;
+    cb.init((TCA)&newInst, kInstructionSize, "smashCall");
+    MacroAssembler a{cb};
+    a.bl(offset >> kInstructionSizeLog2);
+    smashInst(inst, newInst);
+  }
 }
 
 void smashJmp(TCA inst, TCA target) {
+  using namespace vixl;
+  if (!possiblySmashableJmp(inst)) {
+    // In repo authoritative mode only, the optimization performed at the end of
+    // this function may have turned a smashable jmp into a direct one, for
+    // which possiblySmashableJmp returns false.
+    assertx(RuntimeOption::RepoAuthoritative);
+    return;
+  }
 
   // If the target is within the smashable jmp, then set the target to the
   // end. This mirrors logic in x86_64 with the exception that ARM cannot
@@ -184,159 +243,150 @@ void smashJmp(TCA inst, TCA target) {
   if (target > inst && target - inst <= smashableJmpLen()) {
     target = inst + smashableJmpLen();
   }
-  smashInstr(inst, target, smashableJmpLen());
+
+  auto const b = Instruction::Cast(inst);
+  auto const ldr = b->ImmPCOffsetTarget();
+  patchTarget32(ldr->LiteralAddress(), target);
+
+  // If the target can be reached through a direct jump, then patch the original
+  // jump.  Notice that this optimization prevents a debugger guard from being
+  // installed later, so we only perform it in repo authoritative mode.
+  int64_t offset = target - inst;
+  if (RuntimeOption::RepoAuthoritative && is_int28(offset)) {
+    CodeBlock cb;
+    uint32_t newInst;
+    cb.init((TCA)&newInst, kInstructionSize, "smashJmp");
+    MacroAssembler a{cb};
+    if (offset == kInstructionSize) {
+      a.nop();
+    } else {
+      a.b(offset >> kInstructionSizeLog2);
+    }
+    smashInst(inst, newInst);
+  }
 }
 
 void smashJcc(TCA inst, TCA target) {
   using namespace vixl;
 
-  if (smashableJccTarget(inst) != target) {
-    smashInstr(inst, target, smashableJccLen());
+  if (!possiblySmashableJcc(inst)) {
+    // In repo authoritative mode only, the optimization performed at the end of
+    // this function may have turned a smashable jcc into a direct one, for
+    // which possiblySmashableJcc returns false.
+    assertx(RuntimeOption::RepoAuthoritative);
+    return;
+  }
+
+  auto const b = Instruction::Cast(inst);
+  auto const ldr = b->ImmPCOffsetTarget();
+  patchTarget32(ldr->LiteralAddress(), target);
+
+  // If the target can be reached through a direct branch, then patch the
+  // original branch.  Notice that this optimization prevents a debugger guard
+  // from being installed later, so we only perform it in repo authoritative
+  // mode.
+  int64_t offset = target - inst;
+  if (RuntimeOption::RepoAuthoritative && is_int21(offset)) {
+    CodeBlock cb;
+    uint32_t newInst;
+    cb.init((TCA)&newInst, kInstructionSize, "smashJcc");
+    MacroAssembler a{cb};
+    auto const cond = static_cast<Condition>(b->ConditionBranch());
+    a.b(offset >> kInstructionSizeLog2, cond);
+    smashInst(inst, newInst);
   }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool isSmashableMovq(TCA inst) {
-  using namespace vixl;
-
-  Instruction* ldr = Instruction::Cast(inst);
-  Instruction* b = ldr->NextInstruction();
-  Instruction* target = b->NextInstruction();
-  Instruction* after = target->NextInstruction()->NextInstruction();
-
-  return (ldr->IsLoadLiteral() &&
-          ldr->Mask(LoadLiteralMask) == LDR_x_lit &&
-          ldr->ImmPCOffsetTarget() == target &&
-          b->Mask(UnconditionalBranchMask) == B &&
-          b->ImmPCOffsetTarget() == after);
-}
-
 uint64_t smashableMovqImm(TCA inst) {
   using namespace vixl;
 
-  assertx(isSmashableMovq(inst));
-  Instruction* target =
-    Instruction::Cast(inst)->NextInstruction()->NextInstruction();
-  return *reinterpret_cast<uint64_t*>(target);
+  assertx(possiblySmashableMovq(inst));
+  Instruction* ldr = Instruction::Cast(inst);
+  return *reinterpret_cast<uint64_t*>(ldr->LiteralAddress());
 }
 
 uint32_t smashableCmpqImm(TCA /*inst*/) {
   not_implemented();
 }
 
-TCA smashableCallTarget(TCA inst) {
+/*
+ * Given an instruction `inst' that calls or jumps/branches to a veneer, return
+ * the target address that the corresponding veneer jumps to.
+ */
+static TCA smashableTarget(TCA inst) {
   using namespace vixl;
 
-  Instruction* b = Instruction::Cast(inst);
-  Instruction* target = b->NextInstruction();
-  Instruction* ldr = target->NextInstruction()->NextInstruction();
-  Instruction* blr = ldr->NextInstruction();
-  const auto rd = ldr->Rd();
+  auto const b = Instruction::Cast(inst);
+  auto const ldr = b->ImmPCOffsetTarget();
+  assertx(isVeneer(ldr));
+  auto const target32 = *reinterpret_cast<uint32_t*>(ldr->LiteralAddress());
+  assertx((target32 & 3) == 0);
+  return reinterpret_cast<TCA>(target32);
+}
 
-  if (b->Mask(UnconditionalBranchMask) == B &&
-      b->ImmPCOffsetTarget() == ldr &&
-      ldr->Mask(LoadLiteralMask) == LDR_x_lit &&
-      ldr->ImmPCOffsetTarget() == target &&
-      blr->Mask(UnconditionalBranchToRegisterMask) == BLR &&
-      blr->Rn() == rd) {
-    assertx((reinterpret_cast<uintptr_t>(target) & 3) == 0);
-    return *reinterpret_cast<TCA*>(target);
-  }
-  return nullptr;
+TCA smashableCallTarget(TCA inst) {
+  return possiblySmashableCall(inst) ? smashableTarget(inst) : nullptr;
 }
 
 TCA smashableJmpTarget(TCA inst) {
-  using namespace vixl;
-
-  Instruction* ldr = Instruction::Cast(inst);
-  Instruction* br = ldr->NextInstruction();
-  Instruction* target = br->NextInstruction();
-  const auto rd = ldr->Rd();
-
-  if (ldr->IsLoadLiteral() &&
-      ldr->Mask(LoadLiteralMask) == LDR_x_lit &&
-      ldr->ImmPCOffsetTarget() == target &&
-      br->Mask(UnconditionalBranchToRegisterMask) == BR &&
-      br->Rn() == rd) {
-    assertx((reinterpret_cast<uintptr_t>(target) & 3) == 0);
-    return *reinterpret_cast<TCA*>(target);
-  }
-  return nullptr;
+  return possiblySmashableJmp(inst) ? smashableTarget(inst) : nullptr;
 }
 
 TCA smashableJccTarget(TCA inst) {
-  using namespace vixl;
-
-  Instruction* b = Instruction::Cast(inst);
-  Instruction* ldr = b->NextInstruction();;
-  Instruction* br = ldr->NextInstruction();
-  Instruction* target = br->NextInstruction();
-  Instruction* after = target->NextInstruction()->NextInstruction();
-  const auto rd = ldr->Rd();
-
-  if (b->IsCondBranchImm() &&
-      b->ImmPCOffsetTarget() == after &&
-      ldr->IsLoadLiteral() &&
-      ldr->Mask(LoadLiteralMask) == LDR_x_lit &&
-      ldr->ImmPCOffsetTarget() == target &&
-      br->Mask(UnconditionalBranchToRegisterMask) == BR &&
-      br->Rn() == rd) {
-    assertx((reinterpret_cast<uintptr_t>(target) & 3) == 0);
-    return *reinterpret_cast<TCA*>(target);
-  }
-  return nullptr;
+  return possiblySmashableJcc(inst) ? smashableTarget(inst) : nullptr;
 }
 
 ConditionCode smashableJccCond(TCA inst) {
   using namespace vixl;
 
   Instruction* b = Instruction::Cast(inst);
-  Instruction* ldr = b->NextInstruction();;
-  Instruction* br = ldr->NextInstruction();
-  Instruction* target = br->NextInstruction();
-  DEBUG_ONLY Instruction* after = target->NextInstruction()->NextInstruction();
-  DEBUG_ONLY const auto rd = ldr->Rd();
 
-  assertx(b->IsCondBranchImm() &&
-          b->ImmPCOffsetTarget() == after &&
-          ldr->IsLoadLiteral() &&
-          ldr->Mask(LoadLiteralMask) == LDR_x_lit &&
-          ldr->ImmPCOffsetTarget() == target &&
-          br->Mask(UnconditionalBranchToRegisterMask) == BR &&
-          br->Rn() == rd);
+  assertx(possiblySmashableJcc(inst));
 
-  return arm::convertCC(InvertCondition(static_cast<Condition>(b->Bits(3, 0))));
+  return arm::convertCC(static_cast<Condition>(b->Bits(3, 0)));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/*
- * Helper function which determines if a target literal belongs to a smashable
- * sequence. Takes the address of the target literal and analyzes the
- * instructions around the literal to determine if the sequence is a smashable
- * jcc, jmp, or a call. If it is, then the TCA at the start of the sequence is
- * returned. Otherwise a nullptr is returned.
- *
- * Note: The analysis is performed such that a jmp is not returned when the
- *       sequence is a full jcc even though a jcc actually uses the same
- *       sequence as a jmp in its implementation.
- */
-TCA getSmashableFromTargetAddr(TCA addr) {
+bool optimizeSmashedCall(TCA inst) {
+  return false;
+}
+
+bool optimizeSmashedJmp(TCA inst) {
+  return false;
+}
+
+bool optimizeSmashedJcc(TCA inst) {
   using namespace vixl;
 
-  auto target = *reinterpret_cast<TCA*>(addr);
+  if (!possiblySmashableJcc(inst)) return false;
 
-  auto inst = addr - 3 * kInstructionSize;
-  if (smashableJccTarget(inst) == target) return inst;
+  // Notice that this optimization prevents a debugger guard from being
+  // installed later, so we only perform it in repo authoritative mode.
+  if (!RuntimeOption::RepoAuthoritative) return false;
 
-  inst = addr - 2 * kInstructionSize;
-  if (smashableJmpTarget(inst) == target) return inst;
+  auto const b = Instruction::Cast(inst);
+  auto const target = smashableJccTarget(inst);
+  assertx(target);
+  auto offset = (intptr_t)target - (intptr_t)b;
+  assertx(!is_int21(offset)); // otherwise smashJcc would have optimized it
 
-  inst = addr - 1 * kInstructionSize;
-  if (smashableCallTarget(inst) == target) return inst;
+  auto const ldr = b->ImmPCOffsetTarget();
+  assertx(ldr->IsLoadLiteral() && ldr->Mask(LoadLiteralMask) == LDR_w_lit);
+  offset = (intptr_t)target - (intptr_t)ldr;
 
-  return nullptr;
+  if (is_int28(offset)) {
+    CodeBlock tmpBlock;
+    tmpBlock.init((TCA)ldr, 2 * kInstructionSize, "optimizeSmashedJcc");
+    MacroAssembler a{tmpBlock};
+    a.b(offset >> kInstructionSizeLog2); // replace the ldr
+    a.nop(); // replace the br
+    return true;
+  }
+
+  return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

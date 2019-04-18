@@ -31,7 +31,6 @@ function my_option_map(): OptionInfoMap {
 'pgo-threshold:'  => Pair { '',  'PGO threshold to use' },
 'no-obj-destruct' => Pair { '',
                             'Disable global object destructors in CLI mode' },
-'zend'            => Pair { '',  'Enable ZendCompat functions and classes' },
 'arm'             => Pair { '',  'Emit ARM code and simulate it' },
 'ini[]'           => Pair { '',  'An .ini configuration file or CLI option' },
 'hdf[]'           => Pair { '',  'An .hdf configuration file or CLI option' },
@@ -40,6 +39,7 @@ function my_option_map(): OptionInfoMap {
 'build-root:'     => Pair { '',
                             'Override the default directory for hhvm and hphp'},
 'perf:'           => Pair { '', 'Run perf record'},
+'hhjs'            => Pair { '', 'Enable HHJS' },
   };
 }
 
@@ -111,7 +111,6 @@ function determine_flags(OptionMap $opts): string {
   if (!$opts->containsKey('no-defaults')) {
     $flags .=
       '-v Eval.EnableHipHopSyntax=true '.
-      '-v Eval.EnableHipHopExperimentalSyntax=true '.
       '-v Eval.JitEnableRenameFunction=0 '.
       '-v Eval.GdbSyncChunks=1 '.
       '-v Eval.AllowHhas=true '.
@@ -151,17 +150,15 @@ function determine_flags(OptionMap $opts): string {
 
   $simple_args = Map {
     'dump-hhbc'       => '-v Eval.DumpBytecode=1 ',
-    'dump-hhas'       => '-v Eval.DumpHhas=true ',
+    'dump-hhas'       => '-v Eval.DumpHhas=1 ',
     'dump-tc'         => '-v Eval.DumpTC=1 ',
     'php7'            => '-d hhvm.php7.all=1 ',
     'opt-ir'          => '-v Eval.HHIRGenerateAsserts=0 ',
     'jit-gdb'         => '-v Eval.JitNoGdb=false ',
     'no-pgo'          => '-v Eval.JitPGO=false ',
-    'no-obj-destruct' => '-v Eval.EnableObjDestructCall=0 ',
-    'zend'            => '-v Eval.EnableZendCompat=1 ',
     'hphpd'           => '-m debug ',
     'server'          => '-v Eval.JitPGOHotOnly=0 -m server ',
-    'arm'             => '-v Eval.SimulateARM=1 ',
+    'hhjs'            => '-v Eval.EnableHHJS=1 ',
   };
 
   if ($opts->containsKey('pgo-threshold')) {
@@ -231,7 +228,6 @@ function compile_a_repo(bool $unoptimized, OptionMap $opts): string {
   $hphp_out='/tmp/hphp_out'.posix_getpid();
   $cmd = get_paths($opts)['hphp'].' '.
     '-v EnableHipHopSyntax=1 '.
-    '-v EnableHipHopExperimentalSyntax=1 '.
     ($unoptimized ? '-v UseHHBBC=0 ' : '').
     ($opts->containsKey('php7') ? '-d hhvm.php7.all=1 ' : '').
     '-t hhbc -k1 -l3 '.
@@ -302,7 +298,7 @@ function run_hhvm(OptionMap $opts): void {
   } else {
     // Give the return value of the command back to the caller.
     $retval = null;
-    passthru($cmd, $retval);
+    passthru($cmd, &$retval);
     exit($retval);
   }
 }

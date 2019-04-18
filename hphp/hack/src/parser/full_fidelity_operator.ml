@@ -2,13 +2,13 @@
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the "hack" directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
  *
  *)
 
-open Full_fidelity_token_kind
+module TokenKind = Full_fidelity_token_kind
+module Env = Full_fidelity_parser_env
 
 type t =
 | DollarOperator
@@ -21,7 +21,9 @@ not how they look on the page. *)
 | PipeOperator
 | ConditionalQuestionOperator
 | ConditionalColonOperator
+| DegenerateConditionalOperator
 | CoalesceOperator
+| CoalesceAssignmentOperator
 | PHPOrOperator
 | PHPExclusiveOrOperator
 | PHPAndOperator
@@ -51,6 +53,9 @@ not how they look on the page. *)
 | RemainderOperator
 | LogicalNotOperator
 | InstanceofOperator
+| IsOperator
+| AsOperator
+| NullableAsOperator
 | NotOperator
 | PrefixIncrementOperator
 | PrefixDecrementOperator
@@ -90,7 +95,7 @@ type assoc =
 | RightAssociative
 | NotAssociative
 
-let precedence operator =
+let precedence env operator =
   (* TODO: eval *)
   (* TODO: Comma *)
   (* TODO: elseif *)
@@ -99,7 +104,8 @@ let precedence operator =
   (* TODO: variable operator $ *)
   match operator with
   | IncludeOperator | IncludeOnceOperator | RequireOperator
-  | RequireOnceOperator | AwaitOperator | SuspendOperator -> 1
+  | RequireOnceOperator -> 1
+  | AwaitOperator when not (Env.enable_stronger_await_binding env) -> 1
   | PHPOrOperator -> 2
   | PHPExclusiveOrOperator -> 3
   | PHPAndOperator -> 4
@@ -111,9 +117,11 @@ let precedence operator =
   | AndAssignmentOperator
   | OrAssignmentOperator | ExclusiveOrAssignmentOperator
   | LeftShiftAssignmentOperator | RightShiftAssignmentOperator
+  | CoalesceAssignmentOperator
     -> 6
   | PipeOperator -> 7
-  | ConditionalQuestionOperator | ConditionalColonOperator -> 8
+  | ConditionalQuestionOperator | ConditionalColonOperator
+  | DegenerateConditionalOperator -> 8
   | CoalesceOperator -> 9
   | LogicalOrOperator -> 10
   | LogicalAndOperator -> 11
@@ -126,35 +134,40 @@ let precedence operator =
   | GreaterThanOperator | GreaterThanOrEqualOperator -> 16
   | LeftShiftOperator | RightShiftOperator -> 17
   | AdditionOperator | SubtractionOperator | ConcatenationOperator -> 18
-  | MultiplicationOperator | DivisionOperator | RemainderOperator -> 19
-  | CastOperator
-  | ReferenceOperator | ErrorControlOperator
-  | PrefixIncrementOperator | PrefixDecrementOperator
+  | MultiplicationOperator | DivisionOperator | RemainderOperator | SuspendOperator -> 19
   | LogicalNotOperator| NotOperator
   | UnaryPlusOperator | UnaryMinusOperator -> 20
-  | InstanceofOperator -> 21
+  | InstanceofOperator | IsOperator | AsOperator | NullableAsOperator -> 21
+  | CastOperator
+  | ErrorControlOperator
+  | PrefixIncrementOperator | PrefixDecrementOperator
   | ExponentOperator -> 22
   | PostfixIncrementOperator | PostfixDecrementOperator -> 23
+  | AwaitOperator (* implicit: when Env.enable_stronger_await_binding env *)
+    -> 23
   | CloneOperator -> 24
-  | FunctionCallOperator -> 25
-  | NewOperator -> 26
-  (* value 27 is reserved for assignment that appear in expressions *)
-  | IndexingOperator -> 28
+  (* value 25 is reserved for assignment that appear in expressions *)
+  | ReferenceOperator -> 26
+  | FunctionCallOperator -> 27
+  | NewOperator -> 28
   | MemberSelectionOperator | NullSafeMemberSelectionOperator -> 29
-  | ScopeResolutionOperator -> 30
-  | DollarOperator -> 31
+  | IndexingOperator -> 30
+  | ScopeResolutionOperator -> 31
+  | DollarOperator -> 32
 
-let precedence_for_assignment_in_expressions = 27
+let precedence_for_assignment_in_expressions = 25
 
-let associativity operator =
+let associativity env operator =
   match operator with
   | EqualOperator | StrictEqualOperator | NotEqualOperator | PhpNotEqualOperator
   | StrictNotEqualOperator | LessThanOperator | LessThanOrEqualOperator
   | GreaterThanOperator | GreaterThanOrEqualOperator | InstanceofOperator
-  | NewOperator | CloneOperator | AwaitOperator | SpaceshipOperator
-  | SuspendOperator
+  | NewOperator | CloneOperator | SpaceshipOperator -> NotAssociative
+
+  | AwaitOperator when not (Env.enable_stronger_await_binding env)
     -> NotAssociative
 
+  | DegenerateConditionalOperator
   | PipeOperator | ConditionalQuestionOperator | ConditionalColonOperator
   | LogicalOrOperator | ExclusiveOrOperator | LogicalAndOperator
   | OrOperator | AndOperator | LeftShiftOperator | RightShiftOperator
@@ -164,14 +177,14 @@ let associativity operator =
   | ScopeResolutionOperator | FunctionCallOperator | IndexingOperator
   | IncludeOperator | IncludeOnceOperator | RequireOperator
   | RequireOnceOperator | PHPAndOperator | PHPOrOperator
-  | PHPExclusiveOrOperator
+  | PHPExclusiveOrOperator | IsOperator | AsOperator | NullableAsOperator
   (* eval *)
   (* Comma *)
   (* elseif *)
   (* else *)
   (* endif *)
     -> LeftAssociative
-  | CoalesceOperator| LogicalNotOperator | NotOperator | CastOperator
+  | CoalesceOperator | CoalesceAssignmentOperator | LogicalNotOperator | NotOperator | CastOperator
   | DollarOperator | UnaryPlusOperator | UnaryMinusOperator  (* TODO: Correct? *)
   | ErrorControlOperator | ReferenceOperator (* TODO: Correct? *)
   | PostfixIncrementOperator | PostfixDecrementOperator
@@ -183,191 +196,207 @@ let associativity operator =
   | RemainderAssignmentOperator | AndAssignmentOperator
   | OrAssignmentOperator | ExclusiveOrAssignmentOperator
   | LeftShiftAssignmentOperator | RightShiftAssignmentOperator
-  | PrintOperator
+  | PrintOperator | SuspendOperator -> RightAssociative
+
+  | AwaitOperator (* implicitly: Env.enable_stronger_await_binding env*)
     -> RightAssociative
 
 let prefix_unary_from_token token =
   match token with
-  | Suspend -> SuspendOperator
-  | Await -> AwaitOperator
-  | Exclamation -> LogicalNotOperator
-  | Tilde -> NotOperator
-  | PlusPlus -> PrefixIncrementOperator
-  | MinusMinus -> PrefixDecrementOperator
-  | Dollar -> DollarOperator
-  | Plus -> UnaryPlusOperator
-  | Minus -> UnaryMinusOperator
-  | Ampersand -> ReferenceOperator
-  | At -> ErrorControlOperator
-  | New -> NewOperator
-  | Clone -> CloneOperator
-  | Include -> IncludeOperator
-  | Include_once -> IncludeOnceOperator
-  | Require -> RequireOperator
-  | Require_once -> RequireOnceOperator
-  | Print -> PrintOperator
+  | TokenKind.Suspend -> SuspendOperator
+  | TokenKind.Await -> AwaitOperator
+  | TokenKind.Exclamation -> LogicalNotOperator
+  | TokenKind.Tilde -> NotOperator
+  | TokenKind.PlusPlus -> PrefixIncrementOperator
+  | TokenKind.MinusMinus -> PrefixDecrementOperator
+  | TokenKind.Dollar -> DollarOperator
+  | TokenKind.Plus -> UnaryPlusOperator
+  | TokenKind.Minus -> UnaryMinusOperator
+  | TokenKind.Ampersand -> ReferenceOperator
+  | TokenKind.At -> ErrorControlOperator
+  | TokenKind.New -> NewOperator
+  | TokenKind.Clone -> CloneOperator
+  | TokenKind.Include -> IncludeOperator
+  | TokenKind.Include_once -> IncludeOnceOperator
+  | TokenKind.Require -> RequireOperator
+  | TokenKind.Require_once -> RequireOnceOperator
+  | TokenKind.Print -> PrintOperator
   | _ -> failwith "not a unary operator"
 
 (* Is this a token that can appear after an expression? *)
 let is_trailing_operator_token token =
   match token with
-  | And
-  | Or
-  | Xor
-  | PlusPlus
-  | MinusMinus
-  | LeftParen
-  | LeftBracket
-  | LeftBrace
-  | Plus
-  | Minus
-  | Ampersand
-  | BarGreaterThan
-  | Question
-  | QuestionQuestion
-  | BarBar
-  | Carat
-  | AmpersandAmpersand
-  | Bar
-  | EqualEqual
-  | EqualEqualEqual
-  | LessThanGreaterThan
-  | ExclamationEqual
-  | ExclamationEqualEqual
-  | LessThanEqualGreaterThan
-  | LessThan
-  | LessThanEqual
-  | GreaterThan
-  | GreaterThanEqual
-  | LessThanLessThan
-  | GreaterThanGreaterThan
-  | Dot
-  | Star
-  | Slash
-  | Percent
-  | Instanceof
-  | StarStar
-  | Equal
-  | PlusEqual
-  | MinusEqual
-  | StarEqual
-  | SlashEqual
-  | StarStarEqual
-  | DotEqual
-  | PercentEqual
-  | AmpersandEqual
-  | BarEqual
-  | CaratEqual
-  | LessThanLessThanEqual
-  | GreaterThanGreaterThanEqual
-  | MinusGreaterThan
-  | QuestionMinusGreaterThan
-  | ColonColon -> true
+  | TokenKind.And
+  | TokenKind.Or
+  | TokenKind.Xor
+  | TokenKind.PlusPlus
+  | TokenKind.MinusMinus
+  | TokenKind.LeftParen
+  | TokenKind.LeftBracket
+  | TokenKind.LeftBrace
+  | TokenKind.Plus
+  | TokenKind.Minus
+  | TokenKind.Ampersand
+  | TokenKind.BarGreaterThan
+  | TokenKind.Question
+  | TokenKind.QuestionQuestion
+  | TokenKind.QuestionQuestionEqual
+  | TokenKind.QuestionColon
+  | TokenKind.BarBar
+  | TokenKind.Carat
+  | TokenKind.AmpersandAmpersand
+  | TokenKind.Bar
+  | TokenKind.EqualEqual
+  | TokenKind.EqualEqualEqual
+  | TokenKind.LessThanGreaterThan
+  | TokenKind.ExclamationEqual
+  | TokenKind.ExclamationEqualEqual
+  | TokenKind.LessThanEqualGreaterThan
+  | TokenKind.LessThan
+  | TokenKind.LessThanEqual
+  | TokenKind.GreaterThan
+  | TokenKind.GreaterThanEqual
+  | TokenKind.LessThanLessThan
+  | TokenKind.GreaterThanGreaterThan
+  | TokenKind.Dot
+  | TokenKind.Star
+  | TokenKind.Slash
+  | TokenKind.Percent
+  | TokenKind.Instanceof
+  | TokenKind.Is
+  | TokenKind.As
+  | TokenKind.QuestionAs
+  | TokenKind.StarStar
+  | TokenKind.Equal
+  | TokenKind.PlusEqual
+  | TokenKind.MinusEqual
+  | TokenKind.StarEqual
+  | TokenKind.SlashEqual
+  | TokenKind.StarStarEqual
+  | TokenKind.DotEqual
+  | TokenKind.PercentEqual
+  | TokenKind.AmpersandEqual
+  | TokenKind.BarEqual
+  | TokenKind.CaratEqual
+  | TokenKind.LessThanLessThanEqual
+  | TokenKind.GreaterThanGreaterThanEqual
+  | TokenKind.MinusGreaterThan
+  | TokenKind.QuestionMinusGreaterThan
+  | TokenKind.ColonColon
+  | TokenKind.ColonAt -> true
   | _ -> false
 
 let trailing_from_token token =
   match token with
-  | And -> PHPAndOperator
-  | Or -> PHPOrOperator
-  | Xor -> PHPExclusiveOrOperator
-  | BarGreaterThan -> PipeOperator
-  | Question -> ConditionalQuestionOperator
-  | Colon -> ConditionalColonOperator
-  | QuestionQuestion -> CoalesceOperator
-  | BarBar -> LogicalOrOperator
-  | Carat -> ExclusiveOrOperator
-  | AmpersandAmpersand -> LogicalAndOperator
-  | Bar -> OrOperator
-  | Ampersand -> AndOperator
-  | EqualEqual -> EqualOperator
-  | EqualEqualEqual -> StrictEqualOperator
-  | ExclamationEqual -> NotEqualOperator
-  | LessThanGreaterThan -> PhpNotEqualOperator
-  | ExclamationEqualEqual -> StrictNotEqualOperator
-  | LessThan -> LessThanOperator
-  | LessThanEqualGreaterThan -> SpaceshipOperator
-  | LessThanEqual -> LessThanOrEqualOperator
-  | GreaterThan -> GreaterThanOperator
-  | GreaterThanEqual -> GreaterThanOrEqualOperator
-  | LessThanLessThan -> LeftShiftOperator
-  | GreaterThanGreaterThan -> RightShiftOperator
-  | Plus -> AdditionOperator
-  | Minus -> SubtractionOperator
-  | Dot -> ConcatenationOperator
-  | Star -> MultiplicationOperator
-  | Slash -> DivisionOperator
-  | Percent -> RemainderOperator
-  | Instanceof -> InstanceofOperator
-  | StarStar -> ExponentOperator
-  | Equal -> AssignmentOperator
-  | PlusEqual -> AdditionAssignmentOperator
-  | MinusEqual -> SubtractionAssignmentOperator
-  | StarEqual -> MultiplicationAssignmentOperator
-  | SlashEqual -> DivisionAssignmentOperator
-  | StarStarEqual -> ExponentiationAssignmentOperator
-  | DotEqual -> ConcatenationAssignmentOperator
-  | PercentEqual -> RemainderAssignmentOperator
-  | AmpersandEqual -> AndAssignmentOperator
-  | BarEqual -> OrAssignmentOperator
-  | CaratEqual -> ExclusiveOrAssignmentOperator
-  | LessThanLessThanEqual -> LeftShiftAssignmentOperator
-  | GreaterThanGreaterThanEqual -> RightShiftAssignmentOperator
-  | MinusGreaterThan -> MemberSelectionOperator
-  | QuestionMinusGreaterThan -> NullSafeMemberSelectionOperator
-  | ColonColon -> ScopeResolutionOperator
-  | PlusPlus -> PostfixIncrementOperator
-  | MinusMinus -> PostfixDecrementOperator
-  | LeftParen -> FunctionCallOperator
-  | LeftBracket -> IndexingOperator
-  | LeftBrace -> IndexingOperator
+  | TokenKind.And -> PHPAndOperator
+  | TokenKind.Or -> PHPOrOperator
+  | TokenKind.Xor -> PHPExclusiveOrOperator
+  | TokenKind.BarGreaterThan -> PipeOperator
+  | TokenKind.Question -> ConditionalQuestionOperator
+  | TokenKind.Colon -> ConditionalColonOperator
+  | TokenKind.QuestionQuestion -> CoalesceOperator
+  | TokenKind.QuestionQuestionEqual -> CoalesceAssignmentOperator
+  | TokenKind.QuestionColon -> DegenerateConditionalOperator
+  | TokenKind.BarBar -> LogicalOrOperator
+  | TokenKind.Carat -> ExclusiveOrOperator
+  | TokenKind.AmpersandAmpersand -> LogicalAndOperator
+  | TokenKind.Bar -> OrOperator
+  | TokenKind.Ampersand -> AndOperator
+  | TokenKind.EqualEqual -> EqualOperator
+  | TokenKind.EqualEqualEqual -> StrictEqualOperator
+  | TokenKind.ExclamationEqual -> NotEqualOperator
+  | TokenKind.LessThanGreaterThan -> PhpNotEqualOperator
+  | TokenKind.ExclamationEqualEqual -> StrictNotEqualOperator
+  | TokenKind.LessThan -> LessThanOperator
+  | TokenKind.LessThanEqualGreaterThan -> SpaceshipOperator
+  | TokenKind.LessThanEqual -> LessThanOrEqualOperator
+  | TokenKind.GreaterThan -> GreaterThanOperator
+  | TokenKind.GreaterThanEqual -> GreaterThanOrEqualOperator
+  | TokenKind.LessThanLessThan -> LeftShiftOperator
+  | TokenKind.GreaterThanGreaterThan -> RightShiftOperator
+  | TokenKind.Plus -> AdditionOperator
+  | TokenKind.Minus -> SubtractionOperator
+  | TokenKind.Dot -> ConcatenationOperator
+  | TokenKind.Star -> MultiplicationOperator
+  | TokenKind.Slash -> DivisionOperator
+  | TokenKind.Percent -> RemainderOperator
+  | TokenKind.Instanceof -> InstanceofOperator
+  | TokenKind.Is -> IsOperator
+  | TokenKind.As -> AsOperator
+  | TokenKind.QuestionAs -> NullableAsOperator
+  | TokenKind.StarStar -> ExponentOperator
+  | TokenKind.Equal -> AssignmentOperator
+  | TokenKind.PlusEqual -> AdditionAssignmentOperator
+  | TokenKind.MinusEqual -> SubtractionAssignmentOperator
+  | TokenKind.StarEqual -> MultiplicationAssignmentOperator
+  | TokenKind.SlashEqual -> DivisionAssignmentOperator
+  | TokenKind.StarStarEqual -> ExponentiationAssignmentOperator
+  | TokenKind.DotEqual -> ConcatenationAssignmentOperator
+  | TokenKind.PercentEqual -> RemainderAssignmentOperator
+  | TokenKind.AmpersandEqual -> AndAssignmentOperator
+  | TokenKind.BarEqual -> OrAssignmentOperator
+  | TokenKind.CaratEqual -> ExclusiveOrAssignmentOperator
+  | TokenKind.LessThanLessThanEqual -> LeftShiftAssignmentOperator
+  | TokenKind.GreaterThanGreaterThanEqual -> RightShiftAssignmentOperator
+  | TokenKind.MinusGreaterThan -> MemberSelectionOperator
+  | TokenKind.QuestionMinusGreaterThan -> NullSafeMemberSelectionOperator
+  | TokenKind.ColonColon -> ScopeResolutionOperator
+  | TokenKind.PlusPlus -> PostfixIncrementOperator
+  | TokenKind.MinusMinus -> PostfixDecrementOperator
+  | TokenKind.LeftParen -> FunctionCallOperator
+  | TokenKind.LeftBracket -> IndexingOperator
+  | TokenKind.LeftBrace -> IndexingOperator
+  | TokenKind.ColonAt -> ScopeResolutionOperator
   | _ -> failwith (Printf.sprintf "%s is not a trailing operator"
                     (Full_fidelity_token_kind.to_string token))
 
 let is_binary_operator_token token =
   match token with
-  | And
-  | Or
-  | Xor
-  | Plus
-  | Minus
-  | Ampersand
-  | BarGreaterThan
-  | QuestionQuestion
-  | BarBar
-  | Carat
-  | AmpersandAmpersand
-  | Bar
-  | EqualEqual
-  | EqualEqualEqual
-  | ExclamationEqual
-  | LessThanGreaterThan
-  | ExclamationEqualEqual
-  | LessThanEqualGreaterThan
-  | LessThan
-  | LessThanEqual
-  | GreaterThan
-  | GreaterThanEqual
-  | LessThanLessThan
-  | GreaterThanGreaterThan
-  | Dot
-  | Star
-  | Slash
-  | Percent
-  | StarStar
-  | Equal
-  | PlusEqual
-  | MinusEqual
-  | StarEqual
-  | SlashEqual
-  | DotEqual
-  | PercentEqual
-  | AmpersandEqual
-  | BarEqual
-  | CaratEqual
-  | LessThanLessThanEqual
-  | GreaterThanGreaterThanEqual
-  | MinusGreaterThan
-  | QuestionMinusGreaterThan -> true
+  | TokenKind.And
+  | TokenKind.Or
+  | TokenKind.Xor
+  | TokenKind.Plus
+  | TokenKind.Minus
+  | TokenKind.Ampersand
+  | TokenKind.BarGreaterThan
+  | TokenKind.QuestionQuestion
+  | TokenKind.QuestionQuestionEqual
+  | TokenKind.QuestionColon
+  | TokenKind.BarBar
+  | TokenKind.Carat
+  | TokenKind.AmpersandAmpersand
+  | TokenKind.Bar
+  | TokenKind.EqualEqual
+  | TokenKind.EqualEqualEqual
+  | TokenKind.ExclamationEqual
+  | TokenKind.LessThanGreaterThan
+  | TokenKind.ExclamationEqualEqual
+  | TokenKind.LessThanEqualGreaterThan
+  | TokenKind.LessThan
+  | TokenKind.LessThanEqual
+  | TokenKind.GreaterThan
+  | TokenKind.GreaterThanEqual
+  | TokenKind.LessThanLessThan
+  | TokenKind.GreaterThanGreaterThan
+  | TokenKind.Dot
+  | TokenKind.Star
+  | TokenKind.Slash
+  | TokenKind.Percent
+  | TokenKind.StarStar
+  | TokenKind.Equal
+  | TokenKind.PlusEqual
+  | TokenKind.MinusEqual
+  | TokenKind.StarEqual
+  | TokenKind.SlashEqual
+  | TokenKind.DotEqual
+  | TokenKind.PercentEqual
+  | TokenKind.AmpersandEqual
+  | TokenKind.BarEqual
+  | TokenKind.CaratEqual
+  | TokenKind.LessThanLessThanEqual
+  | TokenKind.GreaterThanGreaterThanEqual
+  | TokenKind.MinusGreaterThan
+  | TokenKind.QuestionMinusGreaterThan -> true
   | _ -> false
 
 let is_assignment operator =
@@ -384,7 +413,8 @@ let is_assignment operator =
   | OrAssignmentOperator
   | ExclusiveOrAssignmentOperator
   | LeftShiftAssignmentOperator
-  | RightShiftAssignmentOperator -> true
+  | RightShiftAssignmentOperator
+  | CoalesceAssignmentOperator -> true
   | _ -> false
 
 let is_comparison operator =
@@ -400,77 +430,3 @@ let is_comparison operator =
   | GreaterThanOrEqualOperator
   | SpaceshipOperator -> true
   | _ -> false
-
-let to_string kind =
-  match kind with
-  | PHPAndOperator -> "php_and"
-  | PHPOrOperator -> "php_or"
-  | PHPExclusiveOrOperator -> "php_exclusive_or"
-  | IndexingOperator -> "indexing"
-  | FunctionCallOperator -> "function_call"
-  | AwaitOperator -> "await"
-  | SuspendOperator -> "suspend"
-  | PipeOperator -> "pipe"
-  | ConditionalQuestionOperator -> "conditional"
-  | ConditionalColonOperator -> "colon"
-  | CoalesceOperator -> "coalesce"
-  | LogicalOrOperator -> "logical_or"
-  | ExclusiveOrOperator -> "exclusive_or"
-  | LogicalAndOperator -> "logical_and"
-  | OrOperator -> "or"
-  | AndOperator -> "and"
-  | EqualOperator -> "equal"
-  | StrictEqualOperator -> "strict_equal"
-  | NotEqualOperator -> "not_equal"
-  | PhpNotEqualOperator -> "php_not_equal"
-  | StrictNotEqualOperator -> "strict_not_equal"
-  | LessThanOperator -> "less_than"
-  | SpaceshipOperator -> "spaceship"
-  | LessThanOrEqualOperator -> "less_than_or_equal"
-  | GreaterThanOperator -> "greater_than"
-  | GreaterThanOrEqualOperator -> "greater_than_or_equal"
-  | LeftShiftOperator -> "left_shift"
-  | RightShiftOperator -> "right_shift"
-  | AdditionOperator -> "addition"
-  | SubtractionOperator -> "subtraction"
-  | ConcatenationOperator -> "concatenation"
-  | MultiplicationOperator -> "multiplication"
-  | DivisionOperator -> "division"
-  | RemainderOperator -> "remainder"
-  | LogicalNotOperator -> "logical_not"
-  | InstanceofOperator -> "instanceof"
-  | NotOperator -> "not"
-  | PrefixIncrementOperator -> "prefix_increment"
-  | PrefixDecrementOperator -> "prefix_decrement"
-  | PostfixIncrementOperator -> "postfix_increment"
-  | PostfixDecrementOperator -> "postfix_decrement"
-  | CastOperator -> "cast"
-  | ExponentOperator -> "exponentiation"
-  | ReferenceOperator -> "reference"
-  | ErrorControlOperator -> "error_control"
-  | NewOperator -> "new"
-  | CloneOperator -> "clone"
-  | AssignmentOperator -> "assignment"
-  | AdditionAssignmentOperator -> "addition_assignment"
-  | SubtractionAssignmentOperator -> "subtraction_assignment"
-  | MultiplicationAssignmentOperator -> "multiplication_assignment"
-  | DivisionAssignmentOperator -> "division_assignment"
-  | ExponentiationAssignmentOperator -> "exponentiation_assignment"
-  | ConcatenationAssignmentOperator -> "concatenation_assignment"
-  | RemainderAssignmentOperator -> "reminder_assignment"
-  | AndAssignmentOperator -> "and_assignment"
-  | OrAssignmentOperator -> "or_assignment"
-  | ExclusiveOrAssignmentOperator -> "exclusive_or_assignment"
-  | LeftShiftAssignmentOperator -> "left_shift_assignment"
-  | RightShiftAssignmentOperator -> "right_shift_assignment"
-  | MemberSelectionOperator -> "member_selection"
-  | NullSafeMemberSelectionOperator -> "null_safe_member_selection"
-  | ScopeResolutionOperator -> "scope_resolution"
-  | DollarOperator -> "dollar"
-  | UnaryPlusOperator -> "unary_plus"
-  | UnaryMinusOperator -> "unary_minus"
-  | IncludeOperator -> "include"
-  | IncludeOnceOperator -> "include_once"
-  | RequireOperator -> "require"
-  | RequireOnceOperator -> "require_once"
-  | PrintOperator -> "print"

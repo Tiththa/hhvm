@@ -26,6 +26,7 @@
 #include <folly/portability/Unistd.h>
 
 #include "hphp/util/assertions.h"
+#include "hphp/util/compact-vector.h"
 #include "hphp/util/portability.h"
 #include "hphp/util/text-color.h"
 
@@ -105,6 +106,7 @@ namespace Trace {
       TM(dispatchBB)    \
       TM(ehframe)       \
       TM(emitter)       \
+      TM(extern_compiler) \
       TM(fixup)         \
       TM(fr)            \
       TM(gc)            \
@@ -116,6 +118,7 @@ namespace Trace {
       TM(hhbbc_cfg)     \
       TM(hhbbc_dce)     \
       TM(hhbbc_dump)    \
+      TM(hhbbc_parse)   \
       TM(hhbbc_emit)    \
       TM(hhbbc_iface)   \
       TM(hhbbc_index)   \
@@ -181,6 +184,7 @@ namespace Trace {
       TM(ustubs)        \
       TM(vasm)          \
       TM(vasm_copy)     \
+      TM(vasm_graph_color) \
       TM(vasm_phi)      \
       TM(xenon)         \
       TM(xls)           \
@@ -309,9 +313,11 @@ private:
   int m_adjust;
 };
 
+CompactVector<BumpRelease> bumpSpec(folly::StringPiece traceSpec);
+
 //////////////////////////////////////////////////////////////////////
 
-#if (defined(DEBUG) || defined(USE_TRACE)) /* { */
+#if (!defined(NDEBUG) || defined(USE_TRACE)) /* { */
 #  ifndef USE_TRACE
 #    define USE_TRACE 1
 #  endif
@@ -393,11 +399,11 @@ void dumpRingbuffer();
 void ensureInit(std::string outFile);
 // Set tracing levels for this thread using a module:level,... specification.
 // If traceSpec is empty, all levels for this thread are zeroed.
-void setTraceThread(const std::string& traceSpec);
+void setTraceThread(folly::StringPiece traceSpec);
 
 //////////////////////////////////////////////////////////////////////
 
-#else /* } (defined(DEBUG) || defined(USE_TRACE)) { */
+#else /* } (!defined(NDEBUG) || defined(USE_TRACE)) { */
 
 //////////////////////////////////////////////////////////////////////
 /*
@@ -448,7 +454,7 @@ inline void setTraceThread(const std::string& /*traceSpec*/) {}
 
 //////////////////////////////////////////////////////////////////////
 
-#endif /* } (defined(DEBUG) || defined(USE_TRACE)) */
+#endif /* } (!defined(NDEBUG) || defined(USE_TRACE)) */
 
 } // Trace
 

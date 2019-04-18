@@ -24,6 +24,7 @@
 #include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
 #include "hphp/runtime/vm/jit/code-gen-tls.h"
+#include "hphp/runtime/vm/jit/smashable-instr-arm.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/unique-stubs.h"
 #include "hphp/runtime/vm/jit/unwind-itanium.h"
@@ -66,7 +67,7 @@ static TCA emitDecRefHelper(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
                             PhysReg tv, PhysReg type, RegSet live) {
   return vwrap(cb, data, fixups, [&] (Vout& v) {
     // Set up frame linkage to avoid an indirect fixup.
-    v << pushp{rlr(), rfp()};
+    v << stublogue{true};
     v << copy{rsp(), rfp()};
 
     // We use the first argument register for the TV data because we might pass
@@ -74,39 +75,39 @@ static TCA emitDecRefHelper(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
     auto const data = rarg(0);
     v << load{tv[TVOFF(m_data)], data};
 
-    auto const sf = v.makeReg();
-    v << cmplim{1, data[FAST_REFCOUNT_OFFSET], sf};
-
-    ifThen(v, CC_NL, sf, [&] (Vout& v) {
-      // The refcount is positive, so the value is refcounted.  We need to
-      // either decref or release.
-      ifThen(v, CC_NE, sf, [&] (Vout& v) {
-        // The refcount is greater than 1; decref it.
-        v << declm{data[FAST_REFCOUNT_OFFSET], v.makeReg()};
-        // Pop FP/LR and return
-        v << popp{rfp(), rlr()};
-        v << ret{live};
-      });
-
+    auto destroy = [&](Vout& v) {
       // Note that the stack is aligned since we called to this helper from an
       // stack-unaligned stub.
       PhysRegSaver prs{v, live};
 
       // The refcount is exactly 1; release the value.
       // Avoid 'this' pointer overwriting by reserving it as an argument.
-      v << callm{lookupDestructor(v, type), arg_regs(1)};
-
-      // Between where %rsp is now and the saved RIP of the call into the
-      // freeLocalsHelpers stub, we have all the live regs we pushed, plus the
-      // saved RIP of the call from the stub to this helper.
-      v << syncpoint{makeIndirectFixup(prs.dwordsPushed())};
+      // There's no need for a fixup, because we setup a frame on the c++
+      // stack.
+      v << callm{lookupDestructor(v, type, true), arg_regs(1)};
       // fallthru
-    });
+    };
+
+    auto const sf = emitCmpRefCount(v, OneReference, data);
+
+    if (one_bit_refcount) {
+      ifThen(v, CC_E, sf, destroy);
+    } else {
+      ifThen(v, CC_NL, sf, [&] (Vout& v) {
+        // The refcount is positive, so the value is refcounted.  We need to
+        // either decref or release.
+        ifThen(v, CC_NE, sf, [&] (Vout& v) {
+          // The refcount is greater than 1; decref it.
+          emitDecRefCount(v, data);
+          v << stubret{live, true};
+        });
+
+        destroy(v);
+      });
+    }
 
     // Either we did a decref, or the value was static.
-    // Pop FP/LR and return
-    v << popp{rfp(), rlr()};
-    v << ret{live};
+    v << stubret{live, true};
   });
 }
 
@@ -129,13 +130,13 @@ TCA emitFreeLocalsHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
     auto const sf = v.makeReg();
 
     // We can't use emitLoadTVType() here because it does a byte load, and we
-    // need to sign-extend since we use `type' as a 32-bit array index to the
+    // need to sign-extend since we use `type' as a 64-bit array index to the
     // destructor table.
-    v << loadzbl{local[TVOFF(m_type)], type};
-    emitCmpTVType(v, sf, KindOfRefCountThreshold, type);
+    v << loadsbq{local[TVOFF(m_type)], type};
+    auto const cc = emitIsTVTypeRefCounted(v, sf, type);
 
-    ifThen(v, CC_G, sf, [&] (Vout& v) {
-      v << call{release, arg_regs(3)};
+    ifThen(v, cc, sf, [&] (Vout& v) {
+      v << call{release, local | type};
     });
   };
 
@@ -167,19 +168,21 @@ TCA emitFreeLocalsHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
   for (auto i = kNumFreeLocalsHelpers - 1; i >= 0; --i) {
     freeLocalsHelpers[i] = vwrap(cb, data, [&] (Vout& v) {
       decref_local(v);
-      if (i != 0) next_local(v);
+      if (i != 0) {
+        next_local(v);
+        v << fallthru{RegSet{local}};
+      }
     });
   }
 
   // All the stub entrypoints share the same ret.
   vwrap(cb, data, fixups, [] (Vout& v) {
-    v << popp{rfp(), rlr()};
-    v << ret{};
+    v << stubret{RegSet{}, true};
   });
 
   // Create a table of branches
   us.freeManyLocalsHelper = vwrap(cb, data, [&] (Vout& v) {
-    v << pushp{rlr(), rfp()};
+    v << stublogue{true};
 
     // rvmfp() is needed by the freeManyLocalsHelper stub above, so frame
     // linkage setup is deferred until after its use in freeManyLocalsHelper.
@@ -188,7 +191,7 @@ TCA emitFreeLocalsHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
   for (auto i = kNumFreeLocalsHelpers - 1; i >= 0; --i) {
     us.freeLocalsHelpers[i] = vwrap(cb, data, [&] (Vout& v) {
       // We set up frame linkage to avoid an indirect fixup.
-      v << pushp{rlr(), rfp()};
+      v << stublogue{true};
       v << copy{rsp(), rfp()};
       v << jmpi{freeLocalsHelpers[i]};
     });
@@ -206,20 +209,10 @@ TCA emitFreeLocalsHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-TCA emitCallToExit(CodeBlock& cb, DataBlock& /*data*/, const UniqueStubs& us) {
-  vixl::MacroAssembler a { cb };
-  vixl::Label target_data;
-  auto const start = cb.frontier();
-
-  // Jump to enterTCExit
-  a.Ldr(rAsm, &target_data);
-  a.Br(rAsm);
-  a.bind(&target_data);
-  a.dc64(us.enterTCExit);
-
-  __builtin___clear_cache(reinterpret_cast<char*>(start),
-                          reinterpret_cast<char*>(cb.frontier()));
-  return start;
+TCA emitCallToExit(CodeBlock& cb, DataBlock& data, const UniqueStubs& us) {
+  return vwrap(cb, data, [&] (Vout& v) {
+    v << jmpi{us.enterTCExit};
+  });
 }
 
 ///////////////////////////////////////////////////////////////////////////////

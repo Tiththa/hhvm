@@ -28,9 +28,11 @@
 
 #include "hphp/util/atomic-vector.h"
 #include "hphp/util/compact-vector.h"
-#include "hphp/util/md5.h"
+#include "hphp/util/copy-ptr.h"
+#include "hphp/util/sha1.h"
 
 #include "hphp/runtime/base/user-attributes.h"
+#include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/preclass.h"
 #include "hphp/runtime/vm/type-alias.h"
 #include "hphp/runtime/vm/type-constraint.h"
@@ -61,37 +63,19 @@ struct SrcInfo {
  * A basic block in our factored control flow graph.
  *
  * Blocks terminate on control flow, except exceptional control flow.
- * We keep a set of "factored edges" representing all possible early
+ * We keep a set of "throw exits" representing all possible early
  * exits due to exceptional control flow.
  */
 struct Block {
   /*
-   * Blocks in HHBC are each part of a bytecode "section".  The section
-   * is either the "primary function body", or a fault funclet.  We
-   * represent fault funclet sections with unique ids.
-   *
-   * Each section must be a contiguous region of bytecode, with the
-   * primary function body first.  These ids are tracked just to
-   * maintain this invariant at emit time.
+   * The id of this block's ExnNode, or NoExnNodeId if there is none.
    */
-  enum class Section : uint32_t { Main = 0 };
-  Section section;
-
-  /*
-   * Blocks have unique ids within a given function.
-   */
-  uint32_t id;
+  ExnNodeId exnNodeId{NoExnNodeId};
 
   /*
    * Instructions in the block.  Never empty guarantee.
    */
-  std::vector<Bytecode> hhbcs;
-
-  /*
-   * The pointer for this block's exception region, or nullptr if
-   * there is none.
-   */
-  borrowed_ptr<ExnNode> exnNode;
+  BytecodeVec hhbcs;
 
   /*
    * Edges coming out of blocks are repesented in three ways:
@@ -100,18 +84,21 @@ struct Block {
    *    to the named block).  If fallthroughNS is true, this edge
    *    represents a no-surprise jump.
    *
-   *  - Taken edges (these are encoded in the last instruction in hhbcs).
+   *  - throwExit (the edges traversed for exceptions from this block)
    *
-   *  - factoredExits (these represent edges traversed for exceptions
-   *    mid-block)
+   *  - Taken edges (these are encoded in the last instruction in hhbcs).
    *
    * For the idea behind the factored exit edge thing, see "Efficient
    * and Precise Modeling of Exceptions for the Analysis of Java
    * Programs" (http://dl.acm.org/citation.cfm?id=316171).
    */
   BlockId fallthrough{NoBlockId};
-  bool fallthroughNS = false;
-  CompactVector<BlockId> factoredExits;
+  BlockId throwExit{NoBlockId};
+  bool catchEntry{false};
+  bool fallthroughNS{false};
+  bool multiPred{false};
+  bool multiSucc{false};
+  bool dead{false};
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -125,42 +112,25 @@ struct Block {
  * information is used to construct exception handling regions at emit
  * time.
  *
- * There are two types of regions; CatchRegions and FaultRegions.
- * These correspond to the two types of regions described in
- * bytecode.specification.  Note though that although it's not
- * specified there, in addition to an entry offset, these regions
- * optionally list some information about iterators if the reason the
- * region is there is to free iterator variables.
+ * The catch region is described in bytecode.specification. Note though
+ * that although it's not specified there, in addition to an entry offset,
+ * these regions optionally list some information about iterators if the
+ * reason the region is there is to free iterator variables.
  *
  * Exceptional control flow is also represented more explicitly with
  * factored exit edges (see php::Block).  This tree structure just
  * exists to get the EHEnts right.
- *
- * Note: blocks in fault funclets will have factored edges to the
- * blocks listed as handlers in any ExnNode that contained the
- * fault-protected region, since those control flow paths are
- * possible.  Generally they will have nullptr for their exnNode
- * pointers, however, although they may also have other EH-protected
- * regions inside of them (this currently occurs in the case of
- * php-level finally blocks cloned into fault funclets).
  */
 
-struct FaultRegion { BlockId faultEntry;
-                     Id iterId;
-                     bool itRef; };
-
 struct CatchRegion { BlockId catchEntry;
-                     Id iterId;
-                     bool itRef; };
+                     Id iterId; };
 
 struct ExnNode {
-  uint32_t id;
+  ExnNodeId idx;
   uint32_t depth;
-
-  borrowed_ptr<ExnNode> parent;
-  CompactVector<std::unique_ptr<ExnNode>> children;
-
-  boost::variant<FaultRegion,CatchRegion> info;
+  CompactVector<ExnNodeId> children;
+  ExnNodeId parent;
+  CatchRegion region;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -216,21 +186,40 @@ struct Param {
   folly::Optional<DataType> builtinType;
 
   /*
+   * Whether this parameter is passed as inout.
+   */
+  bool inout: 1;
+
+  /*
    * Whether this parameter is passed by reference.
    */
   bool byRef: 1;
 
   /*
-   * Whether this parameter must be passed by reference.
-   * The FPassCE and FPassCW opcodes will only produce
-   * an error/warnging if this is set.
-   */
-  bool mustBeRef: 1;
-
-  /*
    * Whether this parameter is a variadic capture.
    */
   bool isVariadic: 1;
+};
+
+template <typename T>
+struct IntLikeIterator {
+  explicit IntLikeIterator(T v) : val{v} {}
+  T operator *() const { return val; }
+  T operator ++() { return ++val; }
+  bool operator !=(IntLikeIterator other) { return val != other.val; }
+private:
+  T val;
+};
+
+template <typename T>
+struct IntLikeRange {
+  explicit IntLikeRange(T v) : sz{v} {}
+  template<typename C>
+  explicit IntLikeRange(const C& v) : sz(v.size()) {}
+  IntLikeIterator<T> begin() const { return IntLikeIterator<T>{0}; }
+  IntLikeIterator<T> end() const { return IntLikeIterator<T>{sz}; }
+private:
+    T sz;
 };
 
 /*
@@ -244,14 +233,6 @@ struct Local {
 };
 
 /*
- * Static local information.  For each static local, we need to keep
- * the php code around for reflection.
- */
-struct StaticLocalInfo {
-  LSString name;
-};
-
-/*
  * Extra information for function with a HNI native implementation.
  */
 struct NativeInfo {
@@ -260,18 +241,55 @@ struct NativeInfo {
    * folly::none stands for a Variant return.
    */
   folly::Optional<DataType> returnType;
+};
+
+/*
+ * Separate out the fields that need special attention when copying,
+ * so that Func can just have default copy/move semantics.
+ */
+struct FuncBase {
+  FuncBase() = default;
+  FuncBase(const FuncBase&);
+  FuncBase(FuncBase&&) = delete;
+  FuncBase& operator=(const FuncBase&) = delete;
 
   /*
-   * Associated dynamic call wrapper function. Used to catch dynamic calls to
-   * caller frame affecting functions.
+   * All owning pointers to blocks are in this vector, which has the
+   * blocks in an unspecified order.  Blocks use BlockIds
+   * to represent control flow arcs. The id of a block is its
+   * index in this vector.
    */
-  Id dynCallWrapperId;
+  CompactVector<copy_ptr<Block>> blocks;
+
+  auto blockRange() const { return IntLikeRange<BlockId> {blocks}; }
+
+  /*
+   * Catch regions form a tree structure.  The tree is hanging
+   * off the func here, with children ids.  Each block that is
+   * within a catch region has the index into this array of the
+   * inner-most ExnNode protecting it.
+   *
+   * Note that this is updated during the concurrent analyze pass.
+   */
+  CompactVector<ExnNode> exnNodes;
+
+  /*
+   * For HNI-based extensions, additional information for functions
+   * with a native-implementation is here.  If this isn't a function
+   * with an HNI-based native implementation, this will be nullptr.
+   */
+  std::unique_ptr<NativeInfo> nativeInfo;
 };
 
 /*
  * Representation of a function, class method, or pseudomain function.
  */
-struct Func {
+struct Func : FuncBase {
+  /*
+   * An index, so we can lookup auxiliary structures efficiently
+   */
+  uint32_t idx;
+
   /*
    * Basic information about the function.
    */
@@ -290,33 +308,13 @@ struct Func {
   ClsRefSlotId       numClsRefSlots;
   CompactVector<Param> params;
   CompactVector<Local> locals;
-  CompactVector<StaticLocalInfo> staticLocals;
 
   /*
    * Which unit defined this function.  If it is a method, the cls
    * field will be set to the class that contains it.
    */
-  borrowed_ptr<Unit> unit;
-  borrowed_ptr<Class> cls;
-
-  /*
-   * All owning pointers to blocks are in this vector, which has the
-   * blocks in an unspecified order.  Blocks use BlockIds
-   * to represent control flow arcs. The id of a block is its
-   * index in this vector.
-   */
-  CompactVector<std::unique_ptr<Block>> blocks;
-
-  /*
-   * Try and fault regions form a tree structure.  The tree is hanging
-   * off the func here, with children pointers.  Each block that is
-   * within a try or fault region has a pointer to the inner-most
-   * ExnNode protecting it.
-   *
-   * Note that this, together with the Blocks' factoredExits are updated
-   * during the concurrent analyze pass.
-   */
-  CompactVector<std::unique_ptr<ExnNode>> exnNodes;
+  Unit* unit;
+  Class* cls;
 
   /*
    * Entry point blocks for default value initializers.
@@ -343,8 +341,12 @@ struct Func {
    * If traits are being flattened by hphpc, we keep the original
    * filename of a function (the file that defined the trait) so
    * backtraces and things work correctly.  Otherwise this is nullptr.
+   * Similarly, if hhbbc did the flattening itself, we need the original
+   * unit, to get to the srcLocs. Once we stop flattening in hphpc, we can
+   * drop the originalFilename.
    */
   LSString originalFilename;
+  Unit* originalUnit{};
 
   /*
    * Whether or not this function is a top-level function.  (Defined
@@ -375,8 +377,16 @@ struct Func {
   bool isPairGenerator : 1;
 
   bool isMemoizeWrapper : 1;
+  bool isMemoizeWrapperLSB : 1;
 
   bool isMemoizeImpl : 1;
+
+  /*
+   * This is a reified function.
+   */
+  bool isReified : 1;
+
+  bool isRxDisabled: 1;
 
   /*
    * Return type specified in the source code (ex. "function foo(): Bar").
@@ -389,13 +399,6 @@ struct Func {
    * User attribute list.
    */
   UserAttributeMap userAttributes;
-
-  /*
-   * For HNI-based extensions, additional information for functions
-   * with a native-implementation is here.  If this isn't a function
-   * with an HNI-based native implementation, this will be nullptr.
-   */
-  std::unique_ptr<NativeInfo> nativeInfo;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -408,13 +411,11 @@ struct Func {
 struct Prop {
   LSString name;
   Attr attrs;
+  UserAttributeMap userAttributes;
   LSString docComment;
 
-  /*
-   * Properties can have string type constraints, which we need to
-   * propagate through just for reflection purposes.
-   */
-  LSString typeConstraint;
+  LSString userType;
+  TypeConstraint typeConstraint;
 
   /*
    * The default value of the property, for properties with scalar
@@ -431,7 +432,7 @@ struct Const {
   LSString name;
 
   // The class that defined this constant.
-  borrowed_ptr<php::Class> cls;
+  php::Class* cls;
 
   /*
    * The value will be KindOfUninit if the class constant is defined
@@ -452,9 +453,25 @@ struct Const {
 };
 
 /*
+ * Similar to FuncBase - separate the fields that need special
+ * attention when copying.
+ */
+struct ClassBase {
+  ClassBase() = default;
+  ClassBase(const ClassBase&);
+  ClassBase(ClassBase&&) = delete;
+  ClassBase& operator=(const ClassBase&) = delete;
+
+  /*
+   * Methods on the class. If there's an 86cinit, it must be last.
+   */
+  CompactVector<std::unique_ptr<php::Func>> methods;
+};
+
+/*
  * Representation of a php class declaration.
  */
-struct Class {
+struct Class : ClassBase {
   /*
    * Basic information about the class.
    */
@@ -470,7 +487,7 @@ struct Class {
   /*
    * Which unit defined this class.
    */
-  borrowed_ptr<Unit> unit;
+  Unit* unit;
 
   /*
    * Hoistability of this class.  See the description in class.h
@@ -492,7 +509,7 @@ struct Class {
    * inside of a class run as if they were part of that class context
    * (with regard to access checks, etc).
    */
-  borrowed_ptr<php::Class> closureContextCls;
+  php::Class* closureContextCls;
 
   /*
    * Names of inherited interfaces.
@@ -511,11 +528,6 @@ struct Class {
   CompactVector<PreClass::ClassRequirement> requirements;
   CompactVector<PreClass::TraitPrecRule> traitPrecRules;
   CompactVector<PreClass::TraitAliasRule> traitAliasRules;
-  int32_t numDeclMethods;
-  /*
-   * Methods on the class. If there's an 86cinit, it must be last.
-   */
-  CompactVector<std::unique_ptr<php::Func>> methods;
 
   /*
    * Properties defined on this class.
@@ -536,6 +548,11 @@ struct Class {
    * The underlying base type, if this is an enum
    */
   TypeConstraint enumBaseTy;
+
+  /*
+   * This is a reified class.
+   */
+  bool hasReifiedGenerics : 1;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -543,24 +560,51 @@ struct Class {
 using TypeAlias = ::HPHP::TypeAlias;
 
 //////////////////////////////////////////////////////////////////////
+/*
+ * A record field
+ */
+struct RecordField {
+  LSString name;
+  Attr attrs;
+  LSString userType;
+  LSString docComment;
+  Cell val;
+  TypeConstraint typeConstraint;
+  UserAttributeMap userAttributes;
+};
+/*
+ * Representation of a Hack record
+ */
+struct Record {
+  Unit* unit;
+  SrcInfo srcInfo;
+  LSString name;
+  Attr attrs;
+  int32_t id;
+  UserAttributeMap userAttributes;
+  CompactVector<RecordField> fields;
+};
 
+//////////////////////////////////////////////////////////////////////
 /*
  * Representation of a php file (normal compilation unit).
  */
 struct Unit {
-  MD5 md5;
+  SHA1 sha1;
   LSString filename;
   bool isHHFile{false};
   bool useStrictTypes{false};
   bool useStrictTypesForBuiltins{false};
   std::atomic<bool> persistent{true};
-  int preloadPriority{0};
   std::unique_ptr<Func> pseudomain;
   CompactVector<std::unique_ptr<Func>> funcs;
   CompactVector<std::unique_ptr<Class>> classes;
+  CompactVector<std::unique_ptr<Record>> records;
   CompactVector<std::unique_ptr<TypeAlias>> typeAliases;
   CompactVector<std::pair<SString,SString>> classAliases;
   CompactVector<SrcLoc> srcLocs;
+  UserAttributeMap metaData;
+  UserAttributeMap fileAttributes;
 };
 
 /*
@@ -574,6 +618,7 @@ struct Program {
   };
 
   explicit Program(size_t numUnitsGuess) :
+      nextFuncId(0),
       nextConstInit(0),
       constInits(100 + (numUnitsGuess / 4), 0) {
   }
@@ -582,6 +627,7 @@ struct Program {
   }
 
   std::vector<std::unique_ptr<Unit>> units;
+  std::atomic<uint32_t> nextFuncId;
   std::atomic<size_t> nextConstInit;
   AtomicVector<uintptr_t> constInits;
 };
@@ -589,10 +635,16 @@ struct Program {
 //////////////////////////////////////////////////////////////////////
 
 std::string show(const Func&);
-std::string show(const Class&);
-std::string show(const Unit&);
+std::string show(const Func&, const Block&);
+std::string show(const Func&, const Bytecode& bc);
+std::string show(const Class&, bool normalizeClosures = false);
+std::string show(const Unit&, bool normalizeClosures = false);
 std::string show(const Program&);
 std::string local_string(const Func&, LocalId);
+
+inline std::string show(const Func* f, const Bytecode& bc) {
+  return show(*f, bc);
+}
 
 //////////////////////////////////////////////////////////////////////
 

@@ -1,5 +1,5 @@
-<?php
-define("FOO", 123);
+<?hh
+const FOO = 123;
 trait T {
   private $blah = FOO;
   public function test() {

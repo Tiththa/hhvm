@@ -57,6 +57,13 @@ void initDebugInfo() {
   s_info = new DebugInfo();
 }
 
+void destroyDebugInfo() {
+  if (s_info) {
+    delete s_info;
+    s_info = nullptr;
+  }
+}
+
 DebugInfo* DebugInfo::Get() {
   return s_info;
 }
@@ -254,14 +261,6 @@ void DebugInfo::recordBCInstr(TCRange range, uint32_t op) {
 #undef O
   };
 
-  static const char* acoldOpcodeName[] = {
-    "OpAcoldStart",
-#define O(name, imm, push, pop, flags) \
-#name "-Acold",
-    OPCODES
-#undef O
-  };
-
   static const char* highOpcodeName[] = {
     "OpHighStart",
 #define O(name) \
@@ -276,8 +275,6 @@ void DebugInfo::recordBCInstr(TCRange range, uint32_t op) {
     const char* name;
     if (op < Op_count) {
       name = opcodeName[op];
-    } else if (op < OpAcoldCount) {
-      name = acoldOpcodeName[op - OpAcoldStart];
     } else {
       name = highOpcodeName[op - OpHighStart];
     }

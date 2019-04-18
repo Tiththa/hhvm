@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function case1() {
   $x = array();
@@ -7,17 +7,9 @@ function case1() {
 }
 case1();
 
-function case2() {
-  $x[]++;
-  var_dump($x);
-}
-case2();
-
 function case3($x) {
   $x[]++;
   var_dump($x);
 }
-case3(false);
 case3(true);   // warning, not an array
-case3("");
 case3("asdasd"); // fatal

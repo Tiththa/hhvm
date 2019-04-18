@@ -71,11 +71,10 @@ $from = "w";
 $to = "k";
 foreach($inputs as $input) {
   echo "-- Iteration $count --\n";
-  var_dump( convert_cyr_string($input, $from, $to) );
+  try { var_dump( convert_cyr_string($input, $from, $to) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $count ++;
 }
 
 fclose($file_handle);  //closing the file handle
 
-?>
-===DONE===
+echo "===DONE===\n";

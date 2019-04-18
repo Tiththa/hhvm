@@ -41,16 +41,26 @@ struct VariantControllerImpl {
   typedef String StringType;
 
   // variant accessors
-  static HPHP::serialize::Type type(const VariantType& obj) {
+  static HPHP::serialize::Type type(const_variant_ref obj) {
     switch (obj.getType()) {
       case KindOfUninit:
       case KindOfNull:       return HPHP::serialize::Type::NULLT;
       case KindOfBoolean:    return HPHP::serialize::Type::BOOL;
       case KindOfDouble:     return HPHP::serialize::Type::DOUBLE;
       case KindOfInt64:      return HPHP::serialize::Type::INT64;
+      case KindOfFunc:
+      case KindOfClass:
       case KindOfPersistentString:
       case KindOfString:     return HPHP::serialize::Type::STRING;
       case KindOfObject:     return HPHP::serialize::Type::OBJECT;
+      case KindOfPersistentShape:
+      case KindOfShape: { // TODO(T31134050)
+        if (RuntimeOption::EvalHackArrDVArrs &&
+            HackArraysMode != VariantControllerHackArraysMode::ON) {
+          throw HPHP::serialize::HackArraySerializeError{};
+        }
+        return HPHP::serialize::Type::MAP;
+      }
       case KindOfPersistentArray:
       case KindOfArray:      return HPHP::serialize::Type::MAP;
       case KindOfPersistentDict:
@@ -70,21 +80,31 @@ struct VariantControllerImpl {
       case KindOfPersistentKeyset:
       case KindOfKeyset:
         throw HPHP::serialize::KeysetSerializeError{};
+
+      case KindOfClsMeth:
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          if (HackArraysMode == VariantControllerHackArraysMode::ON) {
+            return HPHP::serialize::Type::LIST;
+          }
+          throw HPHP::serialize::HackArraySerializeError{};
+        } else {
+          return HPHP::serialize::Type::MAP;
+        }
+
       case KindOfResource:
       case KindOfRef:
+      case KindOfRecord: // TODO(T41025646): implement serialization for records
         throw HPHP::serialize::SerializeError(
           "don't know how to serialize HPHP Variant");
     }
     not_reached();
   }
-  static int64_t asInt64(const VariantType& obj) { return obj.toInt64(); }
-  static bool asBool(const VariantType& obj) { return obj.toInt64() != 0; }
-  static double asDouble(const VariantType& obj) { return obj.toDouble(); }
-  static const String& asString(const VariantType& obj) {
-    return obj.toCStrRef();
-  }
-  static const Array& asMap(const VariantType& obj) { return obj.toCArrRef(); }
-  static const Array& asVector(const VariantType& obj) { return obj.toCArrRef(); }
+  static int64_t asInt64(const_variant_ref obj) { return obj.toInt64(); }
+  static bool asBool(const_variant_ref obj) { return obj.toInt64() != 0; }
+  static double asDouble(const_variant_ref obj) { return obj.toDouble(); }
+  static String asString(const_variant_ref obj) { return obj.toString(); }
+  static Array asMap(const_variant_ref obj) { return obj.toArray(); }
+  static Array asVector(const_variant_ref obj) { return obj.toArray(); }
 
   // variant creators
   static VariantType createNull() { return init_null(); }
@@ -117,13 +137,20 @@ struct VariantControllerImpl {
   static String mapKeyAsString(const Variant& k) {
     return k.toString();
   }
-  template <typename Key>
-  static void mapSet(MapType& map, Key&& k, VariantType&& v) {
-    map.set(std::move(k), std::move(v));
+
+  static void mapSet(MapType& map, StringType&& k, VariantType&& v) {
+    auto const arrkey = map.convertKey<IntishCast::Cast>(k);
+    Variant val(std::move(v));
+    map.set(arrkey, *val.asTypedValue());
   }
+
+  static void mapSet(MapType& map, int64_t k, VariantType&& v) {
+    map.set(k, std::move(v));
+  }
+
   template <typename Key>
   static void mapSet(ArrayInit& map, Key&& k, VariantType&& v) {
-    map.set(std::move(k), std::move(v));
+    map.setUnknownKey<IntishCast::Cast>(std::move(k), std::move(v));
   }
   static int64_t mapSize(const MapType& map) { return map.size(); }
   static ArrayIter mapIterator(const MapType& map) {
@@ -134,7 +161,7 @@ struct VariantControllerImpl {
   }
   static void mapNext(ArrayIter& it) { ++it; }
   static Variant mapKey(ArrayIter& it) { return it.first(); }
-  static const VariantType& mapValue(ArrayIter& it) { return it.secondRef(); }
+  static const_variant_ref mapValue(ArrayIter& it) { return it.secondRef(); }
 
   // vector methods
   static VectorType createVector() {
@@ -154,7 +181,7 @@ struct VariantControllerImpl {
     return !it.end();
   }
   static void vectorNext(ArrayIter& it) { ++it; }
-  static const VariantType& vectorValue(ArrayIter& it) {
+  static const_variant_ref vectorValue(ArrayIter& it) {
     return it.secondRef();
   }
 

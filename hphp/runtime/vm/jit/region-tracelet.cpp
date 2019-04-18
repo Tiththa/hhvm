@@ -14,6 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
+#include "hphp/runtime/base/perf-warning.h"
 #include "hphp/runtime/vm/jit/region-selection.h"
 
 #include "hphp/runtime/vm/jit/annotation.h"
@@ -64,16 +65,17 @@ struct Env {
     : ctx(ctx)
     , interp(interp)
     , breakAt(breakAt)
-    , sk{ctx.func, ctx.bcOffset, ctx.resumed, ctx.hasThis}
+    , sk{ctx.func, ctx.bcOffset, ctx.resumeMode, ctx.hasThis}
     , startSk(sk)
     , region(std::make_shared<RegionDesc>())
     , curBlock(region->addBlock(sk, 0, ctx.spOffset))
-    , blockFinished(false)
+    , prevBlocks()
     // TODO(#5703534): this is using a different TransContext than actual
     // translation will use.
-    , unit(TransContext{kInvalidTransID, kind, TransFlags{}, sk, ctx.spOffset})
+    , unit(TransContext{kInvalidTransID, kind, TransFlags{},
+                        sk, ctx.spOffset, 0})
     , irgs(unit, nullptr)
-    , arStates(1)
+    , arState()
     , numJmps(0)
     , numBCInstrs(maxBCInstrs)
     , profiling(kind == TransKind::Profile)
@@ -92,11 +94,10 @@ struct Env {
   NormalizedInstruction inst;
   RegionDescPtr region;
   RegionDesc::Block* curBlock;
-  bool blockFinished;
+  jit::hash_map<Offset, jit::vector<RegionDesc::Block*>> prevBlocks;
   IRUnit unit;
   irgen::IRGS irgs;
-  jit::vector<ActRecState> arStates;
-  RefDeps refDeps;
+  ActRecState arState;
   uint32_t numJmps;
   int32_t numBCInstrs;
   // This map memoizes reachability of IR blocks during tracelet
@@ -147,7 +148,12 @@ bool consumeInput(Env& env, const InputInfo& input) {
   if (input.dontGuard) return true;
   auto const type = irgen::predictedType(env.irgs, input.loc);
 
-  if (env.profiling && type <= TBoxedCell &&
+  if (/* env.profiling &&
+       * FIXME: T21872803:
+       * This check is only intended for profiling translations.  We enabled it
+       * for live translations to avoid a bug tracking type dependences for
+       * boxed values. */
+      type <= TBoxedCell &&
       (env.region->blocks().size() > 1 || !env.region->entry()->empty())) {
     // We don't want side exits when profiling, so only allow instructions that
     // consume refs at the beginning of the region.
@@ -162,8 +168,8 @@ bool consumeInput(Env& env, const InputInfo& input) {
   }
 
   if (!(type <= TBoxedCell) ||
-      env.inst.ignoreInnerType ||
-      input.dontGuardInner) {
+      input.dontGuardInner ||
+      opcodeIgnoresInnerType(env.inst.op())) {
     return true;
   }
 
@@ -181,14 +187,15 @@ bool consumeInput(Env& env, const InputInfo& input) {
  * Add the current instruction to the region.
  */
 void addInstruction(Env& env) {
-  if (env.blockFinished) {
+  auto prevBlocksIt = env.prevBlocks.find(env.sk.offset());
+  if (prevBlocksIt != env.prevBlocks.end()) {
     FTRACE(2, "selectTracelet adding new block at {} after:\n{}\n",
            showShort(env.sk), show(*env.curBlock));
     always_assert(env.sk.func() == curFunc(env));
-    auto newCurBlock = env.region->addBlock(env.sk, 0, curSpOffset(env));
-    env.region->addArc(env.curBlock->id(), newCurBlock->id());
-    env.curBlock = newCurBlock;
-    env.blockFinished = false;
+    env.curBlock = env.region->addBlock(env.sk, 0, curSpOffset(env));
+    for (auto block : prevBlocksIt->second) {
+      env.region->addArc(block->id(), env.curBlock->id());
+    }
   }
 
   FTRACE(2, "selectTracelet adding instruction {}\n", env.inst.toString());
@@ -204,15 +211,12 @@ void addInstruction(Env& env) {
 bool prepareInstruction(Env& env) {
   env.inst.~NormalizedInstruction();
   new (&env.inst) NormalizedInstruction(env.sk, curUnit(env));
-  if (RuntimeOption::EvalFailJitPrologs && env.inst.op() == Op::FCallAwait) {
-    return false;
-  }
   auto const breaksBB =
     (env.profiling && instrBreaksProfileBB(&env.inst)) ||
-    opcodeBreaksBB(env.inst.op());
+    opcodeBreaksBB(env.inst.op(), env.inlining);
   env.inst.endsRegion = breaksBB ||
-    (dontGuardAnyInputs(env.inst.op()) && opcodeChangesPC(env.inst.op()));
-  env.inst.funcd = env.arStates.back().knownFunc();
+    (dontGuardAnyInputs(env.inst) && opcodeChangesPC(env.inst.op()));
+  env.inst.funcd = env.arState.knownFunc();
   irgen::prepareForNextHHBC(env.irgs, &env.inst, env.sk, false);
 
   auto const inputInfos = getInputs(env.inst, env.irgs.irb->fs().bcSPOff());
@@ -230,34 +234,22 @@ bool prepareInstruction(Env& env) {
     }
   }
 
-  if (inputInfos.needsRefCheck) {
-    // Reffiness guards are always at the beginning of the trace for now, so
-    // calculate the delta from the original sp to the ar. The FPI delta from
-    // instrFpToArDelta includes locals and iterators, so when we're in a
-    // resumed context we have to adjust for the fact that they're in a
-    // different place.
-    auto argNum = env.inst.imm[0].u_IVA;
-    auto entryArDelta = env.ctx.spOffset.offset -
-      instrFpToArDelta(curFunc(env), env.inst.pc());
-    if (env.sk.resumed()) entryArDelta += curFunc(env)->numSlotsInFrame();
+  addInstruction(env);
 
-    try {
-      env.inst.preppedByRef =
-        env.arStates.back().checkByRef(argNum, entryArDelta, &env.refDeps,
-                                       env.ctx);
-    } catch (const UnknownInputExc& exn) {
-      // We don't have a guess for the current ActRec.
-      FTRACE(1, "selectTracelet: don't have reffiness guess for {}\n",
-             env.inst.toString());
-      return false;
+  if (isFPush(env.inst.op())) env.arState.pushFunc(env.inst);
+  if (isFCallStar(env.inst.op())) {
+    auto const asyncEagerOffset = env.inst.imm[0].u_FCA.asyncEagerOffset;
+    if (asyncEagerOffset != kInvalidOffset) {
+      // Note that the arc between the block containing asyncEagerOffset and
+      // the previous block is not added to the region on purpose, as it comes
+      // from the slow path (await of a finished Awaitable after failed async
+      // eager return, which usually produces unfinished Awaitable) with
+      // possibly unknown type pessimizing next execution.
+      auto const sk = env.sk;
+      env.prevBlocks[sk.advanced().offset()].push_back(env.curBlock);
+      env.prevBlocks[sk.offset() + asyncEagerOffset].push_back(env.curBlock);
     }
-    addInstruction(env);
-    env.curBlock->setParamByRef(env.inst.source, env.inst.preppedByRef);
-  } else {
-    addInstruction(env);
   }
-
-  if (isFPush(env.inst.op())) env.arStates.back().pushFunc(env.inst);
 
   return true;
 }
@@ -274,7 +266,7 @@ bool traceThroughJmp(Env& env) {
   // We want to keep profiling translations to basic blocks, inlining shouldn't
   // happen in profiling translations
   if (env.profiling) {
-    assert(!env.inlining);
+    assertx(!env.inlining);
     return false;
   }
 
@@ -309,7 +301,7 @@ bool traceThroughJmp(Env& env) {
   }
 
   env.numJmps++;
-  env.blockFinished = true;
+  env.prevBlocks[env.sk.offset()].push_back(env.curBlock);
   return true;
 }
 
@@ -391,17 +383,9 @@ void visitGuards(IRUnit& unit, F func) {
 }
 
 /*
- * Records any type/reffiness predictions we depend on in the region.
+ * Records any type predictions we depend on in the region.
  */
 void recordDependencies(Env& env) {
-  // Record the incrementally constructed reffiness predictions.
-  assertx(!env.region->empty());
-  auto& frontBlock = *env.region->blocks().front();
-  for (auto const& dep : env.refDeps.m_arMap) {
-    frontBlock.addReffinessPred({dep.second.m_mask, dep.second.m_vals,
-                                 dep.first});
-  }
-
   // Relax guards and record the ones that survived.
   auto& firstBlock = *env.region->blocks().front();
   auto& unit = env.irgs.unit;
@@ -524,10 +508,21 @@ RegionDescPtr form_region(Env& env) {
 
   irgen::gen(env.irgs, EndGuards);
 
+  int32_t maxBCInstrs = env.numBCInstrs;
   for (bool firstInst = true; true; firstInst = false) {
     assertx(env.numBCInstrs >= 0);
     if (env.numBCInstrs == 0) {
       FTRACE(1, "selectTracelet: breaking region due to size limit\n");
+      if (!env.inlining) {
+        logLowPriPerfWarning(
+          "selectTracelet",
+          [&](StructuredLogEntry& cols) {
+            cols.setInt("maxBCInstrSize", maxBCInstrs);
+            auto sd = env.region->start().func()->fullName();
+            cols.setStr("funcName", sd->data());
+          }
+        );
+      }
       break;
     }
 
@@ -535,6 +530,17 @@ RegionDescPtr form_region(Env& env) {
       FTRACE(1, "selectTracelet: breaking region at breakAt: {}\n",
              show(env.sk));
       break;
+    }
+
+    // Break translation if there's already a translation starting at the
+    // current SrcKey.
+    if (!firstInst && env.irgs.context.kind == TransKind::Profile) {
+      auto const sr = tc::findSrcRec(env.sk);
+      if (sr != nullptr && sr->getTopTranslation() != nullptr) {
+        FTRACE(1, "selectTracelet: breaking region at TC entry: {}\n",
+               show(env.sk));
+        break;
+      }
     }
 
     if (!prepareInstruction(env)) break;
@@ -602,7 +608,7 @@ RegionDescPtr form_region(Env& env) {
       break;
     }
 
-    if (isFCallStar(env.inst.op())) env.arStates.back().pop();
+    if (isFCallStar(env.inst.op())) env.arState.pop();
   }
 
   if (env.region && !env.region->empty()) {

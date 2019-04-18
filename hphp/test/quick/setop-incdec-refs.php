@@ -1,10 +1,8 @@
 <?php
 // Copyright 2004-2015 Facebook. All Rights Reserved.
 
-function properties() {
-  $c = new stdclass;
+function properties(&$a, $c) {
   $a = 5;
-  $c->foo =& $a;
   var_dump($c);
   $x = $c->foo += 10;
   var_dump($c);
@@ -15,19 +13,8 @@ function properties() {
   var_dump($a);
 }
 
-function elements() {
-  $a = array();
-  $v = 'a string';
-  $a['ref'] =& $v;
-  var_dump($a);
-  $x = $a['ref'] .= ' tail';
-  var_dump($a);
-  var_dump($v);
-
-  $x = $a['ref']++;
-  var_dump($a);
-  var_dump($v);
+<<__EntryPoint>>
+function main() {
+  $c = new stdclass;
+  properties(&$c->foo, $c);
 }
-properties();
-elements();
-
